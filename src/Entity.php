@@ -3,20 +3,22 @@
 namespace EasySwoole\FastDb;
 
 use EasySwoole\FastDb\Attributes\Property;
+use EasySwoole\Mysqli\QueryBuilder;
 
 abstract class Entity
 {
 
-    const Filter_Not_Null = 2;
-    const Filter_Associate = 4;
+    const FILTER_NOT_NULL = 2;
+    const FILTER_ASSOCIATE_RELATION = 4;
+
+    protected array $properties = [];
+    protected array $propertyReflections = [];
+    protected array $relateValues = [];
 
     final function __construct(?array $data = null){
         $this->reflection();
         $this->initialize();
     }
-
-    protected array $properties = [];
-    protected array $propertyReflections = [];
 
     abstract function tableName():string;
 
