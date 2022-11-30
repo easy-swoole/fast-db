@@ -2,6 +2,8 @@
 
 namespace EasySwoole\FastDb;
 
+use EasySwoole\FastDb\Attributes\Property;
+
 abstract class Entity
 {
 
@@ -12,6 +14,7 @@ abstract class Entity
     }
 
     protected array $properties = [];
+    protected array $propertyReflections = [];
 
     abstract function tableName():string;
 
@@ -27,7 +30,15 @@ abstract class Entity
 
     private function reflection(): void
     {
-
+        $ref = new \ReflectionClass(static::class);
+        $list = $ref->getProperties(\ReflectionProperty::IS_PUBLIC|\ReflectionProperty::IS_PROTECTED);
+        foreach ($list as $property){
+            $temp = $property->getAttributes(Property::class);
+            if(!empty($temp)){
+                $this->properties[$property->name] = $property->getDefaultValue();
+                $this->propertyReflections[$property->name] = $temp[0];
+            }
+        }
     }
 
 
