@@ -7,8 +7,10 @@ use EasySwoole\FastDb\Attributes\Property;
 abstract class Entity
 {
 
+    const Filter_Not_Null = 2;
+    const Filter_Associate = 4;
 
-    final function __construct(){
+    final function __construct(?array $data = null){
         $this->reflection();
         $this->initialize();
     }
@@ -18,9 +20,23 @@ abstract class Entity
 
     abstract function tableName():string;
 
-    function toArray():array
+    function toArray($filter = null):array
     {
-        return [];
+        if($filter == null){
+            return $this->properties;
+        }
+        $temp = $this->properties;
+        if($filter == 2 || $filter == 6){
+            foreach ($temp as $key => $item){
+                if($item === null){
+                    unset($temp[$key]);
+                }
+            }
+        }
+        if($filter == 4 || $filter == 6){
+            //做关联判定处理
+        }
+        return $temp;
     }
 
     protected function initialize(): void
