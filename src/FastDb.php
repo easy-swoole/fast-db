@@ -12,6 +12,7 @@ class FastDb
     protected QueryBuilder|null $queryBuilder = null;
 
     protected array $configs = [];
+    protected array $pools = [];
 
     function __construct()
     {
@@ -20,6 +21,8 @@ class FastDb
 
     function addDb(string $name,Config $config):FastDb
     {
+        $this->configs[$name] = $config;
+
         return $this;
     }
 
