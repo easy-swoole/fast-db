@@ -13,6 +13,7 @@ class FastDb
 
     protected array $configs = [];
     protected array $pools = [];
+    protected array $currentConnection = [];
 
     function __construct()
     {
