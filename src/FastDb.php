@@ -20,9 +20,9 @@ class FastDb
         $this->queryBuilder = new QueryBuilder();
     }
 
-    function addDb(string $name,Config $config):FastDb
+    function addDb(Config $config):FastDb
     {
-        $this->configs[$name] = $config;
+        $this->configs[$config->getName()] = $config;
 
         return $this;
     }
@@ -55,6 +55,11 @@ class FastDb
     function rollback()
     {
 
+    }
+
+    function onQuery(callable $call):FastDb
+    {
+        return $this;
     }
 
     function getOne(string $targetEntity):?Entity
