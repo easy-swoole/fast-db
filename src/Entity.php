@@ -5,6 +5,7 @@ namespace EasySwoole\FastDb;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\Utility\ListResult;
+use EasySwoole\FastDb\Utility\Page;
 use EasySwoole\Mysqli\QueryBuilder;
 
 abstract class Entity implements \JsonSerializable
@@ -12,6 +13,10 @@ abstract class Entity implements \JsonSerializable
     const FILTER_NOT_NULL = 2;
     const FILTER_ASSOCIATE_RELATION = 4;
 
+    /**
+     * @var array
+     * 用于存储对象成员，和做老数据diff
+     */
     private array $properties = [];
     private array $relateValues = [];
 
@@ -37,11 +42,12 @@ abstract class Entity implements \JsonSerializable
     {
         $queryBuilder = new QueryBuilder();
         call_user_func($whereCall,$queryBuilder);
-        $mode = new static();
+        $data = [];
+        $mode = new static($data);
         return $mode;
     }
 
-    function all(?callable $whereCall = null):ListResult
+    function all(?callable $whereCall = null,?Page $page = null):ListResult
     {
 
     }
@@ -56,14 +62,32 @@ abstract class Entity implements \JsonSerializable
         $this->properties = $this->toArray();
     }
 
-    function update(?array $data = null,?callable $whereCall = null)
+    function update(?array $data = null,?callable $whereCall = null):int
     {
         if($whereCall == null && $this->primaryKey == null){
             throw new RuntimeError("can not update data without primaryKey or whereCall set in ".static::class);
         }
-        if($data == null){
-            $data = $this->toArray();
+        $finalData = [];
+        if($data != null){
+            foreach ($data as $key => $datum){
+                if(isset($this->properties[$key]) && $this->{$key} !== $datum){
+                    $finalData[$key] = $datum;
+                }
+            }
+        }else{
+            foreach ($this->properties as $key => $property){
+                if($property !== $this->{$key}){
+                    $finalData[$key] = $this->{$key};
+                }
+            }
         }
+        if(empty($finalData)){
+            return 0;
+        }
+        $this->properties = $this->toArray();
+
+        //affect rows num
+        return 1;
     }
 
     function delete(?callable $whereCall = null)
@@ -75,10 +99,15 @@ abstract class Entity implements \JsonSerializable
 
     function toArray($filter = null):array
     {
-        if($filter == null){
-            return $this->properties;
+        $temp = [];
+        foreach ($this->properties as $key => $property){
+            $temp[$key] = $this->{$key};
         }
-        $temp = $this->properties;
+
+        if($filter == null){
+            return $temp;
+        }
+
         if($filter == 2 || $filter == 6){
             foreach ($temp as $key => $item){
                 if($item === null){
