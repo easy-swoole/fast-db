@@ -25,6 +25,11 @@ class FastDb
         return $this;
     }
 
+    function invoke(callable $call)
+    {
+
+    }
+
     function execQuery(QueryBuilder $queryBuilder)
     {
 
