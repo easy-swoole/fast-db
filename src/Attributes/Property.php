@@ -6,8 +6,7 @@ namespace EasySwoole\FastDb\Attributes;
 class Property
 {
     function __construct(
-        public bool $isPrimaryKey = false,
-        public $preGetter = null
+        public bool $isPrimaryKey = false
     ){
 
     }

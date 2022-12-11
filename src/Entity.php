@@ -3,6 +3,7 @@
 namespace EasySwoole\FastDb;
 
 use EasySwoole\FastDb\Attributes\Property;
+use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\Mysqli\QueryBuilder;
 
 abstract class Entity implements \JsonSerializable
@@ -13,6 +14,8 @@ abstract class Entity implements \JsonSerializable
     protected array $properties = [];
     protected array $propertyReflections = [];
     protected array $relateValues = [];
+
+    protected ?string $primaryKey = null;
 
     final function __construct(?array $data = null){
         $this->reflection();
@@ -47,12 +50,16 @@ abstract class Entity implements \JsonSerializable
 
     function update(?callable $whereCall = null)
     {
-
+        if($whereCall == null && $this->primaryKey == null){
+            throw new RuntimeError("can not update data without primaryKey or whereCall set in ".static::class);
+        }
     }
 
     function delete(?callable $whereCall = null)
     {
-
+        if($whereCall == null && $this->primaryKey == null){
+            throw new RuntimeError("can not delete data without primaryKey or whereCall set in ".static::class);
+        }
     }
 
     function toArray($filter = null):array
@@ -86,8 +93,17 @@ abstract class Entity implements \JsonSerializable
         foreach ($list as $property){
             $temp = $property->getAttributes(Property::class);
             if(!empty($temp)){
+                /** @var Property $temp */
+                $temp = $temp[0];
                 $this->properties[$property->name] = $property->getDefaultValue();
-                $this->propertyReflections[$property->name] = $temp[0];
+                $this->propertyReflections[$property->name] = $temp;
+                if($temp->isPrimaryKey){
+                    if($this->primaryKey == null){
+                        $this->primaryKey = $property->name;
+                    }else{
+                        throw new RuntimeError("can not redefine primaryKey in".static::class);
+                    }
+                }
             }
         }
     }
