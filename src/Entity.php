@@ -5,7 +5,7 @@ namespace EasySwoole\FastDb;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\Mysqli\QueryBuilder;
 
-abstract class Entity
+abstract class Entity implements \JsonSerializable
 {
     const FILTER_NOT_NULL = 2;
     const FILTER_ASSOCIATE_RELATION = 4;
@@ -22,7 +22,7 @@ abstract class Entity
     abstract function tableName():string;
 
 
-    final static function getOne(callable $whereCall):?static
+    static function getOne(callable $whereCall):?static
     {
         $queryBuilder = new QueryBuilder();
         call_user_func($whereCall,$queryBuilder);
@@ -30,17 +30,27 @@ abstract class Entity
         return $mode;
     }
 
+    function all(?callable $whereCall = null):array
+    {
+
+    }
+
+    function chunk(callable $func,?callable $whereCall = null,$pageSize = 10):void
+    {
+
+    }
+
     function save()
     {
 
     }
 
-    function update()
+    function update(?callable $whereCall = null)
     {
 
     }
 
-    function delete()
+    function delete(?callable $whereCall = null)
     {
 
     }
@@ -83,4 +93,8 @@ abstract class Entity
     }
 
 
+    public function jsonSerialize(): mixed
+    {
+        return $this->toArray();
+    }
 }
