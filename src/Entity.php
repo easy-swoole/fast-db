@@ -4,6 +4,7 @@ namespace EasySwoole\FastDb;
 
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Exception\RuntimeError;
+use EasySwoole\FastDb\Utility\ListResult;
 use EasySwoole\Mysqli\QueryBuilder;
 
 abstract class Entity implements \JsonSerializable
@@ -33,7 +34,7 @@ abstract class Entity implements \JsonSerializable
         return $mode;
     }
 
-    function all(?callable $whereCall = null):array
+    function all(?callable $whereCall = null):ListResult
     {
 
     }

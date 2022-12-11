@@ -1,14 +1,17 @@
 <?php
 
-namespace EasySwoole\FastDb;
+namespace EasySwoole\FastDb\Utility;
 
 
 class ListResult  implements \Iterator , \JsonSerializable {
 
     private array $data = [];
-    function __construct(array $data)
+    private ?int $totalCount = null;
+
+    function __construct(array $data,?int $totalCount = null)
     {
         $this->data = $data;
+        $this->totalCount = $totalCount;
     }
 
     private int $iteratorKey = 0;
@@ -36,6 +39,16 @@ class ListResult  implements \Iterator , \JsonSerializable {
     public function rewind(): void
     {
         $this->iteratorKey = 0;
+    }
+
+    function list():array
+    {
+        return $this->data;
+    }
+
+    function totalCount():?int
+    {
+        return $this->totalCount;
     }
 
     public function jsonSerialize(): mixed
