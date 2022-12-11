@@ -12,14 +12,21 @@ abstract class Entity implements \JsonSerializable
     const FILTER_NOT_NULL = 2;
     const FILTER_ASSOCIATE_RELATION = 4;
 
-    protected array $properties = [];
-    protected array $propertyReflections = [];
-    protected array $relateValues = [];
+    private array $properties = [];
+    private array $relateValues = [];
 
     protected ?string $primaryKey = null;
 
+    /**
+     * @throws RuntimeError
+     */
     final function __construct(?array $data = null){
         $this->reflection();
+        foreach ($this->properties as $property => $val){
+            if(isset($data[$property])){
+                $this->{$property} = $data[$property];
+            }
+        }
         $this->initialize();
     }
 
@@ -46,13 +53,16 @@ abstract class Entity implements \JsonSerializable
 
     function save()
     {
-
+        $this->properties = $this->toArray();
     }
 
-    function update(?callable $whereCall = null)
+    function update(?array $data = null,?callable $whereCall = null)
     {
         if($whereCall == null && $this->primaryKey == null){
             throw new RuntimeError("can not update data without primaryKey or whereCall set in ".static::class);
+        }
+        if($data == null){
+            $data = $this->toArray();
         }
     }
 
@@ -97,7 +107,6 @@ abstract class Entity implements \JsonSerializable
                 /** @var Property $temp */
                 $temp = $temp[0];
                 $this->properties[$property->name] = $property->getDefaultValue();
-                $this->propertyReflections[$property->name] = $temp;
                 if($temp->isPrimaryKey){
                     if($this->primaryKey == null){
                         $this->primaryKey = $property->name;
