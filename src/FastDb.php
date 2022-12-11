@@ -4,6 +4,7 @@ namespace EasySwoole\FastDb;
 
 use EasySwoole\Component\Singleton;
 use EasySwoole\Mysqli\QueryBuilder;
+use Swoole\Coroutine;
 
 class FastDb
 {
@@ -33,5 +34,16 @@ class FastDb
     function execQuery(QueryBuilder $queryBuilder)
     {
 
+    }
+
+    private function getClient(string $name)
+    {
+        $cid = Coroutine::getCid();
+        //协程环境从pool取
+        if($cid > 0){
+
+        }else{
+
+        }
     }
 }

@@ -4,7 +4,7 @@ namespace EasySwoole\FastDb;
 
 use EasySwoole\Spl\SplBean;
 
-class Config extends SplBean
+class Config extends \EasySwoole\Pool\Config
 {
     protected string $name;
 
