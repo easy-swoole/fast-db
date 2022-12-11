@@ -7,7 +7,6 @@ use EasySwoole\Mysqli\QueryBuilder;
 
 abstract class Entity
 {
-
     const FILTER_NOT_NULL = 2;
     const FILTER_ASSOCIATE_RELATION = 4;
 
@@ -21,6 +20,30 @@ abstract class Entity
     }
 
     abstract function tableName():string;
+
+
+    final static function getOne(callable $whereCall):?static
+    {
+        $queryBuilder = new QueryBuilder();
+        call_user_func($whereCall,$queryBuilder);
+        $mode = new static();
+        return $mode;
+    }
+
+    function save()
+    {
+
+    }
+
+    function update()
+    {
+
+    }
+
+    function delete()
+    {
+
+    }
 
     function toArray($filter = null):array
     {

@@ -9,16 +9,9 @@ class FastDb
 {
     use Singleton;
 
-    protected QueryBuilder|null $queryBuilder = null;
-
     protected array $configs = [];
     protected array $pools = [];
     protected array $currentConnection = [];
-
-    function __construct()
-    {
-        $this->queryBuilder = new QueryBuilder();
-    }
 
     function addDb(Config $config):FastDb
     {
@@ -32,62 +25,7 @@ class FastDb
         return $this;
     }
 
-    function reset():FastDb
-    {
-        return $this;
-    }
-
-    function invokeMode(bool $is):FastDb
-    {
-        return $this;
-    }
-
-    function beginTransaction():FastDb
-    {
-        return $this;
-    }
-
-    function commit()
-    {
-
-    }
-
-    function rollback()
-    {
-
-    }
-
-    function onQuery(callable $call):FastDb
-    {
-        return $this;
-    }
-
-    function getOne(string $targetEntity):?Entity
-    {
-        return null;
-    }
-
-    function all(string $targetEntity)
-    {
-
-    }
-
-    function save(Entity $entity)
-    {
-
-    }
-
-    function update(Entity $entity)
-    {
-
-    }
-
-    function delete(Entity $entity)
-    {
-
-    }
-
-    function chunk(callable $func,string $targetEntity,$chunkSize = 10)
+    function execQuery(QueryBuilder $queryBuilder)
     {
 
     }
