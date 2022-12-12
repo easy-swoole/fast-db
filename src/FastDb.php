@@ -37,6 +37,10 @@ class FastDb
         return $this;
     }
 
+    /**
+     * @throws RuntimeError
+     * @throws Exception
+     */
     function invoke(callable $call)
     {
         $cid = Coroutine::getCid();
@@ -46,12 +50,14 @@ class FastDb
              */
             throw new RuntimeError("invoke() after begin() transaction is not allow");
         }
+        $client = null;
         try{
             $client = $this->getClient();
-
+            return call_user_func($call,$client);
         }catch (\Throwable $throwable){
-
+            throw $throwable;
         } finally {
+            //回收链接
             unset($this->currentConnection[$cid][$this->selectDb]);
         }
     }
