@@ -57,7 +57,7 @@ abstract class Entity implements \JsonSerializable
 
     }
 
-    function insert():bool
+    function insert(bool $reSync = false):bool
     {
         $data = $this->toArray();
         $query = new QueryBuilder();
@@ -65,6 +65,9 @@ abstract class Entity implements \JsonSerializable
         $ret = FastDb::getInstance()->query($query);
         if($ret->getResult()){
             $this->{$this->primaryKey} = $ret->getConnection()->mysqlClient()->insert_id;
+            if($reSync){
+                //当数据库有些字段设置了脚本或者是自动创建，需要重新get一次同步
+            }
             return true;
         }else{
             return false;
