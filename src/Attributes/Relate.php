@@ -3,6 +3,9 @@
 namespace EasySwoole\FastDb\Attributes;
 
 
+use EasySwoole\FastDb\Entity;
+use EasySwoole\FastDb\Exception\RuntimeError;
+
 #[\Attribute(\Attribute::TARGET_PROPERTY)]
 class Relate
 {
@@ -12,8 +15,16 @@ class Relate
     function __construct(
         public string $targetEntity,
         public int $relateType = self::RELATE_ONE_TO_NOE,
-        public ?string $relateProperty = null
+        public ?string $targetProperty = null
     ){
+        $ref = new \ReflectionClass($this->targetEntity);
+        if(!$ref->isSubclassOf(Entity::class)){
+            throw new RuntimeError("relate targetEntity class {$this->targetEntity} not a sub class of ".Entity::class);
+        }
+        if($this->targetProperty != null){
 
+        }else{
+
+        }
     }
 }

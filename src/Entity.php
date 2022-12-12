@@ -3,6 +3,7 @@
 namespace EasySwoole\FastDb;
 
 use EasySwoole\FastDb\Attributes\Property;
+use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\Utility\ListResult;
 use EasySwoole\FastDb\Utility\Page;
@@ -19,6 +20,8 @@ abstract class Entity implements \JsonSerializable
      */
     private array $properties = [];
     private array $relateValues = [];
+
+    private array $propertyRelates = [];
 
     protected ?string $primaryKey = null;
 
@@ -177,7 +180,13 @@ abstract class Entity implements \JsonSerializable
                         throw new RuntimeError("can not redefine primaryKey in ".static::class);
                     }
                 }
+                $temp = $property->getAttributes(Relate::class);
+                if(!empty($temp)){
+                    $temp = $temp[0];
+                    $temp = new Relate(...$temp->getArguments());
+                }
             }
+
         }
         if($this->primaryKey == null){
             throw new RuntimeError("primaryKey must be define in ".static::class);
@@ -188,5 +197,10 @@ abstract class Entity implements \JsonSerializable
     public function jsonSerialize(): mixed
     {
         return $this->toArray();
+    }
+
+    protected function relate(string $property,bool $useCache = true)
+    {
+
     }
 }
