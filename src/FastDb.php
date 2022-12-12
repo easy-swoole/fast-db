@@ -50,15 +50,22 @@ class FastDb
              */
             throw new RuntimeError("invoke() after begin() transaction is not allow");
         }
-        $client = null;
         try{
             $client = $this->getClient();
             return call_user_func($call,$client);
         }catch (\Throwable $throwable){
             throw $throwable;
         } finally {
-            //回收链接
-            unset($this->currentConnection[$cid][$this->selectDb]);
+            foreach ($this->currentConnection[$cid] as $selectDb => $connection){
+                /** @var Pool $pool */
+                $pool = $this->pools[$selectDb];
+                try {
+                    $pool->recycleObj($connection);
+                }catch (\Throwable $throwable){
+                    trigger_error($throwable->getMessage());
+                }
+                unset($this->currentConnection[$cid][$selectDb]);
+            }
         }
     }
 
