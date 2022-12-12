@@ -4,6 +4,7 @@ namespace EasySwoole\FastDb;
 
 use EasySwoole\Component\Singleton;
 use EasySwoole\FastDb\Exception\RuntimeError;
+use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\Pool;
 use EasySwoole\Mysqli\Client;
 use EasySwoole\Mysqli\QueryBuilder;
@@ -44,17 +45,31 @@ class FastDb
 
     }
 
+    /**
+     * @throws \EasySwoole\Mysqli\Exception\Exception
+     * @throws RuntimeError
+     * @throws Exception
+     */
     function rawQuery(string $string)
     {
         $client = $this->getClient($this->selectDb);
-        var_dump($client->rawQuery($string));
+        return $client->rawQuery($string);
+    }
+
+    function currentConnection():?Connection
+    {
+        $cid = Coroutine::getCid();
+        if(isset($this->currentConnection[$this->selectDb][$cid])){
+            return $this->currentConnection[$this->selectDb][$cid];
+        }
+        return null;
     }
 
     /**
      * @throws RuntimeError
      * @throws Exception
      */
-    private function getClient(string $name):Client
+    private function getClient(string $name):Connection
     {
         $cid = Coroutine::getCid();
 
