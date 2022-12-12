@@ -20,6 +20,8 @@ class FastDb
     protected array $pools = [];
     protected array $currentConnection = [];
 
+    protected array $transactionContext = [];
+
     protected string $selectDb = "default";
 
     function addDb(Config $config):FastDb
@@ -37,12 +39,85 @@ class FastDb
 
     function invoke(callable $call)
     {
+        $cid = Coroutine::getCid();
+        if(isset($this->transactionContext[$cid])){
+            /** 在开启事务后又执行invoke可能会导致事务丢失，因为invoke结束后会立即回收链接，
+             * 如果之前有声明事务，会被丢弃 ，请在invoke内声明事务
+             */
+            throw new RuntimeError("invoke() after begin() transaction is not allow");
+        }
+        try{
+            $client = $this->getClient();
 
+        }catch (\Throwable $throwable){
+
+        } finally {
+            unset($this->currentConnection[$cid][$this->selectDb]);
+        }
     }
 
-    function query(QueryBuilder $queryBuilder)
+    /**
+     * @throws RuntimeError
+     * @throws Exception
+     */
+    function begin(float $timeout = 3.0): bool
     {
+        $cid = Coroutine::getCid();
+        if(!isset($this->transactionContext[$cid])){
+            $this->transactionContext[$cid] = [];
+            Coroutine::defer(function ()use($cid){
+                unset($this->transactionContext[$cid]);
+            });
+        }
+        if(isset($this->transactionContext[$cid][$this->selectDb])){
+            return true;
+        }
+        $ret = $this->getClient()->mysqlClient()->begin($timeout);
+        if($ret === true){
+            $this->transactionContext[$cid][$this->selectDb] = true;
+            return true;
+        }
+        return false;
+    }
 
+    function commit(float $timeout = 3.0):bool
+    {
+        $cid = Coroutine::getCid();
+        if(!isset($this->transactionContext[$cid][$this->selectDb])){
+            return true;
+        }
+        $ret = $this->getClient()->mysqlClient()->commit($timeout);
+        if($ret === true){
+            unset($this->transactionContext[$cid][$this->selectDb]);
+            return true;
+        }
+        return false;
+    }
+
+    function rollback(float $timeout = 3.0):bool
+    {
+        $cid = Coroutine::getCid();
+        if(!isset($this->transactionContext[$cid][$this->selectDb])){
+            return true;
+        }
+        $ret = $this->getClient()->mysqlClient()->rollback($timeout);
+        if($ret === true){
+            unset($this->transactionContext[$cid][$this->selectDb]);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * @throws \Throwable
+     * @throws Exception
+     * @throws RuntimeError
+     * @throws \EasySwoole\Mysqli\Exception\Exception
+     */
+    function query(QueryBuilder $queryBuilder,float $timeout = null)
+    {
+        $client = $this->getClient();
+        return $client->query($queryBuilder,$timeout);
     }
 
     /**
@@ -52,15 +127,15 @@ class FastDb
      */
     function rawQuery(string $string)
     {
-        $client = $this->getClient($this->selectDb);
+        $client = $this->getClient();
         return $client->rawQuery($string);
     }
 
     function currentConnection():?Connection
     {
         $cid = Coroutine::getCid();
-        if(isset($this->currentConnection[$this->selectDb][$cid])){
-            return $this->currentConnection[$this->selectDb][$cid];
+        if(isset($this->currentConnection[$cid][$this->selectDb])){
+            return $this->currentConnection[$cid][$this->selectDb];
         }
         return null;
     }
@@ -69,12 +144,12 @@ class FastDb
      * @throws RuntimeError
      * @throws Exception
      */
-    private function getClient(string $name):Connection
+    private function getClient():Connection
     {
         $cid = Coroutine::getCid();
-
-        if(isset($this->currentConnection[$name][$cid])){
-            return $this->currentConnection[$name][$cid];
+        $name = $this->selectDb;
+        if(isset($this->currentConnection[$cid][$name])){
+            return $this->currentConnection[$cid][$name];
         }
 
         if(!isset($this->configs[$name])){
@@ -89,11 +164,11 @@ class FastDb
             /** @var Pool $pool */
             $pool = $this->pools[$name];
         }
-        $this->currentConnection[$name][$cid] = $pool->defer();
+        $this->currentConnection[$cid][$name] = $pool->defer();
         Coroutine::defer(function ()use($cid,$name){
-           unset($this->currentConnection[$name][$cid]);
+           unset($this->currentConnection[$cid][$name]);
         });
-        return $this->currentConnection[$name][$cid];
+        return $this->currentConnection[$cid][$name];
     }
 
     function reset()
