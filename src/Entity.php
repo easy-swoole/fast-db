@@ -113,12 +113,11 @@ abstract class Entity implements \JsonSerializable
         $queryResult = FastDb::getInstance()->query($query);
         $affectRows = $queryResult->getConnection()->mysqlClient()->affected_rows;
 
-        if($singleRecord){
+        if($singleRecord && $affectRows == 1){
             $this->properties = $this->toArray();
         }
-
         //affect rows num
-        return 1;
+        return $affectRows;
     }
 
     function delete(?callable $whereCall = null)
