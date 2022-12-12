@@ -56,19 +56,28 @@ class FastDb
      */
     private function getClient(string $name):Client
     {
+        $cid = Coroutine::getCid();
+
+        if(isset($this->currentConnection[$name][$cid])){
+            return $this->currentConnection[$name][$cid];
+        }
+
         if(!isset($this->configs[$name])){
             throw new RuntimeError("connection {$name} not register yet");
         }
         /** @var Config $dbConfig */
         $dbConfig = $this->configs[$name];
-        $cid = Coroutine::getCid();
         if(!isset($this->pools[$name])){
             $pool = new Pool($dbConfig);
         }else{
             /** @var Pool $pool */
             $pool = $this->pools[$name];
         }
-        return $pool->defer();
+        $this->currentConnection[$name][$cid] = $pool->defer();
+        Coroutine::defer(function ()use($cid,$name){
+           unset($this->currentConnection[$name][$cid]);
+        });
+        return $this->currentConnection[$name][$cid];
     }
 
     function reset()
