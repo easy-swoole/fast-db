@@ -57,9 +57,18 @@ abstract class Entity implements \JsonSerializable
 
     }
 
-    function save()
+    function insert():bool
     {
-        $this->properties = $this->toArray();
+        $data = $this->toArray();
+        $query = new QueryBuilder();
+        $query->insert($this->tableName(),$data);
+        $ret = FastDb::getInstance()->query($query);
+        if($ret->getResult()){
+            $this->{$this->primaryKey} = $ret->getConnection()->mysqlClient()->insert_id;
+            return true;
+        }else{
+            return false;
+        }
     }
 
     function update(?array $data = null,?callable $whereCall = null):int
@@ -84,7 +93,26 @@ abstract class Entity implements \JsonSerializable
         if(empty($finalData)){
             return 0;
         }
-        $this->properties = $this->toArray();
+
+        $query = new QueryBuilder();
+
+        $singleRecord = false;
+        //当主键有值的时候，不执行wherecall，因为pk可以确定唯一记录，再wherecall无意义
+        if($this->primaryKey != null && $this->{$this->primaryKey} !== null){
+            $query->where($this->primaryKey,$this->{$this->primaryKey});
+            $singleRecord = true;
+        }else{
+            if($whereCall){
+                call_user_func($whereCall,$query);
+            }
+        }
+
+        $queryResult = FastDb::getInstance()->query($query);
+        $affectRows = $queryResult->getConnection()->mysqlClient()->affected_rows;
+
+        if($singleRecord){
+            $this->properties = $this->toArray();
+        }
 
         //affect rows num
         return 1;
@@ -101,7 +129,11 @@ abstract class Entity implements \JsonSerializable
     {
         $temp = [];
         foreach ($this->properties as $key => $property){
-            $temp[$key] = $this->{$key};
+            if(isset($this->{$key})){
+                $temp[$key] = $this->{$key};
+            }else{
+                $temp[$key] = null;
+            }
         }
 
         if($filter == null){
@@ -133,17 +165,20 @@ abstract class Entity implements \JsonSerializable
         foreach ($list as $property){
             $temp = $property->getAttributes(Property::class);
             if(!empty($temp)){
-                /** @var Property $temp */
                 $temp = $temp[0];
+                $temp = new Property(...$temp->getArguments());
                 $this->properties[$property->name] = $property->getDefaultValue();
                 if($temp->isPrimaryKey){
                     if($this->primaryKey == null){
                         $this->primaryKey = $property->name;
                     }else{
-                        throw new RuntimeError("can not redefine primaryKey in".static::class);
+                        throw new RuntimeError("can not redefine primaryKey in ".static::class);
                     }
                 }
             }
+        }
+        if($this->primaryKey == null){
+            throw new RuntimeError("primaryKey must be define in ".static::class);
         }
     }
 

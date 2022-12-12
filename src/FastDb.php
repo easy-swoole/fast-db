@@ -6,6 +6,7 @@ use EasySwoole\Component\Singleton;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\Pool;
+use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\Mysqli\Client;
 use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\Pool\Exception\Exception;
@@ -127,10 +128,15 @@ class FastDb
      * @throws RuntimeError
      * @throws \EasySwoole\Mysqli\Exception\Exception
      */
-    function query(QueryBuilder $queryBuilder,float $timeout = null)
+    function query(QueryBuilder $queryBuilder,float $timeout = null):QueryResult
     {
         $client = $this->getClient();
-        return $client->query($queryBuilder,$timeout);
+        $ret = $client->query($queryBuilder,$timeout);
+        $return = new QueryResult();
+        $return->setResult($ret);
+        $return->setConnection($client);
+        $return->setQueryBuilder(clone $queryBuilder);
+        return $return;
     }
 
     /**
@@ -138,10 +144,15 @@ class FastDb
      * @throws RuntimeError
      * @throws Exception
      */
-    function rawQuery(string $string)
+    function rawQuery(string $sql):QueryResult
     {
         $client = $this->getClient();
-        return $client->rawQuery($string);
+        $ret =  $client->rawQuery($sql);
+        $return = new QueryResult();
+        $return->setResult($ret);
+        $return->setConnection($client);
+        $return->setRawSql($sql);
+        return $return;
     }
 
     function currentConnection():?Connection
