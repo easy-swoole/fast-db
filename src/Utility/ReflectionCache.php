@@ -45,9 +45,10 @@ class ReflectionCache
 
                 $temp = $property->getAttributes(Relate::class);
                 if(!empty($temp)){
-                    $temp = $temp[0];
-                    $temp = new Relate(...$temp->getArguments());
-                    $return->addRelate($property->name,$temp);
+                    foreach ($temp as $item){
+                        $item = new Relate(...$item->getArguments());
+                        $return->addRelate($property->name,$item);
+                    }
                 }
             }
         }

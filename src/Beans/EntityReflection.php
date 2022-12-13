@@ -67,7 +67,7 @@ class EntityReflection
 
     function addRelate(string $name,mixed $value):EntityReflection
     {
-        $this->relate[$name] = $value;
+        $this->relate[$name][] = $value;
         return $this;
     }
 }

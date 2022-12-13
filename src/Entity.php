@@ -174,7 +174,7 @@ abstract class Entity implements \JsonSerializable
         return $this->toArray();
     }
 
-    protected function relate(string $property,bool $useCache = true)
+    protected function relate(string $property,string $targetEntity,bool $useCache = true)
     {
         //一个ID属性可以关联到多个实体。比如一个学生可以有多个课程，也有一个自己的详细资料
     }
