@@ -178,10 +178,11 @@ abstract class Entity implements \JsonSerializable
     protected function relate(?Relate $relate = null)
     {
         //一个ID属性可以关联到多个实体。比如一个学生可以有多个课程，也有一个自己的详细资料
-        //由于是debug trace,上层方法请直接调用，不要再放置到第三方信息中。
         if($relate == null){
+            //由于是debug trace,上层方法请直接调用，不要再放置到其他类或者是闭包等其他方法中。
             $trace = debug_backtrace(DEBUG_BACKTRACE_PROVIDE_OBJECT,2);
             $trace = $trace[1];
+            $ref = ReflectionCache::getInstance()->entityReflection($trace['class']);
             var_dump($trace['function']);
             var_dump($trace['class']);
         }
