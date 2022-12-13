@@ -2,11 +2,10 @@
 
 namespace EasySwoole\FastDb;
 
-use EasySwoole\FastDb\Attributes\Property;
-use EasySwoole\FastDb\Attributes\Relate;
+use EasySwoole\FastDb\Beans\ListResult;
+use EasySwoole\FastDb\Beans\Page;
 use EasySwoole\FastDb\Exception\RuntimeError;
-use EasySwoole\FastDb\Utility\ListResult;
-use EasySwoole\FastDb\Utility\Page;
+use EasySwoole\FastDb\Utility\ReflectionCache;
 use EasySwoole\Mysqli\QueryBuilder;
 
 abstract class Entity implements \JsonSerializable
@@ -165,32 +164,10 @@ abstract class Entity implements \JsonSerializable
 
     private function reflection(): void
     {
-        $ref = new \ReflectionClass(static::class);
-        $list = $ref->getProperties(\ReflectionProperty::IS_PUBLIC|\ReflectionProperty::IS_PROTECTED);
-        foreach ($list as $property){
-            $temp = $property->getAttributes(Property::class);
-            if(!empty($temp)){
-                $temp = $temp[0];
-                $temp = new Property(...$temp->getArguments());
-                $this->properties[$property->name] = $property->getDefaultValue();
-                if($temp->isPrimaryKey){
-                    if($this->primaryKey == null){
-                        $this->primaryKey = $property->name;
-                    }else{
-                        throw new RuntimeError("can not redefine primaryKey in ".static::class);
-                    }
-                }
-                $temp = $property->getAttributes(Relate::class);
-                if(!empty($temp)){
-                    $temp = $temp[0];
-                    $temp = new Relate(...$temp->getArguments());
-                }
-            }
-
-        }
-        if($this->primaryKey == null){
-            throw new RuntimeError("primaryKey must be define in ".static::class);
-        }
+        $data = ReflectionCache::getInstance()->entityReflection(static::class);
+        $this->properties = $data->getProperties();
+        $this->primaryKey = $data->getPrimaryKey();
+        $this->propertyRelates = $data->getRelate();
     }
 
 

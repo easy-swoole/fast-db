@@ -1,6 +1,6 @@
 <?php
 
-namespace EasySwoole\FastDb\Utility;
+namespace EasySwoole\FastDb\Beans;
 
 
 class ListResult  implements \Iterator , \JsonSerializable {
