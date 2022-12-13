@@ -2,6 +2,7 @@
 
 namespace EasySwoole\FastDb;
 
+use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Beans\ListResult;
 use EasySwoole\FastDb\Beans\Page;
 use EasySwoole\FastDb\Exception\RuntimeError;
@@ -174,8 +175,16 @@ abstract class Entity implements \JsonSerializable
         return $this->toArray();
     }
 
-    protected function relate(string $property,string $targetEntity,bool $useCache = true)
+    protected function relate(?Relate $relate = null)
     {
         //一个ID属性可以关联到多个实体。比如一个学生可以有多个课程，也有一个自己的详细资料
+        //由于是debug trace,上层方法请直接调用，不要再放置到第三方信息中。
+        if($relate == null){
+            $trace = debug_backtrace(DEBUG_BACKTRACE_PROVIDE_OBJECT,2);
+            $trace = $trace[1];
+            var_dump($trace['function']);
+            var_dump($trace['class']);
+        }
+
     }
 }

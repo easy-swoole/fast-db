@@ -17,14 +17,6 @@ class Relate
         public int $relateType = self::RELATE_ONE_TO_NOE,
         public ?string $targetProperty = null
     ){
-        $ref = new \ReflectionClass($this->targetEntity);
-        if(!$ref->isSubclassOf(Entity::class)){
-            throw new RuntimeError("relate targetEntity class {$this->targetEntity} not a sub class of ".Entity::class);
-        }
-        if($this->targetProperty != null){
 
-        }else{
-
-        }
     }
 }
