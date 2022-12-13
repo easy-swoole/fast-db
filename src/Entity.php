@@ -182,9 +182,18 @@ abstract class Entity implements \JsonSerializable
             //由于是debug trace,上层方法请直接调用，不要再放置到其他类或者是闭包等其他方法中。
             $trace = debug_backtrace(DEBUG_BACKTRACE_PROVIDE_OBJECT,2);
             $trace = $trace[1];
-            $ref = ReflectionCache::getInstance()->entityReflection($trace['class']);
-            var_dump($trace['function']);
-            var_dump($trace['class']);
+            if(!isset( $trace['class'])){
+                throw new RuntimeError("please call relate() in direct");
+            }
+            $class = $trace['class'];
+            $method = $trace['function'];
+            $relates = ReflectionCache::getInstance()->entityReflection($class)->getRelate();
+
+            if(isset($relates[$method])){
+                $relate = $relates[$method];
+            }else{
+                throw new RuntimeError("not relation defined in class {$class} method {$method}");
+            }
         }
 
     }

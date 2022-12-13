@@ -23,7 +23,7 @@ class ReflectionCache
         }
         $ref = new \ReflectionClass($entityClass);
         if(!$ref->isSubclassOf(Entity::class)){
-            throw new RuntimeError("relate targetEntity class {$entityClass} not a sub class of ".Entity::class);
+            throw new RuntimeError("class {$entityClass} not a sub class of ".Entity::class);
         }
 
         $return = new EntityReflection();
@@ -39,26 +39,28 @@ class ReflectionCache
                     if($return->getPrimaryKey() == null){
                         $return->setPrimaryKey($property->name);
                     }else{
-                        throw new RuntimeError("can not redefine primaryKey in {$entityClass}");
-                    }
-                }
-
-                $temp = $property->getAttributes(Relate::class);
-                if(!empty($temp)){
-                    foreach ($temp as $item){
-                        $item = new Relate(...$item->getArguments());
-                        $return->addRelate($property->name,$item);
+                        throw new RuntimeError("can not redefine primary key in {$entityClass}");
                     }
                 }
             }
         }
 
+        $list = $ref->getMethods();
+        foreach ($list as $method){
+            $temp = $method->getAttributes(Relate::class);
+            if(!empty($temp)){
+                $temp = $temp[0];
+                $temp = new Relate(...$temp->getArguments());
+                $return->addRelate($method->getName(),$temp);
+            }
+        }
+
         if(empty($return->getProperties())){
-            throw new RuntimeError("not any  property defined in {$entityClass}");
+            throw new RuntimeError("not any property defined in {$entityClass}");
         }
 
         if($return->getPrimaryKey() == null){
-            throw new RuntimeError("primaryKey must be define in {$entityClass}");
+            throw new RuntimeError("primary key must be define in {$entityClass}");
         }
 
         $this->cache[$key] = $return;
