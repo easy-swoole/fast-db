@@ -24,9 +24,7 @@ abstract class Entity implements \JsonSerializable
 
     protected ?string $primaryKey = null;
 
-    /**
-     * @throws RuntimeError
-     */
+
     final function __construct(?array $data = null){
         $this->reflection();
         foreach ($this->properties as $property => $val){
@@ -178,6 +176,6 @@ abstract class Entity implements \JsonSerializable
 
     protected function relate(string $property,bool $useCache = true)
     {
-
+        //一个ID属性可以关联到多个实体。比如一个学生可以有多个课程，也有一个自己的详细资料
     }
 }
