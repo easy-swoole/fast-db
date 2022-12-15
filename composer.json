@@ -27,7 +27,8 @@
     },
     "autoload": {
         "psr-4": {
-            "EasySwoole\\FastDb\\": "src/"
+            "EasySwoole\\FastDb\\": "src/",
+            "EasySwoole\\FastDb\\Tests\\": "tests/"
         }
     },
     "autoload-dev": {

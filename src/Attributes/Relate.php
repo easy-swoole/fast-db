@@ -15,16 +15,15 @@ class Relate
 
     function __construct(
         public string $targetEntity,
+        public string $targetProperty,
         public int $relateType = self::RELATE_ONE_TO_NOE,
         public ?string $selfProperty = null,
-        public ?string $targetProperty = null
+        public bool $allowCache = true
     ){
         //检查目标属性是否为合法entity
         $targetRef = ReflectionCache::getInstance()->entityReflection($this->targetEntity);
-        if($this->targetEntity){
-            if(!isset($targetRef[$this->targetProperty])){
-                throw new RuntimeError("target property {$this->targetProperty} is not define in class {$this->targetEntity}");
-            }
+        if(!key_exists($this->targetProperty,$targetRef->getProperties())){
+            throw new RuntimeError("target property {$this->targetProperty} is not define in class {$this->targetEntity}");
         }
     }
 }

@@ -28,15 +28,23 @@ abstract class Entity implements \JsonSerializable
 
     final function __construct(?array $data = null){
         $this->reflection();
-        foreach ($this->properties as $property => $val){
-            if(isset($data[$property])){
-                $this->{$property} = $data[$property];
-            }
+        if(!empty($data)){
+            $this->data($data);
         }
         $this->initialize();
     }
 
     abstract function tableName():string;
+
+    function data(array $data):Entity
+    {
+        foreach ($this->properties as $property => $val){
+            if(isset($data[$property])){
+                $this->{$property} = $data[$property];
+            }
+        }
+        return $this;
+    }
 
 
     static function getOne(callable $whereCall):?static
@@ -166,7 +174,7 @@ abstract class Entity implements \JsonSerializable
         $data = ReflectionCache::getInstance()->entityReflection(static::class);
         $this->properties = $data->getProperties();
         $this->primaryKey = $data->getPrimaryKey();
-        $this->propertyRelates = $data->getRelate();
+        $this->propertyRelates = $data->getMethodRelates();
     }
 
 
@@ -187,7 +195,7 @@ abstract class Entity implements \JsonSerializable
             }
             $class = $trace['class'];
             $method = $trace['function'];
-            $relates = ReflectionCache::getInstance()->entityReflection($class)->getRelate();
+            $relates = ReflectionCache::getInstance()->entityReflection($class)->getMethodRelates();
 
             if(isset($relates[$method])){
                 $relate = $relates[$method];
@@ -196,5 +204,49 @@ abstract class Entity implements \JsonSerializable
             }
         }
 
+        if($relate->selfProperty == null){
+            $relate->selfProperty = $this->primaryKey;
+        }
+
+        $relateKey = md5($relate->targetEntity.$relate->selfProperty.$relate->targetProperty);
+
+        if($relate->allowCache && isset($this->relateValues[$relateKey])){
+            return $this->relateValues[$relateKey];
+        }
+
+        /** @var Entity $temp */
+        $temp = new $relate->targetEntity();
+
+        $query = new QueryBuilder();
+
+        if($relate->relateType == Relate::RELATE_ONE_TO_NOE){
+            $query->where($relate->targetProperty,$this->{$relate->selfProperty})
+                ->getOne($temp->tableName());
+            $ret = FastDb::getInstance()->query($query);
+            if(!empty($ret->getResult())){
+                $temp->data($ret->getResult()[0]);
+                if($relate->allowCache){
+                    $this->relateValues[$relateKey] = $temp;
+                }
+                return $temp;
+            }else{
+                return null;
+            }
+        }else{
+            $query->where($relate->targetProperty,$this->{$relate->selfProperty})
+                ->get($temp->tableName());
+            $ret = FastDb::getInstance()->query($query);
+            $list = [];
+            if(!empty($ret->getResult())){
+                foreach ($ret->getResult() as $item){
+                    /** @var Entity $new */
+                    $new = new $relate->targetEntity();
+                    $new->data($item);
+                    $list[] = $new;
+                }
+                return $list;
+            }
+            return $list;
+        }
     }
 }

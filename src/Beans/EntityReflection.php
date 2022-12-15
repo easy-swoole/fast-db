@@ -9,7 +9,7 @@ class EntityReflection
     private array $properties = [];
     private ?string $primaryKey = null;
 
-    private array $relate = [];
+    private array $methodRelates = [];
 
     /**
      * @return array
@@ -46,17 +46,17 @@ class EntityReflection
     /**
      * @return array
      */
-    public function getRelate(): array
+    public function getMethodRelates(): array
     {
-        return $this->relate;
+        return $this->methodRelates;
     }
 
     /**
-     * @param array $relate
+     * @param array $methodRelates
      */
-    public function setRelate(array $relate): void
+    public function setMethodRelates(array $methodRelates): void
     {
-        $this->relate = $relate;
+        $this->methodRelates = $methodRelates;
     }
 
     function addProperty(string $name,mixed $value):EntityReflection
@@ -67,7 +67,7 @@ class EntityReflection
 
     function addRelate(string $name,mixed $value):EntityReflection
     {
-        $this->relate[$name] = $value;
+        $this->methodRelates[$name] = $value;
         return $this;
     }
 }
