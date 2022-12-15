@@ -244,6 +244,9 @@ abstract class Entity implements \JsonSerializable
                     $new->data($item);
                     $list[] = $new;
                 }
+                if($relate->allowCache){
+                    $this->relateValues[$relateKey] = $list;
+                }
                 return $list;
             }
             return $list;
