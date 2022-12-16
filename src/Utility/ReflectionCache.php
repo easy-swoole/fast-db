@@ -3,6 +3,7 @@
 namespace EasySwoole\FastDb\Utility;
 
 use EasySwoole\Component\Singleton;
+use EasySwoole\FastDb\Attributes\Hook\OnDelete;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Beans\EntityReflection;
@@ -27,6 +28,12 @@ class ReflectionCache
         }
 
         $return = new EntityReflection();
+
+
+        $temp = $ref->getAttributes(OnDelete::class);
+        if(!empty($temp)){
+            $temp = new OnDelete(...$temp[0]->getArguments());
+        }
 
         $list = $ref->getProperties();
         foreach ($list as $property){

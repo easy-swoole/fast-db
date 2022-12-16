@@ -6,6 +6,7 @@ use EasySwoole\FastDb\Attributes\Hook\OnInsert;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Entity;
 
+#[OnInsert()]
 class StudentDorm extends Entity
 {
 

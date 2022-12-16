@@ -4,9 +4,10 @@ namespace EasySwoole\FastDb\Attributes\Hook;
 
 class Call
 {
-    public $call;
-    function __construct(callable $call)
+    public $callback;
+
+    function __construct(callable $callback)
     {
-        $this->call = $call;
+        $this->callback = $callback;
     }
 }
