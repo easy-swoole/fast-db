@@ -66,16 +66,27 @@ abstract class Entity implements \JsonSerializable
 
     }
 
-    function insert(bool $reSync = false):bool
+    function insert(?array $updateDuplicateCols = [],bool $reSync = false):bool
     {
         $data = $this->toArray();
         $query = new QueryBuilder();
+        if(!empty($updateDuplicateCols)){
+            $query->onDuplicate($updateDuplicateCols);
+        }
         $query->insert($this->tableName(),$data);
         $ret = FastDb::getInstance()->query($query);
         if($ret->getResult()){
-            $this->{$this->primaryKey} = $ret->getConnection()->mysqlClient()->insert_id;
+            $id = $ret->getConnection()->mysqlClient()->insert_id;
+            //onDuplicate的时候，如果没有主键更改，则insert_id为0
+            if($id > 0){
+                $this->{$this->primaryKey} = $id;
+            }
             if($reSync){
                 //当数据库有些字段设置了脚本或者是自动创建，需要重新get一次同步
+                $query = new QueryBuilder();
+                $query->where($this->primaryKey,$this->{$this->primaryKey})->getOne($this->tableName());
+                $info = FastDb::getInstance()->query($query);
+                $this->data($info->getResult());
             }
             return true;
         }else{
@@ -183,7 +194,7 @@ abstract class Entity implements \JsonSerializable
         return $this->toArray();
     }
 
-    protected function relate(?Relate $relate = null)
+    protected function relate(?Relate $relate = null,?callable $whereCall = null)
     {
         //一个ID属性可以关联到多个实体。比如一个学生可以有多个课程，也有一个自己的详细资料
         if($relate == null){
@@ -218,6 +229,9 @@ abstract class Entity implements \JsonSerializable
         $temp = new $relate->targetEntity();
 
         $query = new QueryBuilder();
+        if($whereCall){
+            call_user_func($whereCall,$query);
+        }
 
         if($relate->relateType == Relate::RELATE_ONE_TO_NOE){
             $query->where($relate->targetProperty,$this->{$relate->selfProperty})

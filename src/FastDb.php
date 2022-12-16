@@ -131,6 +131,7 @@ class FastDb
     function query(QueryBuilder $queryBuilder,float $timeout = null):QueryResult
     {
         $client = $this->getClient();
+        var_dump($queryBuilder->getLastQuery());
         $ret = $client->query($queryBuilder,$timeout);
         $return = new QueryResult();
         $return->setResult($ret);
