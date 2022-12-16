@@ -2,6 +2,7 @@
 
 namespace EasySwoole\FastDb\Tests;
 
+use EasySwoole\FastDb\Attributes\Hook\OnInsert;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Entity;
 
@@ -20,5 +21,10 @@ class StudentDorm extends Entity
     function tableName(): string
     {
         return "student_dorm_map";
+    }
+
+    public static function checkHash(StudentDorm $dorm)
+    {
+
     }
 }
