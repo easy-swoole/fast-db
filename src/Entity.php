@@ -78,6 +78,7 @@ abstract class Entity implements \JsonSerializable
         if($ret->getResult()){
             $id = $ret->getConnection()->mysqlClient()->insert_id;
             //onDuplicate的时候，如果没有主键更改，则insert_id为0
+            //或者主键为非int的时候，也是0
             if($id > 0){
                 $this->{$this->primaryKey} = $id;
             }
@@ -88,6 +89,8 @@ abstract class Entity implements \JsonSerializable
                 $info = FastDb::getInstance()->query($query);
                 $this->data($info->getResult());
             }
+            //同步properties;
+            $this->properties = $this->toArray();
             return true;
         }else{
             return false;
