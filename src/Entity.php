@@ -31,7 +31,6 @@ abstract class Entity implements \JsonSerializable
         if(!empty($data)){
             $this->data($data);
         }
-        $this->initialize();
     }
 
     abstract function tableName():string;
@@ -178,10 +177,6 @@ abstract class Entity implements \JsonSerializable
         return $temp;
     }
 
-    protected function initialize(): void
-    {
-
-    }
 
     private function reflection(): void
     {
