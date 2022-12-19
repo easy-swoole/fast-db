@@ -6,10 +6,11 @@ use EasySwoole\FastDb\Attributes\Hook\OnInsert;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Entity;
 
-#[OnInsert()]
+#[OnInsert([
+    StudentDorm::class,"checkHash"
+])]
 class StudentDorm extends Entity
 {
-
     #[Property(isPrimaryKey: true)]
     public string $hash;
 
