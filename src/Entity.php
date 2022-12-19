@@ -103,9 +103,17 @@ abstract class Entity implements \JsonSerializable
         }
     }
 
-    function update(?array $data = null,?callable $whereCall = null):int
+    function update(?array $data = null,?callable $whereCall = null)
     {
-        if($whereCall == null && $this->primaryKey == null){
+        $ref = ReflectionCache::getInstance()->entityReflection(static::class);
+        if($ref->onUpdate()){
+            $ret = call_user_func($ref->onUpdate()->callback,$this);
+            if($ret === false){
+                return false;
+            }
+        }
+
+        if($whereCall == null && !isset($this->{$this->primaryKey})){
             throw new RuntimeError("can not update data without primaryKey or whereCall set in ".static::class);
         }
         $finalData = [];
@@ -151,16 +159,16 @@ abstract class Entity implements \JsonSerializable
 
     function delete(?callable $whereCall = null)
     {
-        if($whereCall == null && !isset($this->{$this->primaryKey})){
-            throw new RuntimeError("can not delete data without primaryKey or whereCall set in ".static::class);
-        }
-
         $ref = ReflectionCache::getInstance()->entityReflection(static::class);
         if($ref->onDelete()){
             $ret = call_user_func($ref->onDelete()->callback,$this);
             if($ret === false){
                 return false;
             }
+        }
+
+        if($whereCall == null && !isset($this->{$this->primaryKey})){
+            throw new RuntimeError("can not delete data without primaryKey or whereCall set in ".static::class);
         }
 
         $query = new QueryBuilder();
