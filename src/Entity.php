@@ -69,7 +69,10 @@ abstract class Entity implements \JsonSerializable
     {
         $ref = ReflectionCache::getInstance()->entityReflection(static::class);
         if($ref->onInsert()){
-            call_user_func($ref->onInsert()->callback,$this);
+            $ret = call_user_func($ref->onInsert()->callback,$this);
+            if($ret === false){
+                return false;
+            }
         }
         $data = $this->toArray();
         $query = new QueryBuilder();
@@ -148,9 +151,31 @@ abstract class Entity implements \JsonSerializable
 
     function delete(?callable $whereCall = null)
     {
-        if($whereCall == null && $this->primaryKey == null){
+        if($whereCall == null && !isset($this->{$this->primaryKey})){
             throw new RuntimeError("can not delete data without primaryKey or whereCall set in ".static::class);
         }
+
+        $ref = ReflectionCache::getInstance()->entityReflection(static::class);
+        if($ref->onDelete()){
+            $ret = call_user_func($ref->onDelete()->callback,$this);
+            if($ret === false){
+                return false;
+            }
+        }
+
+        $query = new QueryBuilder();
+        if(isset($this->{$this->primaryKey})){
+            $query->where($this->primaryKey,$this->{$this->primaryKey});
+        }else{
+            call_user_func($whereCall,$query);
+        }
+        $query->delete($this->tableName());
+
+        $ret = FastDb::getInstance()->query($query);
+        if($ret->getResult()){
+            return $ret->getConnection()->mysqlClient()->affected_rows;
+        }
+        return false;
     }
 
     function toArray($filter = null):array
