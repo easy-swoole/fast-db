@@ -27,6 +27,8 @@ class StudentDorm extends Entity
 
     public static function checkHash(StudentDorm $dorm)
     {
-
+        if(empty($dorm->hash)){
+            $dorm->hash = md5($dorm->dormId.$dorm->studentId);
+        }
     }
 }

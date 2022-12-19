@@ -98,7 +98,7 @@ class EntityReflection
         return $this->onInitialize;
     }
 
-    function onInsert(?OnInsert $onInsert):?OnInsert
+    function onInsert(?OnInsert $onInsert = null):?OnInsert
     {
         if($onInsert){
             $this->onInsert = $onInsert;
@@ -106,7 +106,7 @@ class EntityReflection
         return $this->onInsert;
     }
 
-    function onToArray(?OnToArray $onToArray):?OnToArray
+    function onToArray(?OnToArray $onToArray = null):?OnToArray
     {
         if($onToArray){
             $this->onToArray = $onToArray;
@@ -114,7 +114,7 @@ class EntityReflection
         return $this->onToArray;
     }
 
-    function onUpdate(?OnUpdate $onUpdate):?OnUpdate
+    function onUpdate(?OnUpdate $onUpdate = null):?OnUpdate
     {
         if($onUpdate){
             $this->onUpdate = $onUpdate;

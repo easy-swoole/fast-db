@@ -67,6 +67,10 @@ abstract class Entity implements \JsonSerializable
 
     function insert(?array $updateDuplicateCols = [],bool $reSync = false):bool
     {
+        $ref = ReflectionCache::getInstance()->entityReflection(static::class);
+        if($ref->onInsert()){
+            call_user_func($ref->onInsert()->callback,$this);
+        }
         $data = $this->toArray();
         $query = new QueryBuilder();
         if(!empty($updateDuplicateCols)){
