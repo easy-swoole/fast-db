@@ -93,7 +93,18 @@ class FastDb
         if(isset($this->transactionContext[$cid][$this->selectConnection])){
             return true;
         }
-        $ret = $this->getClient()->mysqlClient()->begin($timeout);
+
+        $t = microtime(true);
+        $client = $this->getClient();
+        $ret = $client->mysqlClient()->begin($timeout);
+        $return = new QueryResult($t);
+        $return->setResult($ret);
+        $return->setConnection($client);
+        $return->setRawSql("start transaction");
+        if(is_callable($this->onQuery)){
+            call_user_func($this->onQuery,$return);
+        }
+
         if($ret === true){
             $this->transactionContext[$cid][$this->selectConnection] = true;
             return true;
@@ -107,7 +118,18 @@ class FastDb
         if(!isset($this->transactionContext[$cid][$this->selectConnection])){
             return true;
         }
-        $ret = $this->getClient()->mysqlClient()->commit($timeout);
+
+        $t = microtime(true);
+        $client = $this->getClient();
+        $ret = $client->mysqlClient()->commit($timeout);
+        $return = new QueryResult($t);
+        $return->setResult($ret);
+        $return->setRawSql("commit");
+        $return->setConnection($client);
+        if(is_callable($this->onQuery)){
+            call_user_func($this->onQuery,$return);
+        }
+
         if($ret === true){
             unset($this->transactionContext[$cid][$this->selectConnection]);
             return true;
@@ -121,7 +143,18 @@ class FastDb
         if(!isset($this->transactionContext[$cid][$this->selectConnection])){
             return true;
         }
-        $ret = $this->getClient()->mysqlClient()->rollback($timeout);
+
+        $t = microtime(true);
+        $client = $this->getClient();
+        $ret = $client->mysqlClient()->rollback($timeout);
+        $return = new QueryResult($t);
+        $return->setResult($ret);
+        $return->setRawSql("rollback");
+        $return->setConnection($client);
+        if(is_callable($this->onQuery)){
+            call_user_func($this->onQuery,$return);
+        }
+
         if($ret === true){
             unset($this->transactionContext[$cid][$this->selectConnection]);
             return true;
@@ -144,6 +177,9 @@ class FastDb
         $return->setResult($ret);
         $return->setConnection($client);
         $return->setQueryBuilder(clone $queryBuilder);
+        if(is_callable($this->onQuery)){
+            call_user_func($this->onQuery,$return);
+        }
         return $return;
     }
 
@@ -161,6 +197,9 @@ class FastDb
         $return->setResult($ret);
         $return->setConnection($client);
         $return->setRawSql($sql);
+        if(is_callable($this->onQuery)){
+            call_user_func($this->onQuery,$return);
+        }
         return $return;
     }
 

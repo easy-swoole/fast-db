@@ -74,7 +74,7 @@ class QueryResult
      */
     public function getRawSql(): ?string
     {
-        return $this->rawSql;
+        return $this->rawSql ?? null;
     }
 
     /**
@@ -83,5 +83,37 @@ class QueryResult
     public function setRawSql(?string $rawSql): void
     {
         $this->rawSql = $rawSql;
+    }
+
+    /**
+     * @return float
+     */
+    public function getEndTime(): float
+    {
+        return $this->endTime;
+    }
+
+    /**
+     * @param float $endTime
+     */
+    public function setEndTime(float $endTime): void
+    {
+        $this->endTime = $endTime;
+    }
+
+    /**
+     * @return float
+     */
+    public function getStartTime(): float
+    {
+        return $this->startTime;
+    }
+
+    /**
+     * @param float $startTime
+     */
+    public function setStartTime(float $startTime): void
+    {
+        $this->startTime = $startTime;
     }
 }
