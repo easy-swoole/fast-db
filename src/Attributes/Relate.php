@@ -18,7 +18,7 @@ class Relate
         public string $targetProperty,
         public int $relateType = self::RELATE_ONE_TO_NOE,
         public ?string $selfProperty = null,
-        public bool $allowCache = true,
+        public bool $allowCache = false,
         public bool $returnAsTargetEntity = true
     ){
         //检查目标属性是否为合法entity

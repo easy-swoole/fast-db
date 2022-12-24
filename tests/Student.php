@@ -5,6 +5,7 @@ namespace EasySwoole\FastDb\Tests;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Entity;
+use EasySwoole\Mysqli\QueryBuilder;
 
 class Student extends Entity
 {
@@ -27,8 +28,16 @@ class Student extends Entity
         return $this->relate();
     }
 
+    #[Relate(
+        targetEntity: StudentScore::class,
+        targetProperty: "studentId",
+        relateType: Relate::RELATE_ONE_TO_MULTIPLE,
+        returnAsTargetEntity: false
+    )]
     function score()
     {
-
+        return $this->relate(null,function (QueryBuilder $queryBuilder){
+            $queryBuilder->join("course","student_score.courseId = course.courseId");
+        });
     }
 }
