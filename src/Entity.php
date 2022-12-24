@@ -363,15 +363,18 @@ abstract class Entity implements \JsonSerializable
             $ret = FastDb::getInstance()->query($query);
             $list = [];
             if(!empty($ret->getResult())){
-                foreach ($ret->getResult() as $item){
-                    /** @var Entity $new */
-                    $new = new $relate->targetEntity();
-                    $new->data($item);
-                    $list[] = $new;
+                if($relate->returnAsTargetEntity){
+                    foreach ($ret->getResult() as $item){
+                        $list[] = new $relate->targetEntity($item);
+                    }
+                }else{
+                    $list = $ret->getResult();
                 }
+
                 if($relate->allowCache){
                     $this->relateValues[$relateKey] = $list;
                 }
+
                 return $list;
             }
             return $list;
