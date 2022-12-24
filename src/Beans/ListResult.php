@@ -3,7 +3,8 @@
 namespace EasySwoole\FastDb\Beans;
 
 
-class ListResult  implements \Iterator , \JsonSerializable {
+class ListResult  implements \Iterator , \JsonSerializable, \Countable
+{
 
     private array $data = [];
     private ?int $totalCount = null;
@@ -54,5 +55,10 @@ class ListResult  implements \Iterator , \JsonSerializable {
     public function jsonSerialize(): mixed
     {
         return $this->data;
+    }
+
+    public function count(): int
+    {
+        return count($this->data);
     }
 }

@@ -95,7 +95,18 @@ abstract class Entity implements \JsonSerializable
 
     function chunk(callable $func,?callable $whereCall = null,$pageSize = 10):void
     {
-
+        $page = new Page(1,$pageSize);
+        while (true){
+            $list = $this->all($whereCall,$page);
+            foreach ($list as $item){
+                call_user_func($func,$item);
+            }
+            if(count($list) == $pageSize){
+                $page = new Page($page->getPage() + 1,$pageSize);
+            }else{
+                break;
+            }
+        }
     }
 
     function insert(?array $updateDuplicateCols = [],bool $reSync = false):bool
