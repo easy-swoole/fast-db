@@ -267,6 +267,35 @@ abstract class Entity implements \JsonSerializable
         $this->propertyRelates = $data->getMethodRelates();
     }
 
+    function sum($cols,?callable $whereCall = null)
+    {
+        if(!is_array($cols)){
+            $cols = [$cols];
+        }
+        $str = "";
+        foreach ($cols as $col){
+//            $str .= ""
+        }
+
+
+        $query = new QueryBuilder();
+        if($whereCall){
+            call_user_func($whereCall,$query);
+        }
+
+//        $query->sum
+    }
+
+    function count(?callable $whereCall = null)
+    {
+        $query = new QueryBuilder();
+        if($whereCall){
+            call_user_func($whereCall,$query);
+        }
+        $query->get($this->tableName(),null,"count(*) as count");
+        return FastDb::getInstance()->query($query)->getResult()[0]['count'];
+    }
+
 
     public function jsonSerialize(): mixed
     {
