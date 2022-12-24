@@ -32,7 +32,7 @@ class FastDb
         return $this;
     }
 
-    function selectDb(string $name):FastDb
+    function selectConnection(string $name):FastDb
     {
         $this->selectDb = $name;
         return $this;
