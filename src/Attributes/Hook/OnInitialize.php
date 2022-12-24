@@ -2,7 +2,7 @@
 
 namespace EasySwoole\FastDb\Attributes\Hook;
 
-#[\Attribute]
+#[\Attribute(\Attribute::TARGET_CLASS)]
 class OnInitialize extends Call
 {
 

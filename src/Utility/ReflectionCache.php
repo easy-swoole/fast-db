@@ -103,62 +103,6 @@ class ReflectionCache
                         throw new RuntimeError("can not redefine primary key in {$entityClass}");
                     }
                 }
-
-                $temp = $property->getAttributes(OnDelete::class);
-                if(!empty($temp)){
-                    try{
-                        $temp = new OnDelete(...$temp[0]->getArguments());
-                        $propertyInstance->onDelete($temp);
-                    }catch (\Throwable $throwable){
-                        $msg = "OnDelete() attribute parse error in class {$entityClass} property {$property->name} , strace info :{$throwable->getMessage()}";
-                        throw new RuntimeError($msg);
-                    }
-                }
-
-
-                $temp = $property->getAttributes(OnInitialize::class);
-                if(!empty($temp)){
-                    try{
-                        $temp = new OnInitialize(...$temp[0]->getArguments());
-                        $propertyInstance->onInitialize($temp);
-                    }catch (\Throwable $throwable){
-                        $msg = "OnInitialize() attribute parse error in class {$entityClass} property {$property->name} , strace info :{$throwable->getMessage()}";
-                        throw new RuntimeError($msg);
-                    }
-                }
-
-                $temp = $property->getAttributes(OnInsert::class);
-                if(!empty($temp)){
-                    try{
-                        $temp = new OnInsert(...$temp[0]->getArguments());
-                        $propertyInstance->onInsert($temp);
-                    }catch (\Throwable $throwable){
-                        $msg = "OnInsert() attribute parse error in class {$entityClass} property {$property->name} , strace info :{$throwable->getMessage()}";
-                        throw new RuntimeError($msg);
-                    }
-                }
-
-                $temp = $property->getAttributes(OnToArray::class);
-                if(!empty($temp)){
-                    try{
-                        $temp = new OnToArray(...$temp[0]->getArguments());
-                        $propertyInstance->onToArray($temp);
-                    }catch (\Throwable $throwable){
-                        $msg = "OnToArray() attribute parse error in class {$entityClass} property {$property->name} , strace info :{$throwable->getMessage()}";
-                        throw new RuntimeError($msg);
-                    }
-                }
-
-                $temp = $property->getAttributes(OnUpdate::class);
-                if(!empty($temp)){
-                    try{
-                        $temp = new OnUpdate(...$temp[0]->getArguments());
-                        $propertyInstance->onUpdate($temp);
-                    }catch (\Throwable $throwable){
-                        $msg = "OnUpdate() attribute parse error in class {$entityClass} property {$property->name} , strace info :{$throwable->getMessage()}";
-                        throw new RuntimeError($msg);
-                    }
-                }
             }
         }
 
