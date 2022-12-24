@@ -6,12 +6,20 @@ use EasySwoole\Mysqli\QueryBuilder;
 
 class QueryResult
 {
+    protected float $endTime;
+    protected float $startTime;
     protected mixed $result;
     protected Connection $connection;
 
     protected ?QueryBuilder $queryBuilder;
 
     protected ?string $rawSql;
+
+    function __construct(float $startTime)
+    {
+        $this->startTime = $startTime;
+        $this->endTime = microtime(true);
+    }
 
     /**
      * @return mixed

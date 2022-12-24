@@ -23,18 +23,25 @@ class FastDb
 
     protected array $transactionContext = [];
 
-    protected string $selectDb = "default";
+    protected string $selectConnection = "default";
 
-    function addDb(Config $config):FastDb
+    protected $onQuery = null;
+
+    function addDb(Config $config):static
     {
         $this->configs[$config->getName()] = $config;
-
         return $this;
     }
 
-    function selectConnection(string $name):FastDb
+    function setOnQuery(callable $call):static
     {
-        $this->selectDb = $name;
+        $this->onQuery = $call;
+        return $this;
+    }
+
+    function selectConnection(string $name):static
+    {
+        $this->selectConnection = $name;
         return $this;
     }
 
@@ -83,12 +90,12 @@ class FastDb
                 unset($this->transactionContext[$cid]);
             });
         }
-        if(isset($this->transactionContext[$cid][$this->selectDb])){
+        if(isset($this->transactionContext[$cid][$this->selectConnection])){
             return true;
         }
         $ret = $this->getClient()->mysqlClient()->begin($timeout);
         if($ret === true){
-            $this->transactionContext[$cid][$this->selectDb] = true;
+            $this->transactionContext[$cid][$this->selectConnection] = true;
             return true;
         }
         return false;
@@ -97,12 +104,12 @@ class FastDb
     function commit(float $timeout = 3.0):bool
     {
         $cid = Coroutine::getCid();
-        if(!isset($this->transactionContext[$cid][$this->selectDb])){
+        if(!isset($this->transactionContext[$cid][$this->selectConnection])){
             return true;
         }
         $ret = $this->getClient()->mysqlClient()->commit($timeout);
         if($ret === true){
-            unset($this->transactionContext[$cid][$this->selectDb]);
+            unset($this->transactionContext[$cid][$this->selectConnection]);
             return true;
         }
         return false;
@@ -111,12 +118,12 @@ class FastDb
     function rollback(float $timeout = 3.0):bool
     {
         $cid = Coroutine::getCid();
-        if(!isset($this->transactionContext[$cid][$this->selectDb])){
+        if(!isset($this->transactionContext[$cid][$this->selectConnection])){
             return true;
         }
         $ret = $this->getClient()->mysqlClient()->rollback($timeout);
         if($ret === true){
-            unset($this->transactionContext[$cid][$this->selectDb]);
+            unset($this->transactionContext[$cid][$this->selectConnection]);
             return true;
         }
         return false;
@@ -131,8 +138,9 @@ class FastDb
     function query(QueryBuilder $queryBuilder,float $timeout = null):QueryResult
     {
         $client = $this->getClient();
+        $t = microtime(true);
         $ret = $client->query($queryBuilder,$timeout);
-        $return = new QueryResult();
+        $return = new QueryResult($t);
         $return->setResult($ret);
         $return->setConnection($client);
         $return->setQueryBuilder(clone $queryBuilder);
@@ -147,8 +155,9 @@ class FastDb
     function rawQuery(string $sql):QueryResult
     {
         $client = $this->getClient();
+        $t = microtime(true);
         $ret =  $client->rawQuery($sql);
-        $return = new QueryResult();
+        $return = new QueryResult($t);
         $return->setResult($ret);
         $return->setConnection($client);
         $return->setRawSql($sql);
@@ -158,8 +167,8 @@ class FastDb
     function currentConnection():?Connection
     {
         $cid = Coroutine::getCid();
-        if(isset($this->currentConnection[$cid][$this->selectDb])){
-            return $this->currentConnection[$cid][$this->selectDb];
+        if(isset($this->currentConnection[$cid][$this->selectConnection])){
+            return $this->currentConnection[$cid][$this->selectConnection];
         }
         return null;
     }
@@ -171,7 +180,7 @@ class FastDb
     private function getClient():Connection
     {
         $cid = Coroutine::getCid();
-        $name = $this->selectDb;
+        $name = $this->selectConnection;
         if(isset($this->currentConnection[$cid][$name])){
             return $this->currentConnection[$cid][$name];
         }
