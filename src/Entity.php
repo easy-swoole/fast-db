@@ -346,11 +346,14 @@ abstract class Entity implements \JsonSerializable
                 ->getOne($temp->tableName());
             $ret = FastDb::getInstance()->query($query);
             if(!empty($ret->getResult())){
-                $temp->data($ret->getResult()[0]);
-                if($relate->allowCache){
-                    $this->relateValues[$relateKey] = $temp;
+                $return = $ret->getResult()[0];
+                if($relate->returnAsTargetEntity){
+                    $return = new $relate->targetEntity($return);
                 }
-                return $temp;
+                if($relate->allowCache){
+                    $this->relateValues[$relateKey] = $return;
+                }
+                return $return;
             }else{
                 return null;
             }

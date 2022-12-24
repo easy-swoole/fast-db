@@ -26,4 +26,9 @@ class Student extends Entity
     {
         return $this->relate();
     }
+
+    function score()
+    {
+
+    }
 }
