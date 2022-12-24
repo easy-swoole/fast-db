@@ -69,7 +69,7 @@ abstract class Entity implements \JsonSerializable
         $total = null;
 
         if($page != null){
-            $query->limit(($page->getPage() - 1)*$page->getPageSize(),$page->getPageSize());
+            $query->limit(...$page->toLimitArray());
             if($page->isWithTotalCount()){
                 $query->withTotalCount();
             }

@@ -38,4 +38,11 @@ class Page
     {
         return $this->withTotalCount;
     }
+
+    function toLimitArray():array
+    {
+        return [
+            ($this->page - 1)*$this->pageSize,$this->pageSize
+        ];
+    }
 }
