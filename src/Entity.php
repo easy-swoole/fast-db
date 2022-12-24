@@ -61,7 +61,36 @@ abstract class Entity implements \JsonSerializable
 
     function all(?callable $whereCall = null,?Page $page = null):ListResult
     {
+        $query = new QueryBuilder();
+        if(is_callable($whereCall)){
+            call_user_func($whereCall,$query);
+        }
 
+        $total = null;
+
+        if($page != null){
+            $query->limit(($page->getPage() - 1)*$page->getPageSize(),$page->getPageSize());
+            if($page->isWithTotalCount()){
+                $query->withTotalCount();
+            }
+        }
+
+        $query->get($this->tableName());
+
+        $ret = FastDb::getInstance()->query($query);
+        if($page->isWithTotalCount()){
+            $info = FastDb::getInstance()->rawQuery('SELECT FOUND_ROWS() as count')->getResult();
+            if(isset($info[0]['count'])){
+                $total = $info[0]['count'];
+            }
+        }
+        $list = [];
+
+        foreach ($ret->getResult() as $item){
+            $list[] = new static($item);
+        }
+
+        return new ListResult($list,$total);
     }
 
     function chunk(callable $func,?callable $whereCall = null,$pageSize = 10):void
