@@ -273,17 +273,22 @@ abstract class Entity implements \JsonSerializable
             $cols = [$cols];
         }
         $str = "";
-        foreach ($cols as $col){
-//            $str .= ""
+        while ($item = array_shift($cols)){
+            $str .= "sum({$item}) as {$item}";
+            if(!empty($cols)){
+                $str .= " , ";
+            }
         }
-
 
         $query = new QueryBuilder();
         if($whereCall){
             call_user_func($whereCall,$query);
         }
 
-//        $query->sum
+        $query->fields($str);
+        $query->get($this->tableName());
+
+        return FastDb::getInstance()->query($query)->getResult()[0];
     }
 
     function count(?callable $whereCall = null)
