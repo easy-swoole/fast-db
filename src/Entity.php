@@ -11,9 +11,6 @@ use EasySwoole\Mysqli\QueryBuilder;
 
 abstract class Entity implements \JsonSerializable
 {
-    const FILTER_NOT_NULL = 2;
-    const FILTER_ASSOCIATE_RELATION = 4;
-
     /**
      * @var array
      * 用于存储对象成员，和做老数据diff
@@ -230,7 +227,7 @@ abstract class Entity implements \JsonSerializable
         return false;
     }
 
-    function toArray($filter = null):array
+    function toArray(bool $filterNull = false):array
     {
         $temp = [];
         foreach ($this->properties as $key => $property){
@@ -241,20 +238,16 @@ abstract class Entity implements \JsonSerializable
             }
         }
 
-        if($filter == null){
+        if(!$filterNull){
             return $temp;
         }
 
-        if($filter == 2 || $filter == 6){
-            foreach ($temp as $key => $item){
-                if($item === null){
-                    unset($temp[$key]);
-                }
+        foreach ($temp as $key => $item){
+            if($item === null){
+                unset($temp[$key]);
             }
         }
-        if($filter == 4 || $filter == 6){
-            //做关联判定处理
-        }
+
         return $temp;
     }
 
