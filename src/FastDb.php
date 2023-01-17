@@ -12,6 +12,7 @@ use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\Pool\Exception\Exception;
 use Swoole\Coroutine;
 use EasySwoole\Mysqli\Config as MysqliConfig;
+use Swoole\Coroutine\Scheduler;
 
 class FastDb
 {
@@ -31,6 +32,38 @@ class FastDb
     {
         $this->configs[$config->getName()] = $config;
         return $this;
+    }
+
+    function testDb(Config $config)
+    {
+        $success = false;
+        $error = '';
+        if(Coroutine::getCid() > 0){
+            $client = new Coroutine\MySQL();
+            $ret = $client->connect($config->toArray());
+            if($ret){
+                $success = true;
+            }else{
+                $error = $client->connect_error;
+            }
+        }else{
+            $scheduler = new Scheduler();
+            $scheduler->add(function ()use($config,&$success,&$error){
+                $client = new Coroutine\MySQL();
+                $ret = $client->connect($config->toArray());
+                if($ret){
+                    $success = true;
+                }else{
+                    $error = $client->connect_error;
+                }
+            });;
+            $scheduler->start();
+        }
+        if($success){
+            return true;
+        }else{
+            throw new RuntimeError($error);
+        }
     }
 
     function setOnQuery(callable $call):static
