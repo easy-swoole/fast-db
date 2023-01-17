@@ -34,8 +34,14 @@ class FastDb
         return $this;
     }
 
-    function testDb(Config $config)
+    function testDb(string $connectionName = "default")
     {
+        if(!isset($this->configs[$connectionName])){
+            throw new RuntimeError("connection {$connectionName} no register yet");
+        }
+        /** @var Config $config */
+        $config = $this->configs[$connectionName];
+
         $success = false;
         $error = '';
         if(Coroutine::getCid() > 0){
@@ -43,6 +49,7 @@ class FastDb
             $ret = $client->connect($config->toArray());
             if($ret){
                 $success = true;
+                $client->close();
             }else{
                 $error = $client->connect_error;
             }
@@ -53,6 +60,7 @@ class FastDb
                 $ret = $client->connect($config->toArray());
                 if($ret){
                     $success = true;
+                    $client->close();
                 }else{
                     $error = $client->connect_error;
                 }
