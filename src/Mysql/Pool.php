@@ -9,18 +9,18 @@ class Pool extends AbstractPool
 {
     protected function createObject()
     {
-        //转错误，避免进程异常退出
-        try{
-            $config = new Config($this->getConfig()->toArray());
-            $con =  new Connection($config);
-            $con->connect();
+        $config = new Config($this->getConfig()->toArray());
+        $con =  new Connection($config);
+        if(!$con->connect()){
+            $info = $con->mysqlClient()->connect_error;
+            /** @var \EasySwoole\FastDb\Config $config */
+            $config = $this->getConfig();
+            trigger_error("connection {$config->getName()} ".$info);
+            return null;
+        }else{
             //用于AutoPing
             $con->__lastPingTime = 0;
             return $con;
-        }catch (\Throwable $throwable){
-            /** @var \EasySwoole\FastDb\Config $config */
-            $config = $this->getConfig();
-            trigger_error("connection {$config->getName()} ".$throwable->getMessage());
         }
     }
 
