@@ -51,9 +51,15 @@ abstract class Entity implements \JsonSerializable
     {
         $queryBuilder = new QueryBuilder();
         call_user_func($whereCall,$queryBuilder);
-        $data = [];
-        $mode = new static($data);
-        return $mode;
+        $mode = new static();
+        $queryBuilder->getOne($mode->tableName());
+        $info = FastDb::getInstance()->query($queryBuilder)->getResult();
+        if(!empty($info)){
+            $mode->data($info[0]);
+            return $mode;
+        }else{
+            return null;
+        }
     }
 
     function all(?callable $whereCall = null,?Page $page = null):ListResult
@@ -187,6 +193,8 @@ abstract class Entity implements \JsonSerializable
                 call_user_func($whereCall,$query);
             }
         }
+
+        $query->update($this->tableName(),$finalData);
 
         $queryResult = FastDb::getInstance()->query($query);
         $affectRows = $queryResult->getConnection()->mysqlClient()->affected_rows;
