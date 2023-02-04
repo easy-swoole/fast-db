@@ -8,7 +8,7 @@ class Page
     private int $pageSize = 10;
     private bool $withTotalCount = false;
 
-    function __construct(int $page,int $pageSize = 10,bool $withTotalCount = false)
+    function __construct(int $page,bool $withTotalCount = false,int $pageSize = 10)
     {
         $this->page = $page;
         $this->pageSize = $pageSize;
