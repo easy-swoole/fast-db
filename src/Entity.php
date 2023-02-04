@@ -266,6 +266,16 @@ abstract class Entity implements \JsonSerializable
             }
         }
 
+        if(!empty($this->fields['fields'])){
+            $fList = [];
+            foreach ($this->fields['fields'] as $field){
+                if(key_exists($field,$temp)){
+                    $fList[$field] = $temp[$field];
+                }
+            }
+            $temp = $fList;
+        }
+
         if(!$filterNull){
             return $temp;
         }
