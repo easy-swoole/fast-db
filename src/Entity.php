@@ -69,12 +69,16 @@ abstract class Entity implements \JsonSerializable
 
     }
 
-    function fields(array $fields,bool $returnAsArray = false):static
+    function fields(?array $fields,bool $returnAsArray = false):static
     {
-        $this->fields = [
-            'fields'=>$fields,
-            'returnAsArray'=>$returnAsArray
-        ];
+        if($fields == null){
+            $this->fields = null;
+        }else{
+            $this->fields = [
+                'fields'=>$fields,
+                'returnAsArray'=>$returnAsArray
+            ];
+        }
         return $this;
     }
 
