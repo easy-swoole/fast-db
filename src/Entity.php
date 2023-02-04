@@ -22,6 +22,8 @@ abstract class Entity implements \JsonSerializable
 
     protected ?string $primaryKey = null;
 
+    protected ?array $fields = null;
+
 
     final function __construct(?array $data = null){
         $this->reflection();
@@ -60,6 +62,20 @@ abstract class Entity implements \JsonSerializable
         }else{
             return null;
         }
+    }
+
+    function getOneAsArray(callable $whereCall)
+    {
+
+    }
+
+    function fields(array $fields,bool $returnAsArray = false):static
+    {
+        $this->fields = [
+            'fields'=>$fields,
+            'returnAsArray'=>$returnAsArray
+        ];
+        return $this;
     }
 
     function all(?callable $whereCall = null,?Page $page = null):ListResult
