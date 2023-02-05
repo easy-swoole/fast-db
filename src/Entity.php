@@ -64,9 +64,21 @@ abstract class Entity implements \JsonSerializable
         }
     }
 
-    function getOneAsArray(callable $whereCall)
+    function getOneAsArray(callable $whereCall):?array
     {
-
+        $queryBuilder = new QueryBuilder();
+        call_user_func($whereCall,$queryBuilder);
+        $fields = null;
+        if(!empty($this->fields['fields'])){
+            $fields = $this->fields['fields'];
+        }
+        $queryBuilder->getOne($this->tableName(),$fields);
+        $info = FastDb::getInstance()->query($queryBuilder)->getResult();
+        if(!empty($info)){
+            return $info[0];
+        }else{
+            return null;
+        }
     }
 
     function fields(?array $fields,bool $returnAsArray = false):static
