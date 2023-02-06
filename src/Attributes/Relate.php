@@ -15,7 +15,7 @@ class Relate
 
     function __construct(
         public string $targetEntity,
-        public string $targetProperty,
+        public ?string $targetProperty = null,
         public int $relateType = self::RELATE_ONE_TO_NOE,
         public ?string $selfProperty = null,
         public bool $allowCache = false,

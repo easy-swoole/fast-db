@@ -431,13 +431,6 @@ abstract class Entity implements \JsonSerializable
             call_user_func($whereCall,$query);
         }
 
-        if($this->page != null){
-            $query->limit(...$this->page->toLimitArray());
-            if($this->page->isWithTotalCount()){
-                $query->withTotalCount();
-            }
-        }
-
         if($relate->relateType == Relate::RELATE_ONE_TO_NOE){
             $query->where($relate->targetProperty,$this->{$relate->selfProperty})
                 ->getOne($temp->tableName());
@@ -455,6 +448,14 @@ abstract class Entity implements \JsonSerializable
                 return null;
             }
         }else{
+
+            if($this->page != null){
+                $query->limit(...$this->page->toLimitArray());
+                if($this->page->isWithTotalCount()){
+                    $query->withTotalCount();
+                }
+            }
+
             $query->where($relate->targetProperty,$this->{$relate->selfProperty})
                 ->get($temp->tableName());
             $ret = FastDb::getInstance()->query($query);
