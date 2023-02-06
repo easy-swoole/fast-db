@@ -431,9 +431,15 @@ abstract class Entity implements \JsonSerializable
             call_user_func($whereCall,$query);
         }
 
+        $fields = null;
+        if(!empty($this->fields['fields'])){
+            $fields = $this->fields['fields'];
+        }
+        $this->fields = null;
+
         if($relate->relateType == Relate::RELATE_ONE_TO_NOE){
             $query->where($relate->targetProperty,$this->{$relate->selfProperty})
-                ->getOne($temp->tableName());
+                ->getOne($temp->tableName(),$fields);
             $ret = FastDb::getInstance()->query($query);
             if(!empty($ret->getResult())){
                 $return = $ret->getResult()[0];
@@ -457,9 +463,11 @@ abstract class Entity implements \JsonSerializable
             }
 
             $query->where($relate->targetProperty,$this->{$relate->selfProperty})
-                ->get($temp->tableName());
+                ->get($temp->tableName(),null,$fields);
             $ret = FastDb::getInstance()->query($query);
             $list = [];
+            $this->page = null;
+
             if(!empty($ret->getResult())){
                 if($relate->returnAsTargetEntity){
                     foreach ($ret->getResult() as $item){
