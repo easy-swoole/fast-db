@@ -72,8 +72,10 @@ abstract class Entity implements \JsonSerializable
         if(!empty($this->fields['fields'])){
             $fields = $this->fields['fields'];
         }
+        $this->fields = null;
         $queryBuilder->getOne($this->tableName(),$fields);
         $info = FastDb::getInstance()->query($queryBuilder)->getResult();
+
         if(!empty($info)){
             return $info[0];
         }else{
@@ -81,6 +83,12 @@ abstract class Entity implements \JsonSerializable
         }
     }
 
+    /**
+     * fields 函数为一次性使用。
+     * @param array|null $fields
+     * @param bool $returnAsArray
+     * @return $this
+     */
     function fields(?array $fields,bool $returnAsArray = false):static
     {
         if($fields == null){
@@ -110,19 +118,32 @@ abstract class Entity implements \JsonSerializable
             }
         }
 
-        $query->get($this->tableName());
+        $fields = null;
+        $returnAsArray = false;
+        if(!empty($this->fields['fields'])){
+            $fields = $this->fields['fields'];
+            $returnAsArray = $this->fields['returnAsArray'];
+        }
+        $this->fields = null;
+
+        $query->get($this->tableName(),null,$fields);
 
         $ret = FastDb::getInstance()->query($query);
-        if($page->isWithTotalCount()){
+        if($page && $page->isWithTotalCount()){
             $info = FastDb::getInstance()->rawQuery('SELECT FOUND_ROWS() as count')->getResult();
             if(isset($info[0]['count'])){
                 $total = $info[0]['count'];
             }
         }
         $list = [];
-
-        foreach ($ret->getResult() as $item){
-            $list[] = new static($item);
+        if($returnAsArray){
+            foreach ($ret->getResult() as $item){
+                $list[] = $item;
+            }
+        }else{
+            foreach ($ret->getResult() as $item){
+                $list[] = new static($item);
+            }
         }
 
         return new ListResult($list,$total);
