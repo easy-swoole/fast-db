@@ -119,12 +119,18 @@ abstract class Entity implements \JsonSerializable
 
         $total = null;
 
+        if($page == null){
+            $page = $this->page;
+        }
+
         if($page != null){
             $query->limit(...$page->toLimitArray());
             if($page->isWithTotalCount()){
                 $query->withTotalCount();
             }
         }
+
+        $this->page = null;
 
         $fields = null;
         $returnAsArray = false;
