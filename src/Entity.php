@@ -152,7 +152,9 @@ abstract class Entity implements \JsonSerializable
     function chunk(callable $func,?callable $whereCall = null,$pageSize = 10):void
     {
         $page = new Page(1,$pageSize);
+        $cache = $this->fields;
         while (true){
+            $this->fields = $cache;
             $list = $this->all($whereCall,$page);
             foreach ($list as $item){
                 call_user_func($func,$item);
