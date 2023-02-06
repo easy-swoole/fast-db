@@ -110,7 +110,7 @@ abstract class Entity implements \JsonSerializable
         return $this;
     }
 
-    function all(?callable $whereCall = null,?Page $page = null):ListResult
+    function all(?callable $whereCall = null):ListResult
     {
         $query = new QueryBuilder();
         if(is_callable($whereCall)){
@@ -118,19 +118,12 @@ abstract class Entity implements \JsonSerializable
         }
 
         $total = null;
-
-        if($page == null){
-            $page = $this->page;
-        }
-
-        if($page != null){
-            $query->limit(...$page->toLimitArray());
-            if($page->isWithTotalCount()){
+        if($this->page != null){
+            $query->limit(...$this->page->toLimitArray());
+            if($this->page->isWithTotalCount()){
                 $query->withTotalCount();
             }
         }
-
-        $this->page = null;
 
         $fields = null;
         $returnAsArray = false;
@@ -143,12 +136,14 @@ abstract class Entity implements \JsonSerializable
         $query->get($this->tableName(),null,$fields);
 
         $ret = FastDb::getInstance()->query($query);
-        if($page && $page->isWithTotalCount()){
+        if($this->page && $this->page->isWithTotalCount()){
             $info = FastDb::getInstance()->rawQuery('SELECT FOUND_ROWS() as count')->getResult();
             if(isset($info[0]['count'])){
                 $total = $info[0]['count'];
             }
         }
+        $this->page = null;
+
         $list = [];
         if($returnAsArray){
             foreach ($ret->getResult() as $item){
