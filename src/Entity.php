@@ -24,6 +24,8 @@ abstract class Entity implements \JsonSerializable
 
     protected ?array $fields = null;
 
+    protected ?Page $page = null;
+
 
     final function __construct(?array $data = null){
         $this->reflection();
@@ -99,6 +101,12 @@ abstract class Entity implements \JsonSerializable
                 'returnAsArray'=>$returnAsArray
             ];
         }
+        return $this;
+    }
+
+    function page(int $page,bool $withTotalCount = false,int $pageSize = 10):static
+    {
+        $this->page = new Page($page,$withTotalCount,$pageSize);
         return $this;
     }
 
