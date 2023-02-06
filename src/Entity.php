@@ -160,16 +160,16 @@ abstract class Entity implements \JsonSerializable
 
     function chunk(callable $func,?callable $whereCall = null,$pageSize = 10):void
     {
-        $page = new Page(1,$pageSize);
         $cache = $this->fields;
+        $page = 1;
         while (true){
             $this->fields = $cache;
-            $list = $this->all($whereCall,$page);
+            $list = $this->page($page,false,$pageSize)->all($whereCall);
             foreach ($list as $item){
                 call_user_func($func,$item);
             }
             if(count($list) == $pageSize){
-                $page = new Page($page->getPage() + 1,$pageSize);
+                $page++;
             }else{
                 break;
             }
@@ -429,6 +429,13 @@ abstract class Entity implements \JsonSerializable
         $query = new QueryBuilder();
         if($whereCall){
             call_user_func($whereCall,$query);
+        }
+
+        if($this->page != null){
+            $query->limit(...$this->page->toLimitArray());
+            if($this->page->isWithTotalCount()){
+                $query->withTotalCount();
+            }
         }
 
         if($relate->relateType == Relate::RELATE_ONE_TO_NOE){
