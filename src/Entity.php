@@ -465,6 +465,15 @@ abstract class Entity implements \JsonSerializable
             $query->where($relate->targetProperty,$this->{$relate->selfProperty})
                 ->get($temp->tableName(),null,$fields);
             $ret = FastDb::getInstance()->query($query);
+
+            $total = null;
+            if($this->page && $this->page->isWithTotalCount()){
+                $info = FastDb::getInstance()->rawQuery('SELECT FOUND_ROWS() as count')->getResult();
+                if(isset($info[0]['count'])){
+                    $total = $info[0]['count'];
+                }
+            }
+
             $list = [];
             $this->page = null;
 
@@ -481,7 +490,7 @@ abstract class Entity implements \JsonSerializable
                     $this->relateValues[$relateKey] = $list;
                 }
 
-                return $list;
+                return new ListResult($list,$total);
             }
             return $list;
         }
