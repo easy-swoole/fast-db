@@ -220,6 +220,11 @@ abstract class Entity implements \JsonSerializable
             return false;
         }
     }
+    /*
+     * 当实例为非从数据库读取创建，
+     * 需要把某个数据重置为null的时候，请使用data参数。
+     * 也就是 (new model())->update(["a"=>null])
+     */
 
     function update(?array $data = null,?callable $whereCall = null)
     {
@@ -283,7 +288,7 @@ abstract class Entity implements \JsonSerializable
         $affectRows = $queryResult->getConnection()->mysqlClient()->affected_rows;
 
         if($singleRecord && $affectRows == 1){
-            $this->properties = $this->toArray();
+            $this->data($finalData,true);
         }
         //affect rows num
         return $affectRows;
