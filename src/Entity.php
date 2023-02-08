@@ -57,7 +57,7 @@ abstract class Entity implements \JsonSerializable
         return $this;
     }
 
-    function whereCall(callable $call):static
+    function whereCall(?callable $call):static
     {
         $this->whereCall = $call;
         return $this;
@@ -74,25 +74,6 @@ abstract class Entity implements \JsonSerializable
         if(!empty($info)){
             $mode->data($info[0],true);
             return $mode;
-        }else{
-            return null;
-        }
-    }
-
-    function getOneAsArray(callable $whereCall):?array
-    {
-        $queryBuilder = new QueryBuilder();
-        call_user_func($whereCall,$queryBuilder);
-        $fields = null;
-        if(!empty($this->fields['fields'])){
-            $fields = $this->fields['fields'];
-        }
-        $this->fields = null;
-        $queryBuilder->getOne($this->tableName(),$fields);
-        $info = FastDb::getInstance()->query($queryBuilder)->getResult();
-
-        if(!empty($info)){
-            return $info[0];
         }else{
             return null;
         }
@@ -123,12 +104,13 @@ abstract class Entity implements \JsonSerializable
         return $this;
     }
 
-    function all(?callable $whereCall = null):ListResult
+    function all():ListResult
     {
         $query = new QueryBuilder();
-        if(is_callable($whereCall)){
-            call_user_func($whereCall,$query);
+        if(is_callable($this->whereCall)){
+            call_user_func($this->whereCall,$query);
         }
+        $this->whereCall = null;
 
         $total = null;
         if($this->page != null){
@@ -171,13 +153,15 @@ abstract class Entity implements \JsonSerializable
         return new ListResult($list,$total);
     }
 
-    function chunk(callable $func,?callable $whereCall = null,$pageSize = 10):void
+    function chunk(callable $func,$pageSize = 10):void
     {
         $cache = $this->fields;
         $page = 1;
+        $whereCall = $this->whereCall;
         while (true){
             $this->fields = $cache;
             $list = $this->page($page,false,$pageSize)->all($whereCall);
+            $this->whereCall = $whereCall;
             foreach ($list as $item){
                 call_user_func($func,$item);
             }
@@ -187,6 +171,8 @@ abstract class Entity implements \JsonSerializable
                 break;
             }
         }
+        $this->whereCall = null;
+        $this->fields = null;
     }
 
     function insert(?array $updateDuplicateCols = [],bool $reSync = false):bool
