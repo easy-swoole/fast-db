@@ -185,7 +185,8 @@ abstract class Entity implements \JsonSerializable
                 return false;
             }
         }
-        $data = $this->toArray();
+        //插入的时候，null值一般无意义，default值在数据库层做。
+        $data = $this->toArray(true);
         $query = new QueryBuilder();
         if(!empty($updateDuplicateCols)){
             $query->onDuplicate($updateDuplicateCols);
