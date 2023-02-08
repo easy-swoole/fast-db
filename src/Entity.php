@@ -26,6 +26,7 @@ abstract class Entity implements \JsonSerializable
 
     private ?Page $page = null;
 
+    private $whereCall = null;
 
     final function __construct(?array $data = null,bool $realData = false){
         $info = ReflectionCache::getInstance()->entityReflection(static::class);
@@ -53,6 +54,12 @@ abstract class Entity implements \JsonSerializable
                 }
             }
         }
+        return $this;
+    }
+
+    function whereCall(callable $call):static
+    {
+        $this->whereCall = $call;
         return $this;
     }
 
