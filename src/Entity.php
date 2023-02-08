@@ -20,15 +20,18 @@ abstract class Entity implements \JsonSerializable
 
     private array $propertyRelates = [];
 
-    protected ?string $primaryKey = null;
+    private string $primaryKey;
 
-    protected ?array $fields = null;
+    private ?array $fields = null;
 
-    protected ?Page $page = null;
+    private ?Page $page = null;
 
 
     final function __construct(?array $data = null,bool $realData = false){
-        $this->reflection();
+        $info = ReflectionCache::getInstance()->entityReflection(static::class);
+        $this->properties = $info->getProperties();
+        $this->primaryKey = $info->getPrimaryKey();
+        $this->propertyRelates = $info->getMethodRelates();
         if(!empty($data)){
             $this->data($data,$realData);
         }
@@ -347,15 +350,6 @@ abstract class Entity implements \JsonSerializable
         }
 
         return $temp;
-    }
-
-
-    private function reflection(): void
-    {
-        $data = ReflectionCache::getInstance()->entityReflection(static::class);
-        $this->properties = $data->getProperties();
-        $this->primaryKey = $data->getPrimaryKey();
-        $this->propertyRelates = $data->getMethodRelates();
     }
 
     function sum($cols,?callable $whereCall = null)
