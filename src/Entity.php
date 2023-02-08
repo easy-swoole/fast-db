@@ -27,10 +27,10 @@ abstract class Entity implements \JsonSerializable
     protected ?Page $page = null;
 
 
-    final function __construct(?array $data = null){
+    final function __construct(?array $data = null,bool $realData = false){
         $this->reflection();
         if(!empty($data)){
-            $this->data($data);
+            $this->data($data,$realData);
         }
         $ref = ReflectionCache::getInstance()->entityReflection(static::class);
         if($ref->onInitialize()){
@@ -40,11 +40,14 @@ abstract class Entity implements \JsonSerializable
 
     abstract function tableName():string;
 
-    function data(array $data):Entity
+    function data(array $data,bool $realData = false):Entity
     {
         foreach ($this->properties as $property => $val){
-            if(isset($data[$property])){
+            if(array_key_exists($property,$data)){
                 $this->{$property} = $data[$property];
+                if($realData){
+                    $this->properties[$property] = $data[$property];
+                }
             }
         }
         return $this;
@@ -59,7 +62,7 @@ abstract class Entity implements \JsonSerializable
         $queryBuilder->getOne($mode->tableName());
         $info = FastDb::getInstance()->query($queryBuilder)->getResult();
         if(!empty($info)){
-            $mode->data($info[0]);
+            $mode->data($info[0],true);
             return $mode;
         }else{
             return null;
@@ -237,8 +240,10 @@ abstract class Entity implements \JsonSerializable
             }
         }else{
             foreach ($this->properties as $key => $property){
-                if($property !== $this->{$key}){
-                    $finalData[$key] = $this->{$key};
+                if(isset($this->{$key})){
+                    if($property !== $this->{$key}){
+                        $finalData[$key] = $this->{$key};
+                    }
                 }
             }
         }
