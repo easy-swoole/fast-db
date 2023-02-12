@@ -28,6 +28,14 @@ class Student extends Entity
         return $this->relateOne();
     }
 
+    function info2()
+    {
+        $r = new Relate(
+            targetEntity: StudentInfo::class,
+        );
+        return $this->relateOne($r);
+    }
+
     #[Relate(
         targetEntity: StudentScore::class,
         targetProperty: "studentId",

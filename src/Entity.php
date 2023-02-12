@@ -398,9 +398,9 @@ abstract class Entity implements \JsonSerializable
             $relates = ReflectionCache::getInstance()->entityReflection($class)->getMethodRelates();
             if(isset($relates[$method])){
                 $relate = $relates[$method];
+            }else{
+                throw new RuntimeError("not relation defined in class {$class} method {$method}");
             }
-        }else{
-            throw new RuntimeError("not relation defined in class {$class} method {$method}");
         }
         $relateKey = md5($relate->targetEntity.$relate->selfProperty.$relate->targetProperty);
         if($relate->allowCache && isset($this->relateValues[$relateKey])){
@@ -450,9 +450,9 @@ abstract class Entity implements \JsonSerializable
             $relates = ReflectionCache::getInstance()->entityReflection($class)->getMethodRelates();
             if(isset($relates[$method])){
                 $relate = $relates[$method];
+            }else{
+                throw new RuntimeError("not relation defined in class {$class} method {$method}");
             }
-        }else{
-            throw new RuntimeError("not relation defined in class {$class} method {$method}");
         }
         $relateKey = md5($relate->targetEntity.$relate->selfProperty.$relate->targetProperty);
         if($relate->allowCache && isset($this->relateValues[$relateKey])){
