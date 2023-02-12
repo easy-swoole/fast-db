@@ -36,9 +36,8 @@ abstract class Entity implements \JsonSerializable
         if(!empty($data)){
             $this->data($data,$realData);
         }
-        $ref = ReflectionCache::getInstance()->entityReflection(static::class);
-        if($ref->onInitialize()){
-            call_user_func($ref->onInitialize()->callback,$this);
+        if($info->onInitialize()){
+            call_user_func($info->onInitialize()->callback,$this);
         }
     }
 
