@@ -390,43 +390,29 @@ abstract class Entity implements \JsonSerializable
         return $this->toArray();
     }
 
-    protected function relate(?Relate $relate = null,?callable $whereCall = null)
+    protected function relateOne(?Relate $relate = null)
     {
-        //一个ID属性可以关联到多个实体。比如一个学生可以有多个课程，也有一个自己的详细资料
-        if($relate == null){
-            //由于是debug trace,上层方法请直接调用，不要再放置到其他类或者是闭包等其他方法中。
-            $trace = debug_backtrace(DEBUG_BACKTRACE_PROVIDE_OBJECT,2);
-            $trace = $trace[1];
-            if(!isset( $trace['class'])){
-                throw new RuntimeError("please call relate() in direct");
-            }
-            $class = $trace['class'];
-            $method = $trace['function'];
+        $class = static::class;
+        $trace = debug_backtrace(DEBUG_BACKTRACE_PROVIDE_OBJECT,2);
+        $method = $trace[1]['function'];
+        if(!$relate){
             $relates = ReflectionCache::getInstance()->entityReflection($class)->getMethodRelates();
-
             if(isset($relates[$method])){
                 $relate = $relates[$method];
-            }else{
-                throw new RuntimeError("not relation defined in class {$class} method {$method}");
             }
+        }else{
+            throw new RuntimeError("not relation defined in class {$class} method {$method}");
         }
-
-        if($relate->selfProperty == null){
-            $relate->selfProperty = $this->primaryKey;
-        }
-
         $relateKey = md5($relate->targetEntity.$relate->selfProperty.$relate->targetProperty);
-
         if($relate->allowCache && isset($this->relateValues[$relateKey])){
             return $this->relateValues[$relateKey];
         }
-
         /** @var Entity $temp */
         $temp = new $relate->targetEntity();
 
         $query = new QueryBuilder();
-        if($whereCall){
-            call_user_func($whereCall,$query);
+        if(is_callable($this->whereCall)){
+            call_user_func($this->whereCall,$query);
         }
 
         $fields = null;
@@ -435,64 +421,102 @@ abstract class Entity implements \JsonSerializable
             $fields = $this->fields['fields'];
             $returnAsArray = $this->fields['returnAsArray'];
         }
-        $this->fields = null;
 
-        if($relate->relateType == Relate::RELATE_ONE_TO_NOE){
-            $query->where($relate->targetProperty,$this->{$relate->selfProperty})
-                ->getOne($temp->tableName(),$fields);
-            $ret = FastDb::getInstance()->query($query);
-            if(!empty($ret->getResult())){
-                $return = $ret->getResult()[0];
-                if($relate->returnAsTargetEntity && (!$returnAsArray)){
-                    $return = new $relate->targetEntity($return);
-                }
-                if($relate->allowCache){
-                    $this->relateValues[$relateKey] = $return;
-                }
-                return $return;
-            }else{
-                return null;
+        $this->fields = null;
+        $this->whereCall = null;
+
+        $query->where($relate->targetProperty,$this->{$relate->selfProperty})
+            ->getOne($temp->tableName(),$fields);
+        $ret = FastDb::getInstance()->query($query);
+        if(!empty($ret->getResult())){
+            $return = $ret->getResult()[0];
+            if($relate->returnAsTargetEntity && (!$returnAsArray)){
+                $return = new $relate->targetEntity($return);
+            }
+            if($relate->allowCache){
+                $this->relateValues[$relateKey] = $return;
+            }
+            return $return;
+        }else{
+            return null;
+        }
+    }
+
+    protected function relateMore(?Relate $relate = null)
+    {
+        $class = static::class;
+        $trace = debug_backtrace(DEBUG_BACKTRACE_PROVIDE_OBJECT,2);
+        $method = $trace[1]['function'];
+        if(!$relate){
+            $relates = ReflectionCache::getInstance()->entityReflection($class)->getMethodRelates();
+            if(isset($relates[$method])){
+                $relate = $relates[$method];
             }
         }else{
-
-            if($this->page != null){
-                $query->limit(...$this->page->toLimitArray());
-                if($this->page->isWithTotalCount()){
-                    $query->withTotalCount();
-                }
-            }
-
-            $query->where($relate->targetProperty,$this->{$relate->selfProperty})
-                ->get($temp->tableName(),null,$fields);
-            $ret = FastDb::getInstance()->query($query);
-
-            $total = null;
-            if($this->page && $this->page->isWithTotalCount()){
-                $info = FastDb::getInstance()->rawQuery('SELECT FOUND_ROWS() as count')->getResult();
-                if(isset($info[0]['count'])){
-                    $total = $info[0]['count'];
-                }
-            }
-
-            $list = [];
-            $this->page = null;
-
-            if(!empty($ret->getResult())){
-                if($relate->returnAsTargetEntity && !$returnAsArray){
-                    foreach ($ret->getResult() as $item){
-                        $list[] = new $relate->targetEntity($item);
-                    }
-                }else{
-                    $list = $ret->getResult();
-                }
-
-                if($relate->allowCache){
-                    $this->relateValues[$relateKey] = $list;
-                }
-
-                return new ListResult($list,$total);
-            }
-            return $list;
+            throw new RuntimeError("not relation defined in class {$class} method {$method}");
         }
+        $relateKey = md5($relate->targetEntity.$relate->selfProperty.$relate->targetProperty);
+        if($relate->allowCache && isset($this->relateValues[$relateKey])){
+            return $this->relateValues[$relateKey];
+        }
+        /** @var Entity $temp */
+        $temp = new $relate->targetEntity();
+
+        $query = new QueryBuilder();
+        if(is_callable($this->whereCall)){
+            call_user_func($this->whereCall,$query);
+        }
+
+        $fields = null;
+        $returnAsArray = false;
+        if(!empty($this->fields['fields'])){
+            $fields = $this->fields['fields'];
+            $returnAsArray = $this->fields['returnAsArray'];
+        }
+
+
+
+        if($this->page != null){
+            $query->limit(...$this->page->toLimitArray());
+            if($this->page->isWithTotalCount()){
+                $query->withTotalCount();
+            }
+        }
+
+        $this->fields = null;
+        $this->whereCall = null;
+
+
+        $query->where($relate->targetProperty,$this->{$relate->selfProperty})
+            ->get($temp->tableName(),null,$fields);
+        $ret = FastDb::getInstance()->query($query);
+
+        $total = null;
+        if($this->page && $this->page->isWithTotalCount()){
+            $info = FastDb::getInstance()->rawQuery('SELECT FOUND_ROWS() as count')->getResult();
+            if(isset($info[0]['count'])){
+                $total = $info[0]['count'];
+            }
+        }
+
+        $list = [];
+        $this->page = null;
+
+        if(!empty($ret->getResult())){
+            if($relate->returnAsTargetEntity && !$returnAsArray){
+                foreach ($ret->getResult() as $item){
+                    $list[] = new $relate->targetEntity($item);
+                }
+            }else{
+                $list = $ret->getResult();
+            }
+
+            if($relate->allowCache){
+                $this->relateValues[$relateKey] = $list;
+            }
+
+            return new ListResult($list,$total);
+        }
+        return $list;
     }
 }

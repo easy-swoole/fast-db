@@ -10,13 +10,9 @@ use EasySwoole\FastDb\Utility\ReflectionCache;
 #[\Attribute(\Attribute::TARGET_METHOD)]
 class Relate
 {
-    const RELATE_ONE_TO_NOE = 1;
-    const RELATE_ONE_TO_MULTIPLE = 2;
-
     function __construct(
         public string $targetEntity,
         public ?string $targetProperty = null,
-        public int $relateType = self::RELATE_ONE_TO_NOE,
         public ?string $selfProperty = null,
         public bool $allowCache = false,
         public bool $returnAsTargetEntity = true
@@ -29,6 +25,14 @@ class Relate
             }
         }else{
             $this->targetProperty = $targetRef->getPrimaryKey();
+        }
+        if($this->selfProperty == null){
+            $trace = debug_backtrace(DEBUG_BACKTRACE_PROVIDE_OBJECT,3);
+            if(isset($trace[2]['object']) && $trace[2]['object'] instanceof Entity){
+                $classClass = $trace[2]['object']::class;
+                $ref = ReflectionCache::getInstance()->entityReflection($classClass);
+                $this->selfProperty = $ref->getPrimaryKey();
+            }
         }
     }
 }

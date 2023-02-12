@@ -61,4 +61,11 @@ class ListResult  implements \Iterator , \JsonSerializable, \Countable
     {
         return count($this->data);
     }
+
+
+    function toArray()
+    {
+        return $this->data;
+    }
+
 }

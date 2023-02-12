@@ -25,19 +25,16 @@ class Student extends Entity
     )]
     function info():?StudentInfo
     {
-        return $this->relate();
+        return $this->relateOne();
     }
 
     #[Relate(
         targetEntity: StudentScore::class,
         targetProperty: "studentId",
-        relateType: Relate::RELATE_ONE_TO_MULTIPLE,
         returnAsTargetEntity: false
     )]
     function score()
     {
-        return $this->relate(null,function (QueryBuilder $queryBuilder){
-            $queryBuilder->join("course","student_score.courseId = course.courseId");
-        });
+        return $this->relateMore();
     }
 }
