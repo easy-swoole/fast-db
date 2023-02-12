@@ -43,6 +43,6 @@ class Student extends Entity
     )]
     function score()
     {
-        return $this->relateMore();
+        return $this->relateMany();
     }
 }

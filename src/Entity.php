@@ -402,6 +402,9 @@ abstract class Entity implements \JsonSerializable
                 throw new RuntimeError("not relation defined in class {$class} method {$method}");
             }
         }
+        if($relate->selfProperty == null){
+            $relate->selfProperty = $this->primaryKey;
+        }
         $relateKey = md5($relate->targetEntity.$relate->selfProperty.$relate->targetProperty);
         if($relate->allowCache && isset($this->relateValues[$relateKey])){
             return $this->relateValues[$relateKey];
@@ -441,7 +444,7 @@ abstract class Entity implements \JsonSerializable
         }
     }
 
-    protected function relateMore(?Relate $relate = null)
+    protected function relateMany(?Relate $relate = null)
     {
         $class = static::class;
         $trace = debug_backtrace(DEBUG_BACKTRACE_PROVIDE_OBJECT,2);
@@ -453,6 +456,9 @@ abstract class Entity implements \JsonSerializable
             }else{
                 throw new RuntimeError("not relation defined in class {$class} method {$method}");
             }
+        }
+        if($relate->selfProperty == null){
+            $relate->selfProperty = $this->primaryKey;
         }
         $relateKey = md5($relate->targetEntity.$relate->selfProperty.$relate->targetProperty);
         if($relate->allowCache && isset($this->relateValues[$relateKey])){
@@ -472,8 +478,6 @@ abstract class Entity implements \JsonSerializable
             $fields = $this->fields['fields'];
             $returnAsArray = $this->fields['returnAsArray'];
         }
-
-
 
         if($this->page != null){
             $query->limit(...$this->page->toLimitArray());

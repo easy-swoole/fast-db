@@ -26,13 +26,5 @@ class Relate
         }else{
             $this->targetProperty = $targetRef->getPrimaryKey();
         }
-        if($this->selfProperty == null){
-            $trace = debug_backtrace(DEBUG_BACKTRACE_PROVIDE_OBJECT,3);
-            if(isset($trace[2]['object']) && $trace[2]['object'] instanceof Entity){
-                $classClass = $trace[2]['object']::class;
-                $ref = ReflectionCache::getInstance()->entityReflection($classClass);
-                $this->selfProperty = $ref->getPrimaryKey();
-            }
-        }
     }
 }
