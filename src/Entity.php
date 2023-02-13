@@ -502,11 +502,12 @@ abstract class Entity implements \JsonSerializable
             }
         }
 
-        $list = [];
+
         $this->page = null;
 
         if(!empty($ret->getResult())){
             if($relate->returnAsTargetEntity && !$returnAsArray){
+                $list = [];
                 foreach ($ret->getResult() as $item){
                     $list[] = new $relate->targetEntity($item);
                 }
@@ -514,12 +515,14 @@ abstract class Entity implements \JsonSerializable
                 $list = $ret->getResult();
             }
 
+            $ret =  new ListResult($list,$total);
+            //结果不为空才判断缓存
             if($relate->allowCache){
-                $this->relateValues[$relateKey] = $list;
+                $this->relateValues[$relateKey] = $ret;
             }
 
-            return new ListResult($list,$total);
+            return $ret;
         }
-        return $list;
+        return new ListResult([],$total);
     }
 }
