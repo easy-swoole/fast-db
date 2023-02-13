@@ -424,7 +424,13 @@ abstract class Entity implements \JsonSerializable
         $this->fields = null;
         $this->whereCall = null;
 
-        $query->where($relate->targetProperty,$this->{$relate->selfProperty})
+        if(isset($this->{$relate->selfProperty})){
+            $selfValue = $this->{$relate->selfProperty};
+        }else{
+            $selfValue = null;
+        }
+
+        $query->where($relate->targetProperty,$selfValue)
             ->getOne($temp->tableName(),$fields);
         $ret = FastDb::getInstance()->query($query);
         if(!empty($ret->getResult())){
@@ -438,7 +444,7 @@ abstract class Entity implements \JsonSerializable
             return $return;
         }else{
             if($relate->smartCreate){
-                $temp->{$relate->targetProperty} = $this->{$relate->selfProperty};
+                $temp->{$relate->targetProperty} = $selfValue;
                 return $temp;
             }
             return null;
@@ -478,8 +484,13 @@ abstract class Entity implements \JsonSerializable
         $this->fields = null;
         $this->whereCall = null;
 
+        if(isset($this->{$relate->selfProperty})){
+            $selfValue = $this->{$relate->selfProperty};
+        }else{
+            $selfValue = null;
+        }
 
-        $query->where($relate->targetProperty,$this->{$relate->selfProperty})
+        $query->where($relate->targetProperty,$selfValue)
             ->get($temp->tableName(),null,$fields);
         $ret = FastDb::getInstance()->query($query);
 
@@ -506,7 +517,7 @@ abstract class Entity implements \JsonSerializable
 
             $ret = new SmartListResult($list,$total);
             if($relate->smartCreate){
-                $ret->__setRelate(clone $relate,$this->{$relate->selfProperty});
+                $ret->__setRelate(clone $relate,$selfValue);
             }
 
             //结果不为空才判断缓存
@@ -518,7 +529,7 @@ abstract class Entity implements \JsonSerializable
         }
         $ret = new SmartListResult([],$total);
         if($relate->smartCreate){
-            $ret->__setRelate(clone $relate,$this->{$relate->selfProperty});
+            $ret->__setRelate(clone $relate,$selfValue);
         }
         return $ret;
     }
