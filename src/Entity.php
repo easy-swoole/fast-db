@@ -390,7 +390,7 @@ abstract class Entity implements \JsonSerializable
         return $this->toArray();
     }
 
-    protected function relateOne(?Relate $relate = null):Entity|array|null
+    protected function relateOne(?Relate $relate = null)
     {
         $class = static::class;
         if(!$relate){
