@@ -5,6 +5,7 @@ namespace EasySwoole\FastDb;
 use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Beans\ListResult;
 use EasySwoole\FastDb\Beans\Page;
+use EasySwoole\FastDb\Beans\SmartListResult;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\Utility\ReflectionCache;
 use EasySwoole\Mysqli\QueryBuilder;
@@ -389,12 +390,12 @@ abstract class Entity implements \JsonSerializable
         return $this->toArray();
     }
 
-    protected function relateOne(?Relate $relate = null)
+    protected function relateOne(?Relate $relate = null):Entity|array|null
     {
         $class = static::class;
-        $trace = debug_backtrace(DEBUG_BACKTRACE_PROVIDE_OBJECT,2);
-        $method = $trace[1]['function'];
         if(!$relate){
+            $trace = debug_backtrace(DEBUG_BACKTRACE_PROVIDE_OBJECT,2);
+            $method = $trace[1]['function'];
             $relates = ReflectionCache::getInstance()->entityReflection($class)->getMethodRelates();
             if(isset($relates[$method])){
                 $relate = $relates[$method];
@@ -405,6 +406,15 @@ abstract class Entity implements \JsonSerializable
         if($relate->selfProperty == null){
             $relate->selfProperty = $this->primaryKey;
         }
+
+        if($relate->allowCache && $relate->smartCreate){
+            throw new RuntimeError("cache relate result is not allow when smart create mode enable");
+        }
+
+        if($relate->smartCreate && $relate->returnAsTargetEntity){
+            throw new RuntimeError("return as array is not allow when smart create mode enable");
+        }
+
         $relateKey = md5($relate->targetEntity.$relate->selfProperty.$relate->targetProperty);
         if($relate->allowCache && isset($this->relateValues[$relateKey])){
             return $this->relateValues[$relateKey];
@@ -424,6 +434,10 @@ abstract class Entity implements \JsonSerializable
             $returnAsArray = $this->fields['returnAsArray'];
         }
 
+        if($relate->smartCreate && $returnAsArray){
+            throw new RuntimeError("return as array is not allow when smart create mode enable");
+        }
+
         $this->fields = null;
         $this->whereCall = null;
 
@@ -440,16 +454,20 @@ abstract class Entity implements \JsonSerializable
             }
             return $return;
         }else{
+            if($relate->smartCreate){
+                $temp->{$relate->targetProperty} = $this->{$relate->selfProperty};
+                return $temp;
+            }
             return null;
         }
     }
 
-    protected function relateMany(?Relate $relate = null)
+    protected function relateMany(?Relate $relate = null):SmartListResult
     {
         $class = static::class;
-        $trace = debug_backtrace(DEBUG_BACKTRACE_PROVIDE_OBJECT,2);
-        $method = $trace[1]['function'];
         if(!$relate){
+            $trace = debug_backtrace(DEBUG_BACKTRACE_PROVIDE_OBJECT,2);
+            $method = $trace[1]['function'];
             $relates = ReflectionCache::getInstance()->entityReflection($class)->getMethodRelates();
             if(isset($relates[$method])){
                 $relate = $relates[$method];
@@ -460,6 +478,11 @@ abstract class Entity implements \JsonSerializable
         if($relate->selfProperty == null){
             $relate->selfProperty = $this->primaryKey;
         }
+
+        if($relate->allowCache && $relate->smartCreate){
+            throw new RuntimeError("cache relate result is not allow when smart create mode enable");
+        }
+
         $relateKey = md5($relate->targetEntity.$relate->selfProperty.$relate->targetProperty);
         if($relate->allowCache && isset($this->relateValues[$relateKey])){
             return $this->relateValues[$relateKey];
@@ -515,7 +538,11 @@ abstract class Entity implements \JsonSerializable
                 $list = $ret->getResult();
             }
 
-            $ret =  new ListResult($list,$total);
+            $ret = new SmartListResult($list,$total);
+            if($relate->smartCreate){
+                $ret->__setRelate(clone $relate,$this->{$relate->selfProperty});
+            }
+
             //结果不为空才判断缓存
             if($relate->allowCache){
                 $this->relateValues[$relateKey] = $ret;
@@ -523,6 +550,10 @@ abstract class Entity implements \JsonSerializable
 
             return $ret;
         }
-        return new ListResult([],$total);
+        $ret = new SmartListResult([],$total);
+        if($relate->smartCreate){
+            $ret->__setRelate(clone $relate,$this->{$relate->selfProperty});
+        }
+        return $ret;
     }
 }
