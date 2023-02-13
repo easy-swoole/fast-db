@@ -18,13 +18,15 @@ class ReflectionCache
 {
     use Singleton;
 
-    private array $cache = [];
+    private array $entityReflection = [];
+
+    private array $methodParsedRelate = [];
 
     function entityReflection(string $entityClass):EntityReflection
     {
         $key = md5($entityClass);
-        if(isset($this->cache[$key])){
-            return $this->cache[$key];
+        if(isset($this->entityReflection[$key])){
+            return $this->entityReflection[$key];
         }
         $ref = new \ReflectionClass($entityClass);
         if(!$ref->isSubclassOf(Entity::class)){
@@ -124,8 +126,23 @@ class ReflectionCache
             throw new RuntimeError("primary key must be define in {$entityClass}");
         }
 
-        $this->cache[$key] = $return;
+        $this->entityReflection[$key] = $return;
 
         return $return;
+    }
+
+    function setMethodParsedRelate(string $class, string $method, Relate $relate):void
+    {
+        $key = md5($class.$method);
+        $this->methodParsedRelate[$key] = $relate;
+    }
+
+    function getMethodParsedRelate(string $class, string $method):?Relate
+    {
+        $key = md5($class.$method);
+        if(isset($this->methodParsedRelate[$key])){
+            return$this->methodParsedRelate[$key];
+        }
+        return null;
     }
 }

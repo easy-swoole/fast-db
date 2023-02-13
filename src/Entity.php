@@ -392,24 +392,7 @@ abstract class Entity implements \JsonSerializable
 
     protected function relateOne(?Relate $relate = null)
     {
-        $class = static::class;
-        if(!$relate){
-            $trace = debug_backtrace(DEBUG_BACKTRACE_PROVIDE_OBJECT,2);
-            $method = $trace[1]['function'];
-            $relates = ReflectionCache::getInstance()->entityReflection($class)->getMethodRelates();
-            if(isset($relates[$method])){
-                $relate = $relates[$method];
-            }else{
-                throw new RuntimeError("not relation defined in class {$class} method {$method}");
-            }
-        }
-        if($relate->selfProperty == null){
-            $relate->selfProperty = $this->primaryKey;
-        }
-
-        if($relate->allowCache && $relate->smartCreate){
-            throw new RuntimeError("cache relate result is not allow when smart create mode enable");
-        }
+        $relate = $this->parseRelate($relate);
 
         if($relate->smartCreate && $relate->returnAsTargetEntity){
             throw new RuntimeError("return as array is not allow when smart create mode enable");
@@ -464,26 +447,9 @@ abstract class Entity implements \JsonSerializable
 
     protected function relateMany(?Relate $relate = null):SmartListResult
     {
-        $class = static::class;
-        if(!$relate){
-            $trace = debug_backtrace(DEBUG_BACKTRACE_PROVIDE_OBJECT,2);
-            $method = $trace[1]['function'];
-            $relates = ReflectionCache::getInstance()->entityReflection($class)->getMethodRelates();
-            if(isset($relates[$method])){
-                $relate = $relates[$method];
-            }else{
-                throw new RuntimeError("not relation defined in class {$class} method {$method}");
-            }
-        }
-        if($relate->selfProperty == null){
-            $relate->selfProperty = $this->primaryKey;
-        }
-
-        if($relate->allowCache && $relate->smartCreate){
-            throw new RuntimeError("cache relate result is not allow when smart create mode enable");
-        }
-
+        $relate = $this->parseRelate($relate);
         $relateKey = md5($relate->targetEntity.$relate->selfProperty.$relate->targetProperty);
+
         if($relate->allowCache && isset($this->relateValues[$relateKey])){
             return $this->relateValues[$relateKey];
         }
@@ -555,5 +521,56 @@ abstract class Entity implements \JsonSerializable
             $ret->__setRelate(clone $relate,$this->{$relate->selfProperty});
         }
         return $ret;
+    }
+
+    private function parseRelate(?Relate $relate):Relate
+    {
+        $class = static::class;
+        $trace = debug_backtrace(DEBUG_BACKTRACE_PROVIDE_OBJECT,3);
+        $method = $trace[2]['function'];
+
+        if(ReflectionCache::getInstance()->getMethodParsedRelate($class,$method)){
+            return clone ReflectionCache::getInstance()->getMethodParsedRelate($class,$method);
+        }
+
+        if($relate == null){
+            $relates = ReflectionCache::getInstance()->entityReflection($class)->getMethodRelates();
+            if(isset($relates[$method])){
+                /** @var Relate $relate */
+                $relate = $relates[$method];
+            }else{
+                throw new RuntimeError("not relation defined in class {$class} method {$method}");
+            }
+        }
+
+        //检查目标属性是否为合法entity
+        try {
+            $targetRef = ReflectionCache::getInstance()->entityReflection($relate->targetEntity);
+        }catch (\Throwable $throwable){
+            throw new RuntimeError("relation error in class {$class} method {$method} case {$throwable->getMessage()}");
+        }
+        //检查目标映射属性是否存在。
+        if($relate->targetProperty != null){
+            if(!key_exists($relate->targetProperty,$targetRef->getProperties())){
+                throw new RuntimeError("relation error in class {$class} method {$method} case target property {$relate->targetProperty} is not define in class {$relate->targetEntity}");
+            }
+        }else{
+            $relate->targetProperty = $targetRef->getPrimaryKey();
+        }
+
+        //检查自身属性是否设置
+        if($relate->selfProperty == null){
+            $relate->selfProperty = $this->primaryKey;
+        }
+
+        //检查冲突性
+        if($relate->allowCache && $relate->smartCreate){
+            throw new RuntimeError("relation error in class {$class} method {$method} case cache relate result is not allow when smart create mode enable");
+        }
+        //设置缓存
+        ReflectionCache::getInstance()->setMethodParsedRelate($class,$method,$relate);
+
+        return clone $relate;
+
     }
 }
