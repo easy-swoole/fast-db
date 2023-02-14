@@ -2,6 +2,7 @@
 
 namespace EasySwoole\FastDb\Mysql;
 
+use EasySwoole\FastDb\Exception\Exception;
 use EasySwoole\Mysqli\Config;
 use EasySwoole\Pool\AbstractPool;
 
@@ -15,8 +16,7 @@ class Pool extends AbstractPool
             $info = $con->mysqlClient()->connect_error;
             /** @var \EasySwoole\FastDb\Config $config */
             $config = $this->getConfig();
-            trigger_error("connection {$config->getName()} ".$info);
-            return null;
+            throw new Exception("connection [{$config->getName()}@{$config->getHost()}]  connect error: ".$info);
         }else{
             //用于AutoPing
             $con->__lastPingTime = 0;
