@@ -175,7 +175,7 @@ abstract class Entity implements \JsonSerializable
         $this->fields = null;
     }
 
-    function insert(?array $updateDuplicateCols = [],bool $reSync = false):bool
+    function insert(?array $updateDuplicateCols = null,bool $reSync = false):bool
     {
         $ref = ReflectionCache::getInstance()->entityReflection(static::class);
         if($ref->onInsert()){
@@ -187,9 +187,14 @@ abstract class Entity implements \JsonSerializable
         //插入的时候，null值一般无意义，default值在数据库层做。
         $data = $this->toArray(true);
         $query = new QueryBuilder();
-        if(!empty($updateDuplicateCols)){
-            $query->onDuplicate($updateDuplicateCols);
+        if($updateDuplicateCols !== null){
+            if(!empty($updateDuplicateCols)){
+                $query->onDuplicate($updateDuplicateCols);
+            }else{
+                $query->onDuplicate(array_keys($data));
+            }
         }
+        
         $query->insert($this->tableName(),$data);
         $ret = FastDb::getInstance()->query($query);
         if($ret->getResult()){
