@@ -395,6 +395,13 @@ abstract class Entity implements \JsonSerializable
         return $this->toArray();
     }
 
+    protected function get(?string $tableName = null)
+    {
+        if($tableName == null){
+            $tableName = $this->tableName();
+        }
+    }
+
     protected function relateOne(?Relate $relate = null)
     {
         $relate = $this->parseRelate($relate);

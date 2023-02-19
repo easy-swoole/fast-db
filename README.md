@@ -76,3 +76,43 @@ class Student extends Entity
 }
 ```
 
+## 基础方法
+
+### getOne
+
+### data
+
+### toArray
+
+### update
+
+### delete
+
+### insert
+
+### all
+
+### page
+
+### chunk
+
+### whereCall
+
+### fields
+
+### sum
+
+### count
+
+## 实体关联
+
+### 一对一
+
+### 一对多
+
+### 高级关联
+
+
+
+
+
