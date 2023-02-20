@@ -104,7 +104,7 @@ abstract class Entity implements \JsonSerializable
         return $this;
     }
 
-    function all():ListResult
+    function all(?string $tableName = null):ListResult
     {
         $query = new QueryBuilder();
         if(is_callable($this->whereCall)){
@@ -128,7 +128,11 @@ abstract class Entity implements \JsonSerializable
         }
         $this->fields = null;
 
-        $query->get($this->tableName(),null,$fields);
+        if($tableName == null){
+            $tableName = $this->tableName();
+        }
+
+        $query->get($tableName,null,$fields);
 
         $ret = FastDb::getInstance()->query($query);
         if($this->page && $this->page->isWithTotalCount()){
@@ -393,13 +397,6 @@ abstract class Entity implements \JsonSerializable
     public function jsonSerialize(): mixed
     {
         return $this->toArray();
-    }
-
-    protected function get(?string $tableName = null)
-    {
-        if($tableName == null){
-            $tableName = $this->tableName();
-        }
     }
 
     protected function relateOne(?Relate $relate = null)
