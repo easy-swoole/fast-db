@@ -110,8 +110,11 @@ class Student extends Entity
 
 ### 一对多
 
-### 高级关联
+### 复杂查询
 
+其实也就是all方法。
+
+## 数据库管理类
 
 
 
