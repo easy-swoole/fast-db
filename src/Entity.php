@@ -157,14 +157,15 @@ abstract class Entity implements \JsonSerializable
         return new ListResult($list,$total);
     }
 
-    function chunk(callable $func,$pageSize = 10):void
+    function chunk(callable $func,$pageSize = 10,?string $tableName = null):void
     {
         $cache = $this->fields;
         $page = 1;
+        //因为all会重置whereCall
         $whereCall = $this->whereCall;
         while (true){
             $this->fields = $cache;
-            $list = $this->page($page,false,$pageSize)->all($whereCall);
+            $list = $this->page($page,false,$pageSize)->all($whereCall,$tableName);
             $this->whereCall = $whereCall;
             foreach ($list as $item){
                 call_user_func($func,$item);
