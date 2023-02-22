@@ -397,7 +397,7 @@ abstract class Entity implements \JsonSerializable
         return $affectRows;
     }
 
-    function delete(?callable $whereCall = null)
+    function delete()
     {
         $ref = ReflectionCache::getInstance()->entityReflection(static::class);
         if($ref->onDelete()){
@@ -407,16 +407,19 @@ abstract class Entity implements \JsonSerializable
             }
         }
 
-        if($whereCall == null && !isset($this->{$this->primaryKey})){
+        if($this->whereCall == null && !isset($this->{$this->primaryKey})){
             throw new RuntimeError("can not delete data without primaryKey or whereCall set in ".static::class);
         }
 
         $query = new QueryBuilder();
         if(isset($this->{$this->primaryKey})){
             $query->where($this->primaryKey,$this->{$this->primaryKey});
-        }else{
-            call_user_func($whereCall,$query);
         }
+
+        if(is_callable($this->whereCall)){
+            call_user_func($this->whereCall,$query);
+        }
+
         $query->delete($this->tableName());
 
         $ret = FastDb::getInstance()->query($query);
