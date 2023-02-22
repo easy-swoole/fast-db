@@ -417,8 +417,8 @@ abstract class Entity implements \JsonSerializable
             $singleRecord = true;
         }else if(is_callable($this->whereCall)){
             call_user_func($this->whereCall,$query);
-            $this->whereCall = null;
         }
+        $this->whereCall = null;
 
         $query->update($this->tableName(),$finalData);
 
@@ -461,8 +461,8 @@ abstract class Entity implements \JsonSerializable
             $query->where($this->primaryKey,$this->{$this->primaryKey});
         }else if(is_callable($this->whereCall)){
             call_user_func($this->whereCall,$query);
-            $this->whereCall = null;
         }
+        $this->whereCall = null;
 
         $query->delete($this->tableName());
 
