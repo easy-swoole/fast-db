@@ -31,13 +31,14 @@ class Pool extends AbstractPool
      */
     public function keepMin(?int $num = null): int
     {
+        $old = $this->status()['created'];
         try{
             return parent::keepMin($num);
         }catch (\Throwable $throwable){
             /** @var \EasySwoole\FastDb\Config $config */
             $config = $this->getConfig();
             trigger_error("connection {$config->getName()} ".$throwable->getMessage());
-            return $this->status()['created'];
+            return $this->status()['created'] - $old;
         }
     }
 
@@ -61,5 +62,4 @@ class Pool extends AbstractPool
             return true;
         }
     }
-
 }

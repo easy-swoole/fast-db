@@ -291,4 +291,21 @@ class FastDb
             $pool->reset();
         }
     }
+
+    function preConnect()
+    {
+        foreach ($this->configs as $name => $config){
+            /** @var Config $dbConfig */
+            $dbConfig = $this->configs[$name];
+            if(!isset($this->pools[$name])){
+                $pool = new Pool($dbConfig);
+                $this->pools[$name] = $pool;
+            }else{
+                /** @var Pool $pool */
+                $pool = $this->pools[$name];
+            }
+            $pool->keepMin();
+        }
+    }
+
 }
