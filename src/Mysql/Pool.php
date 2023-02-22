@@ -37,7 +37,7 @@ class Pool extends AbstractPool
             /** @var \EasySwoole\FastDb\Config $config */
             $config = $this->getConfig();
             trigger_error("connection {$config->getName()} ".$throwable->getMessage());
-            return $this->status(true)['created'];
+            return $this->status()['created'];
         }
     }
 

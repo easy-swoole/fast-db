@@ -19,7 +19,7 @@
     "require": {
         "php": ">=8.1",
         "easyswoole/mysqli": "^3.0",
-        "easyswoole/pool": "^1.0"
+        "easyswoole/pool": "^2.0"
     },
     "require-dev": {
         "easyswoole/phpunit": "^1.0",
