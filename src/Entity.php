@@ -327,7 +327,7 @@ abstract class Entity implements \JsonSerializable
      * 也就是 (new model())->update(["a"=>null])
      */
 
-    function update(?array $data = null,?callable $whereCall = null)
+    function update(?array $data = null)
     {
         $ref = ReflectionCache::getInstance()->entityReflection(static::class);
         if($ref->onUpdate()){
@@ -345,7 +345,7 @@ abstract class Entity implements \JsonSerializable
                 return false;
             }
         }
-        if($whereCall == null && !isset($this->{$this->primaryKey})){
+        if($this->whereCall == null && !isset($this->{$this->primaryKey})){
             throw new RuntimeError("can not update data without primaryKey or whereCall set in ".static::class);
         }
         $finalData = [];
@@ -412,13 +412,12 @@ abstract class Entity implements \JsonSerializable
 
         $singleRecord = false;
         //当主键有值的时候，不执行wherecall，因为pk可以确定唯一记录，再wherecall无意义
-        if($this->primaryKey != null && $this->{$this->primaryKey} !== null){
+        if(isset($this->{$this->primaryKey})){
             $query->where($this->primaryKey,$this->{$this->primaryKey});
             $singleRecord = true;
-        }else{
-            if($whereCall){
-                call_user_func($whereCall,$query);
-            }
+        }else if(is_callable($this->whereCall)){
+            call_user_func($this->whereCall,$query);
+            $this->whereCall = null;
         }
 
         $query->update($this->tableName(),$finalData);
@@ -460,10 +459,9 @@ abstract class Entity implements \JsonSerializable
         $query = new QueryBuilder();
         if(isset($this->{$this->primaryKey})){
             $query->where($this->primaryKey,$this->{$this->primaryKey});
-        }
-
-        if(is_callable($this->whereCall)){
+        }else if(is_callable($this->whereCall)){
             call_user_func($this->whereCall,$query);
+            $this->whereCall = null;
         }
 
         $query->delete($this->tableName());
