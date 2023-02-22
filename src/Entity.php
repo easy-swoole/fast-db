@@ -126,11 +126,21 @@ abstract class Entity implements \JsonSerializable
     }
 
 
-    static function getOne(callable $whereCall):?static
+    static function getOne(callable|string|int|array $whereCall):?static
     {
-        $queryBuilder = new QueryBuilder();
-        call_user_func($whereCall,$queryBuilder);
         $mode = new static();
+        $queryBuilder = new QueryBuilder();
+        if(is_callable($whereCall)){
+            call_user_func($whereCall,$queryBuilder);
+        }else if(is_array($whereCall)){
+            foreach ($whereCall as $key => $value){
+                $queryBuilder->where($key,$value);
+            }
+        }else{
+            $primaryKey = ReflectionCache::getInstance()
+                ->entityReflection(static::class)->getPrimaryKey();
+            $queryBuilder->where($primaryKey,$whereCall);
+        }
         $queryBuilder->getOne($mode->tableName());
         $info = FastDb::getInstance()->query($queryBuilder)->getResult();
         if(!empty($info)){
