@@ -6,7 +6,6 @@ use EasySwoole\FastDb\Attributes\ConvertJson;
 use EasySwoole\FastDb\Attributes\Hook\OnDelete;
 use EasySwoole\FastDb\Attributes\Hook\OnInitialize;
 use EasySwoole\FastDb\Attributes\Hook\OnInsert;
-use EasySwoole\FastDb\Attributes\Hook\OnToArray;
 use EasySwoole\FastDb\Attributes\Hook\OnUpdate;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Entity;
@@ -16,7 +15,6 @@ class EntityReflection
     private ?OnDelete $onDelete = null;
     private ?OnInitialize $onInitialize = null;
     private ?OnInsert $onInsert = null;
-    private ?OnToArray $onToArray = null;
     private ?OnUpdate $onUpdate = null;
 
     private array $properties = [];
@@ -138,13 +136,7 @@ class EntityReflection
         return $this->onInsert;
     }
 
-    function onToArray(?OnToArray $onToArray = null):?OnToArray
-    {
-        if($onToArray){
-            $this->onToArray = $onToArray;
-        }
-        return $this->onToArray;
-    }
+
 
     function onUpdate(?OnUpdate $onUpdate = null):?OnUpdate
     {

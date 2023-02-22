@@ -7,7 +7,6 @@ use EasySwoole\FastDb\Attributes\ConvertJson;
 use EasySwoole\FastDb\Attributes\Hook\OnDelete;
 use EasySwoole\FastDb\Attributes\Hook\OnInitialize;
 use EasySwoole\FastDb\Attributes\Hook\OnInsert;
-use EasySwoole\FastDb\Attributes\Hook\OnToArray;
 use EasySwoole\FastDb\Attributes\Hook\OnUpdate;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Attributes\Relate;
@@ -70,16 +69,6 @@ class ReflectionCache
             }
         }
 
-        $temp = $ref->getAttributes(OnToArray::class);
-        if(!empty($temp)){
-            try{
-                $temp = new OnToArray(...$temp[0]->getArguments());
-                $return->onToArray($temp);
-            }catch (\Throwable $throwable){
-                $msg = "OnToArray() attribute parse error in class {$entityClass}";
-                throw new RuntimeError($msg);
-            }
-        }
 
         $temp = $ref->getAttributes(OnUpdate::class);
         if(!empty($temp)){

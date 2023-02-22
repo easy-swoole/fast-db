@@ -3,7 +3,6 @@
 namespace EasySwoole\FastDb;
 
 use EasySwoole\FastDb\Attributes\Beans\Json;
-use EasySwoole\FastDb\Attributes\ConvertJson;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Beans\ListResult;
@@ -60,7 +59,16 @@ abstract class Entity implements \JsonSerializable
             $this->data($data,$realData);
         }
         if($info->onInitialize()){
-            call_user_func($info->onInitialize()->callback,$this);
+            if(is_callable($info->onInitialize()->callback)){
+                call_user_func($info->onInitialize()->callback,$this);
+            }else{
+                if(method_exists($this,$info->onInitialize()->callback)){
+                    $call = $info->onInitialize()->callback;
+                    $this->$call();
+                }else{
+                    throw new RuntimeError("{$info->onInitialize()->callback} no a method of class ".static::class);
+                }
+            }
         }
     }
 
@@ -256,7 +264,16 @@ abstract class Entity implements \JsonSerializable
     {
         $ref = ReflectionCache::getInstance()->entityReflection(static::class);
         if($ref->onInsert()){
-            $ret = call_user_func($ref->onInsert()->callback,$this);
+            if(is_callable($ref->onInsert()->callback)){
+                $ret = call_user_func($ref->onInsert()->callback,$this);
+            }else{
+                if(method_exists($this,$ref->onInsert()->callback)){
+                    $call = $ref->onInsert()->callback;
+                    $ret = $this->$call();
+                }else{
+                    throw new RuntimeError("{$ref->onInsert()->callback} no a method of class ".static::class);
+                }
+            }
             if($ret === false){
                 return false;
             }
@@ -314,7 +331,16 @@ abstract class Entity implements \JsonSerializable
     {
         $ref = ReflectionCache::getInstance()->entityReflection(static::class);
         if($ref->onUpdate()){
-            $ret = call_user_func($ref->onUpdate()->callback,$this);
+            if(is_callable($ref->onUpdate()->callback)){
+                $ret = call_user_func($ref->onUpdate()->callback,$this);
+            }else{
+                if(method_exists($this,$ref->onUpdate()->callback)){
+                    $call = $ref->onUpdate()->callback;
+                    $ret = $this->$call();
+                }else{
+                    throw new RuntimeError("{$ref->onUpdate()->callback} no a method of class ".static::class);
+                }
+            }
             if($ret === false){
                 return false;
             }
@@ -411,7 +437,17 @@ abstract class Entity implements \JsonSerializable
     {
         $ref = ReflectionCache::getInstance()->entityReflection(static::class);
         if($ref->onDelete()){
-            $ret = call_user_func($ref->onDelete()->callback,$this);
+            if(is_callable($ref->onDelete()->callback)){
+                $ret = call_user_func($ref->onDelete()->callback,$this);
+            }else{
+                if(method_exists($this,$ref->onDelete()->callback)){
+                    $call = $ref->onDelete()->callback;
+                    $ret = $this->$call();
+                }else{
+                    throw new RuntimeError("{$ref->onDelete()->callback} no a method of class ".static::class);
+                }
+            }
+
             if($ret === false){
                 return false;
             }
