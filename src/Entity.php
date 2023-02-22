@@ -39,12 +39,23 @@ abstract class Entity implements \JsonSerializable
          * @var Property $property
          */
         foreach ($info->getProperties() as $key => $property){
-            $this->properties[$key] = $property->getDefaultValue();
+            $ret = $this->convertJson($key,$property->getDefaultValue());
+            if($ret){
+                $this->properties[$key] = $ret->jsonSerialize();
+                $this->{$key} = $ret;
+            }else{
+                $this->properties[$key] = $property->getDefaultValue();
+                $default = $property->getDefaultValue();
+                if($default !== null){
+                    $this->{$key} = $property->getDefaultValue();
+                }else if($property->isAllowNull()){
+                    $this->{$key} = null;
+                }
+            }
         }
         //避免出现  property must not be accessed before initialization
         $this->primaryKey = $info->getPrimaryKey();
         $this->propertyRelates = $info->getMethodRelates();
-        $this->convertJson();
         if(!empty($data)){
             $this->data($data,$realData);
         }
@@ -57,61 +68,55 @@ abstract class Entity implements \JsonSerializable
 
     function data(array $data,bool $realData = false):Entity
     {
-        $ref = ReflectionCache::getInstance()->entityReflection(static::class);
         foreach ($this->properties as $property => $val){
             if(array_key_exists($property,$data)){
-                $this->convertJson($property,$data[$property]);
+                $ret = $this->convertJson($property,$data[$property]);
+                if(!$ret){
+                    $this->{$property} = $data[$property];
+                }
                 if($realData){
-                    $this->properties[$property] = $data[$property];
+                    if($ret instanceof Json){
+                        $this->properties[$property] = $ret->jsonSerialize();
+                    }else{
+                        $this->properties[$property] = $data[$property];
+                    }
                 }
             }
         }
         return $this;
     }
 
-    private function convertJson(?string $property = null,$propertyValue = null)
+    private function convertJson(string $property,$propertyValue):?Json
     {
         $ref = ReflectionCache::getInstance()->entityReflection(static::class);
-        $jsonList = [];
-        if($property){
-            $ret = $ref->getPropertyConvertJson($property);
-            if($ret){
-                $jsonList[$property] = $ret;
+
+        $allowNull = $ref->getProperty($property)->isAllowNull();
+
+        if(empty($propertyValue) && $allowNull){
+            return null;
+        }
+        /** @var Json $jsonInstance */
+        $json = $ref->getPropertyConvertJson($property);
+        if(!$json){
+            return null;
+        }
+        $jsonInstance = new $json->className();
+        $this->{$property} = $jsonInstance;
+        $class = static::class;
+        if(is_array($propertyValue)){
+            $jsonInstance->restore($propertyValue);
+        }else if(is_string($propertyValue)){
+            $json = json_decode($propertyValue,true);
+            if(!is_array($json)){
+                throw new RuntimeError("data for property {$property} at class {$class} not a json format");
             }
+            $jsonInstance->restore($json);
         }else{
-            $jsonList = $ref->getAllPropertyConvertJson();
-        }
-
-        /**
-         * @var  $key
-         * @var ConvertJson $json
-         */
-        foreach ($jsonList as $key => $json){
-            if(isset($this->{$key})){
-                $propertyValue = $this->{$key};
-            }
-            $allowNull = $ref->getProperty($key)->isAllowNull();
-
-            if(empty($propertyValue) && $allowNull){
-                $this->{$key} = null;
-                continue;
-            }
-            /** @var Json $jsonInstance */
-            $jsonInstance = new $json->className();
-            $this->{$key} = $jsonInstance;
-            $class = static::class;
-            if(is_array($propertyValue)){
-                $jsonInstance->restore($propertyValue);
-            }else if(is_string($propertyValue)){
-                $json = json_decode($propertyValue,true);
-                if(!is_array($json)){
-                    throw new RuntimeError("data for property {$key} at class {$class} not a json format");
-                }
-                $jsonInstance->restore($json);
-            }else if($propertyValue !== null){
-                throw new RuntimeError("data for property {$key} at class {$class} not a json format");
+            if($propertyValue !== null){
+                throw new RuntimeError("data for property {$property} at class {$class} not a json format");
             }
         }
+        return $jsonInstance;
     }
 
     function whereCall(?callable $call):static
@@ -248,6 +253,15 @@ abstract class Entity implements \JsonSerializable
         }
         //插入的时候，null值一般无意义，default值在数据库层做。
         $data = $this->toArray(true);
+        $jsonList = array_keys($ref->getAllPropertyConvertJson());
+        foreach ($jsonList as $key){
+            if(isset($data[$key])){
+                $data[$key] = $this->convertJson($key,$data[$key]);
+                if($data[$key]){
+                    $data[$key] =  $data[$key]->__toString();
+                }
+            }
+        }
         $query = new QueryBuilder();
         if($updateDuplicateCols !== null){
             if(!empty($updateDuplicateCols)){
@@ -295,26 +309,46 @@ abstract class Entity implements \JsonSerializable
                 return false;
             }
         }
-
         if($whereCall == null && !isset($this->{$this->primaryKey})){
             throw new RuntimeError("can not update data without primaryKey or whereCall set in ".static::class);
         }
         $finalData = [];
         if($data != null){
             foreach ($data as $key => $datum){
-                if(isset($this->properties[$key]) && $this->{$key} !== $datum){
+                if(array_key_exists($key,$this->properties)){
+                    if($ref->getPropertyConvertJson($key)){
+                        $temp = $this->convertJson($key,$datum);
+                        if($temp){
+                            if($this->properties[$key] != $temp->jsonSerialize()){
+                                $finalData[$key] = $temp->__toString();
+                            }
+                        }else{
+                            $finalData[$key] = null;
+                        }
+                        continue;
+                    }
                     $finalData[$key] = $datum;
                 }
             }
         }else{
-            foreach ($this->properties as $key => $property){
-                if(isset($this->{$key})){
-                    if($property !== $this->{$key}){
-                        $finalData[$key] = $this->{$key};
+            foreach ($this->properties as $key => $propertyVal){
+                $temp = new \ReflectionProperty(static::class,$key);
+                if($temp->isInitialized($this)){
+                    if($this->{$key} instanceof Json){
+                        $compare = $this->{$key}->jsonSerialize();
+                        if($propertyVal !== $compare){
+                            $finalData[$key] = $this->{$key}->__toString();
+                        }
+                    }else{
+                        $compare = $this->{$key};
+                        if($propertyVal !== $compare){
+                            $finalData[$key] = $compare;
+                        }
                     }
                 }
             }
         }
+
 
         if(!empty($this->fields['fields'])){
             $fields = $this->fields['fields'];
@@ -325,8 +359,17 @@ abstract class Entity implements \JsonSerializable
             }
         }
 
+
         if(empty($finalData)){
             return 0;
+        }
+
+
+        $jsonList = array_keys($ref->getAllPropertyConvertJson());
+        foreach ($jsonList as $key){
+            if(isset($finalData[$key]) && $finalData[$key] instanceof Json){
+                $finalData[$key] = $finalData[$key]->__toString();
+            }
         }
 
         $query = new QueryBuilder();
@@ -388,7 +431,11 @@ abstract class Entity implements \JsonSerializable
         $temp = [];
         foreach ($this->properties as $key => $property){
             if(isset($this->{$key})){
-                $temp[$key] = $this->{$key};
+                if($this->{$key} instanceof Json){
+                    $temp[$key] = $this->{$key}->jsonSerialize();
+                }else{
+                    $temp[$key] = $this->{$key};
+                }
             }else{
                 $temp[$key] = null;
             }
