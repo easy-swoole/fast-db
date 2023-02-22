@@ -2,7 +2,7 @@
 
 namespace EasySwoole\FastDb\Attributes;
 
-use EasySwoole\FastDb\AbstractInterface\Json;
+use EasySwoole\FastDb\Attributes\Beans\Json;
 use EasySwoole\FastDb\Exception\RuntimeError;
 
 #[\Attribute(\Attribute::TARGET_PROPERTY)]

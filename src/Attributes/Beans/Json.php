@@ -1,6 +1,6 @@
 <?php
 
-namespace EasySwoole\FastDb\AbstractInterface;
+namespace EasySwoole\FastDb\Attributes\Beans;
 
 class Json implements \JsonSerializable
 {

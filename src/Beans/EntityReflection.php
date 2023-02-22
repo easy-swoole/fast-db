@@ -8,6 +8,7 @@ use EasySwoole\FastDb\Attributes\Hook\OnInitialize;
 use EasySwoole\FastDb\Attributes\Hook\OnInsert;
 use EasySwoole\FastDb\Attributes\Hook\OnToArray;
 use EasySwoole\FastDb\Attributes\Hook\OnUpdate;
+use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Entity;
 
 class EntityReflection
@@ -32,6 +33,14 @@ class EntityReflection
     public function getProperties(): array
     {
         return $this->properties;
+    }
+
+    function getProperty(string $name):?Property
+    {
+        if(isset($this->properties[$name])){
+            return $this->properties[$name];
+        }
+        return null;
     }
 
     /**
@@ -74,7 +83,7 @@ class EntityReflection
         $this->methodRelates = $methodRelates;
     }
 
-    function addProperty(string $name,mixed $value):EntityReflection
+    function addProperty(string $name,Property $value):EntityReflection
     {
         $this->properties[$name] = $value;
         return $this;

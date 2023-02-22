@@ -43,7 +43,7 @@ class ReflectionCache
                 $temp = new OnDelete(...$temp[0]->getArguments());
                 $return->onDelete($temp);
             }catch (\Throwable $throwable){
-                $msg = "OnDelete() attribute parse error in class {$entityClass} , strace info :{$throwable->getMessage()}";
+                $msg = "OnDelete() attribute parse error in class {$entityClass}";
                 throw new RuntimeError($msg);
             }
         }
@@ -54,7 +54,7 @@ class ReflectionCache
                 $temp = new OnInitialize(...$temp[0]->getArguments());
                 $return->onInitialize($temp);
             }catch (\Throwable $throwable){
-                $msg = "OnInitialize() attribute parse error in class {$entityClass} , strace info :{$throwable->getMessage()}";
+                $msg = "OnInitialize() attribute parse error in class {$entityClass}";
                 throw new RuntimeError($msg);
             }
         }
@@ -65,7 +65,7 @@ class ReflectionCache
                 $temp = new OnInsert(...$temp[0]->getArguments());
                 $return->onInsert($temp);
             }catch (\Throwable $throwable){
-                $msg = "OnInsert() attribute parse error in class {$entityClass} , strace info :{$throwable->getMessage()}";
+                $msg = "OnInsert() attribute parse error in class {$entityClass}";
                 throw new RuntimeError($msg);
             }
         }
@@ -76,7 +76,7 @@ class ReflectionCache
                 $temp = new OnToArray(...$temp[0]->getArguments());
                 $return->onToArray($temp);
             }catch (\Throwable $throwable){
-                $msg = "OnToArray() attribute parse error in class {$entityClass} , strace info :{$throwable->getMessage()}";
+                $msg = "OnToArray() attribute parse error in class {$entityClass}";
                 throw new RuntimeError($msg);
             }
         }
@@ -87,7 +87,7 @@ class ReflectionCache
                 $temp = new OnUpdate(...$temp[0]->getArguments());
                 $return->onUpdate($temp);
             }catch (\Throwable $throwable){
-                $msg = "OnUpdate() attribute parse error in class {$entityClass} , strace info :{$throwable->getMessage()}";
+                $msg = "OnUpdate() attribute parse error in class {$entityClass}";
                 throw new RuntimeError($msg);
             }
         }
@@ -98,7 +98,14 @@ class ReflectionCache
             if(!empty($temp)){
                 $temp = $temp[0];
                 $propertyInstance = new Property(...$temp->getArguments());
-                $return->addProperty($property->name,$property->getDefaultValue());
+                /** @var \ReflectionNamedType $types */
+                $types = $property->getType();
+                if($types){
+                    $propertyInstance->setAllowNull($types->allowsNull());
+                }
+                $propertyInstance->setDefaultValue($property->getDefaultValue());
+
+                $return->addProperty($property->name,$propertyInstance);
                 if($propertyInstance->isPrimaryKey){
                     if($return->getPrimaryKey() == null){
                         $return->setPrimaryKey($property->name);
@@ -106,13 +113,17 @@ class ReflectionCache
                         throw new RuntimeError("can not redefine primary key in {$entityClass}");
                     }
                 }
-            }
 
-            $temp = $property->getAttributes(ConvertJson::class);
-            if(!empty($temp)){
-                $temp = $temp[0];
-                $jsonInstance = new ConvertJson(...$temp->getArguments());
-                $return->addPropertyConvertJson($property->name,$jsonInstance);
+                $temp = $property->getAttributes(ConvertJson::class);
+                if(!empty($temp)){
+                    $temp = $temp[0];
+                    try{
+                        $jsonInstance = new ConvertJson(...$temp->getArguments());
+                        $return->addPropertyConvertJson($property->name,$jsonInstance);
+                    }catch (\Throwable $throwable){
+                        throw new RuntimeError("{$throwable->getMessage()} in {$entityClass}");
+                    }
+                }
             }
         }
 

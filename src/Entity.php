@@ -2,6 +2,9 @@
 
 namespace EasySwoole\FastDb;
 
+use EasySwoole\FastDb\Attributes\Beans\Json;
+use EasySwoole\FastDb\Attributes\ConvertJson;
+use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Beans\ListResult;
 use EasySwoole\FastDb\Beans\Page;
@@ -31,9 +34,17 @@ abstract class Entity implements \JsonSerializable
 
     final function __construct(?array $data = null,bool $realData = false){
         $info = ReflectionCache::getInstance()->entityReflection(static::class);
-        $this->properties = $info->getProperties();
+        /**
+         * @var  $key
+         * @var Property $property
+         */
+        foreach ($info->getProperties() as $key => $property){
+            $this->properties[$key] = $property->getDefaultValue();
+        }
+        //避免出现  property must not be accessed before initialization
         $this->primaryKey = $info->getPrimaryKey();
         $this->propertyRelates = $info->getMethodRelates();
+        $this->convertJson();
         if(!empty($data)){
             $this->data($data,$realData);
         }
@@ -46,15 +57,61 @@ abstract class Entity implements \JsonSerializable
 
     function data(array $data,bool $realData = false):Entity
     {
+        $ref = ReflectionCache::getInstance()->entityReflection(static::class);
         foreach ($this->properties as $property => $val){
             if(array_key_exists($property,$data)){
-                $this->{$property} = $data[$property];
+                $this->convertJson($property,$data[$property]);
                 if($realData){
                     $this->properties[$property] = $data[$property];
                 }
             }
         }
         return $this;
+    }
+
+    private function convertJson(?string $property = null,$propertyValue = null)
+    {
+        $ref = ReflectionCache::getInstance()->entityReflection(static::class);
+        $jsonList = [];
+        if($property){
+            $ret = $ref->getPropertyConvertJson($property);
+            if($ret){
+                $jsonList[$property] = $ret;
+            }
+        }else{
+            $jsonList = $ref->getAllPropertyConvertJson();
+        }
+
+        /**
+         * @var  $key
+         * @var ConvertJson $json
+         */
+        foreach ($jsonList as $key => $json){
+            if(isset($this->{$key})){
+                $propertyValue = $this->{$key};
+            }
+            $allowNull = $ref->getProperty($key)->isAllowNull();
+
+            if(empty($propertyValue) && $allowNull){
+                $this->{$key} = null;
+                continue;
+            }
+            /** @var Json $jsonInstance */
+            $jsonInstance = new $json->className();
+            $this->{$key} = $jsonInstance;
+            $class = static::class;
+            if(is_array($propertyValue)){
+                $jsonInstance->restore($propertyValue);
+            }else if(is_string($propertyValue)){
+                $json = json_decode($propertyValue,true);
+                if(!is_array($json)){
+                    throw new RuntimeError("data for property {$key} at class {$class} not a json format");
+                }
+                $jsonInstance->restore($json);
+            }else if($propertyValue !== null){
+                throw new RuntimeError("data for property {$key} at class {$class} not a json format");
+            }
+        }
     }
 
     function whereCall(?callable $call):static
