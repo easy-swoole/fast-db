@@ -3,6 +3,7 @@
 namespace EasySwoole\FastDb\Utility;
 
 use EasySwoole\Component\Singleton;
+use EasySwoole\FastDb\Attributes\ConvertJson;
 use EasySwoole\FastDb\Attributes\Hook\OnDelete;
 use EasySwoole\FastDb\Attributes\Hook\OnInitialize;
 use EasySwoole\FastDb\Attributes\Hook\OnInsert;
@@ -105,6 +106,13 @@ class ReflectionCache
                         throw new RuntimeError("can not redefine primary key in {$entityClass}");
                     }
                 }
+            }
+
+            $temp = $property->getAttributes(ConvertJson::class);
+            if(!empty($temp)){
+                $temp = $temp[0];
+                $jsonInstance = new ConvertJson(...$temp->getArguments());
+                $return->addPropertyConvertJson($property->name,$jsonInstance);
             }
         }
 

@@ -2,6 +2,7 @@
 
 namespace EasySwoole\FastDb\Beans;
 
+use EasySwoole\FastDb\Attributes\ConvertJson;
 use EasySwoole\FastDb\Attributes\Hook\OnDelete;
 use EasySwoole\FastDb\Attributes\Hook\OnInitialize;
 use EasySwoole\FastDb\Attributes\Hook\OnInsert;
@@ -18,9 +19,12 @@ class EntityReflection
     private ?OnUpdate $onUpdate = null;
 
     private array $properties = [];
-    private ?string $primaryKey = null;
 
     private array $methodRelates = [];
+
+    private array $propertyConvertJson = [];
+
+    private ?string $primaryKey = null;
 
     /**
      * @return array
@@ -74,6 +78,25 @@ class EntityReflection
     {
         $this->properties[$name] = $value;
         return $this;
+    }
+
+    function addPropertyConvertJson(string $name,ConvertJson $json):EntityReflection
+    {
+        $this->propertyConvertJson[$name] = $json;
+        return $this;
+    }
+
+    function getPropertyConvertJson(string $name):?ConvertJson
+    {
+        if(isset($this->propertyConvertJson[$name])){
+            return $this->propertyConvertJson[$name];
+        }
+        return null;
+    }
+
+    function getAllPropertyConvertJson():array
+    {
+        return $this->propertyConvertJson;
     }
 
     function addRelate(string $name,mixed $value):EntityReflection
