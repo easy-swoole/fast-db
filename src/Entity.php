@@ -245,7 +245,7 @@ abstract class Entity implements \JsonSerializable
         $whereCall = $this->whereCall;
         while (true){
             $this->fields = $cache;
-            $list = $this->page($page,false,$pageSize)->all($whereCall,$tableName);
+            $list = $this->page($page,false,$pageSize)->all($tableName);
             $this->whereCall = $whereCall;
             foreach ($list as $item){
                 call_user_func($func,$item);
