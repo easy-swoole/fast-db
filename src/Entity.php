@@ -312,10 +312,12 @@ abstract class Entity implements \JsonSerializable
                 $query = new QueryBuilder();
                 $query->where($this->primaryKey,$this->{$this->primaryKey})->getOne($this->tableName());
                 $info = FastDb::getInstance()->query($query);
-                $this->data($info->getResult()[0]);
+                $this->data($info->getResult()[0],true);
+            }else{
+                //同步properties
+                $this->data($data,true);
             }
-            //同步properties;
-            $this->properties = $this->toArray();
+
             return true;
         }else{
             return false;
