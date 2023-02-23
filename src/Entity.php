@@ -510,6 +510,8 @@ abstract class Entity implements \JsonSerializable
             $temp = $fList;
         }
 
+        $this->fields = null;
+
         if(!$filterNull){
             return $temp;
         }
