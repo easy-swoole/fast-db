@@ -511,7 +511,7 @@ abstract class Entity implements \JsonSerializable
         return $temp;
     }
 
-    function sum(string|array $cols)
+    function sum(string|array $cols):array
     {
         if(!is_array($cols)){
             $cols = [$cols];
@@ -533,10 +533,14 @@ abstract class Entity implements \JsonSerializable
         $query->fields($str);
         $query->get($this->tableName());
 
-        return FastDb::getInstance()->query($query)->getResult()[0];
+        $ret = FastDb::getInstance()->query($query)->getResult();
+        if(!empty($ret)){
+            return FastDb::getInstance()->query($query)->getResult()[0]['count'];
+        }
+        return [];
     }
 
-    function count()
+    function count():int
     {
         $query = new QueryBuilder();
         if(is_callable($this->whereCall)){
@@ -544,7 +548,11 @@ abstract class Entity implements \JsonSerializable
         }
         $this->whereCall = null;
         $query->get($this->tableName(),null,"count(*) as count");
-        return FastDb::getInstance()->query($query)->getResult()[0]['count'];
+        $ret = FastDb::getInstance()->query($query)->getResult();
+        if(!empty($ret)){
+            return FastDb::getInstance()->query($query)->getResult()[0]['count'];
+        }
+        return 0;
     }
 
 
