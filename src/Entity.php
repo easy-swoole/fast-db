@@ -312,7 +312,7 @@ abstract class Entity implements \JsonSerializable
                 $query = new QueryBuilder();
                 $query->where($this->primaryKey,$this->{$this->primaryKey})->getOne($this->tableName());
                 $info = FastDb::getInstance()->query($query);
-                $this->data($info->getResult());
+                $this->data($info->getResult()[0]);
             }
             //同步properties;
             $this->properties = $this->toArray();
@@ -344,9 +344,6 @@ abstract class Entity implements \JsonSerializable
             if($ret === false){
                 return false;
             }
-        }
-        if($this->whereCall == null && !isset($this->{$this->primaryKey})){
-            throw new RuntimeError("can not update data without primaryKey or whereCall set in ".static::class);
         }
         $finalData = [];
         if($data != null){
@@ -410,10 +407,17 @@ abstract class Entity implements \JsonSerializable
 
         $query = new QueryBuilder();
 
+        if($this->whereCall == null && !isset($this->{$this->primaryKey}) && !isset($finalData[$this->primaryKey])){
+            throw new RuntimeError("can not update data without primaryKey or whereCall set in ".static::class);
+        }
+
         $singleRecord = false;
         //当主键有值的时候，不执行wherecall，因为pk可以确定唯一记录，再wherecall无意义
         if(isset($this->{$this->primaryKey})){
             $query->where($this->primaryKey,$this->{$this->primaryKey});
+            $singleRecord = true;
+        }else if(isset($finalData[$this->primaryKey])){
+            $query->where($this->primaryKey,$finalData[$this->primaryKey]);
             $singleRecord = true;
         }else if(is_callable($this->whereCall)){
             call_user_func($this->whereCall,$query);
@@ -426,7 +430,15 @@ abstract class Entity implements \JsonSerializable
         $affectRows = $queryResult->getConnection()->mysqlClient()->affected_rows;
 
         if($singleRecord && $affectRows == 1){
-            $this->data($finalData,true);
+            $query = new QueryBuilder();
+            if(!isset($this->{$this->primaryKey})){
+                $pkval = $finalData[$this->primaryKey];
+            }else{
+                $pkval = $this->{$this->primaryKey};
+            }
+            $query->where($this->primaryKey,$pkval)->getOne($this->tableName());
+            $info = FastDb::getInstance()->query($query);
+            $this->data($info->getResult()[0]);
         }
         //affect rows num
         return $affectRows;
