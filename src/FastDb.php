@@ -308,4 +308,8 @@ class FastDb
         }
     }
 
+    function isIntransaction(?Connection $connection = null)
+    {
+
+    }
 }
