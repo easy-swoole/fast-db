@@ -308,7 +308,7 @@ class FastDb
         }
     }
 
-    function isIntransaction(?Connection $connection = null)
+    function isInTransaction(?Connection $connection = null)
     {
         $cid = Coroutine::getCid();
         if($connection == null){
