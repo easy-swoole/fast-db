@@ -310,6 +310,14 @@ class FastDb
 
     function isIntransaction(?Connection $connection = null)
     {
+        $cid = Coroutine::getCid();
+        if($connection == null){
+            if(isset($this->transactionContext[$cid][$this->selectConnection])){
+                return true;
+            }
+            return false;
+        }else{
 
+        }
     }
 }
