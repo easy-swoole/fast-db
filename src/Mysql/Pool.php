@@ -19,7 +19,6 @@ class Pool extends AbstractPool
             throw new Exception("connection [{$config->getName()}@{$config->getHost()}]  connect error: ".$info);
         }else{
             //用于AutoPing
-            $con->__lastPingTime = 0;
             return $con;
         }
     }
@@ -49,10 +48,11 @@ class Pool extends AbstractPool
         /**
          *  auto ping是为了保证在 idleMaxTime周期内的可用性 （如果超出了周期还没使用，则代表现在进程空闲，可以先回收）
          */
-        if($config->getAutoPing() > 0 && (time() - $item->__lastPingTime > $config->getAutoPing())){
+        if($config->getAutoPing() > 0 && (time() - $item->lastPingTime > $config->getAutoPing())){
             try{
                 //执行一个sql触发活跃信息
                 $item->rawQuery('select 1');
+                $item->lastPingTime = time();
                 return true;
             }catch (\Throwable $throwable){
                 //异常说明该链接出错了，return false 进行回收

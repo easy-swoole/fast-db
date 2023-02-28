@@ -8,6 +8,10 @@ use EasySwoole\Pool\ObjectInterface;
 class Connection extends Client implements ObjectInterface
 {
 
+    public bool $isInTransaction = false;
+
+    public int $lastPingTime = 0;
+
     function gc()
     {
         try {
