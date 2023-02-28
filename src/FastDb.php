@@ -122,21 +122,16 @@ class FastDb
      * @throws RuntimeError
      * @throws Exception
      */
-    function begin(float $timeout = 3.0): bool
+    function begin(?Connection $client = null,float $timeout = 3.0): bool
     {
-        $cid = Coroutine::getCid();
-        if(!isset($this->transactionContext[$cid])){
-            $this->transactionContext[$cid] = [];
-            Coroutine::defer(function ()use($cid){
-                unset($this->transactionContext[$cid]);
-            });
+        if(!$client){
+            $client = $this->getClient();
         }
-        if(isset($this->transactionContext[$cid][$this->selectConnection])){
+        if($client->isInTransaction){
             return true;
         }
 
         $t = microtime(true);
-        $client = $this->getClient();
         $ret = $client->mysqlClient()->begin($timeout);
         $return = new QueryResult($t);
         $return->setResult($ret);
@@ -147,21 +142,26 @@ class FastDb
         }
 
         if($ret === true){
-            $this->transactionContext[$cid][$this->selectConnection] = true;
+            $client->isInTransaction = true;
             return true;
         }
         return false;
     }
 
-    function commit(float $timeout = 3.0):bool
+    function commit(?Connection $client = null,float $timeout = 3.0):bool
     {
-        $cid = Coroutine::getCid();
-        if(!isset($this->transactionContext[$cid][$this->selectConnection])){
+        if(!$client){
+            $client = FastDb::getInstance()->currentConnection();
+        }
+        if(!$client){
+            return true;
+        }
+
+        if(!$client->isInTransaction){
             return true;
         }
 
         $t = microtime(true);
-        $client = $this->getClient();
         $ret = $client->mysqlClient()->commit($timeout);
         $return = new QueryResult($t);
         $return->setResult($ret);
@@ -172,21 +172,26 @@ class FastDb
         }
 
         if($ret === true){
-            unset($this->transactionContext[$cid][$this->selectConnection]);
+            $client->isInTransaction = false;
             return true;
         }
         return false;
     }
 
-    function rollback(float $timeout = 3.0):bool
+    function rollback(?Connection $client = null,float $timeout = 3.0):bool
     {
-        $cid = Coroutine::getCid();
-        if(!isset($this->transactionContext[$cid][$this->selectConnection])){
+        if(!$client){
+            $client = FastDb::getInstance()->currentConnection();
+        }
+        if(!$client){
+            return true;
+        }
+
+        if(!$client->isInTransaction){
             return true;
         }
 
         $t = microtime(true);
-        $client = $this->getClient();
         $ret = $client->mysqlClient()->rollback($timeout);
         $return = new QueryResult($t);
         $return->setResult($ret);
@@ -197,7 +202,7 @@ class FastDb
         }
 
         if($ret === true){
-            unset($this->transactionContext[$cid][$this->selectConnection]);
+            $client->isInTransaction = false;
             return true;
         }
         return false;
@@ -308,16 +313,15 @@ class FastDb
         }
     }
 
-    function isInTransaction(?Connection $connection = null)
+    function isInTransaction(?Connection $connection = null):bool
     {
         $cid = Coroutine::getCid();
         if($connection == null){
-            if(isset($this->transactionContext[$cid][$this->selectConnection])){
-                return true;
-            }
-            return false;
-        }else{
-
+            $connection = FastDb::getInstance()->currentConnection();
         }
+        if($connection){
+            return $connection->isInTransaction;
+        }
+        return false;
     }
 }
