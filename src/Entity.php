@@ -78,15 +78,16 @@ abstract class Entity implements \JsonSerializable
     {
         foreach ($this->properties as $property => $val){
             if(array_key_exists($property,$data)){
-                $ret = $this->convertJson($property,$data[$property]);
+                $val = $data[$property];
+                $ret = $this->convertJson($property,$val);
                 if(!$ret){
-                    $this->{$property} = $data[$property];
+                    $this->{$property} = $val;
                 }
                 if($realData){
                     if($ret instanceof Json){
                         $this->properties[$property] = $ret->jsonSerialize();
                     }else{
-                        $this->properties[$property] = $data[$property];
+                        $this->properties[$property] = $val;
                     }
                 }
             }
