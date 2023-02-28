@@ -21,9 +21,6 @@ class FastDb
     protected array $configs = [];
     protected array $pools = [];
     protected array $currentConnection = [];
-
-    protected array $transactionContext = [];
-
     protected string $selectConnection = "default";
 
     protected $onQuery = null;
@@ -92,27 +89,21 @@ class FastDb
      */
     function invoke(callable $call)
     {
-        $cid = Coroutine::getCid();
-        if(isset($this->transactionContext[$cid])){
-            /** 在开启事务后又执行invoke可能会导致事务丢失，因为invoke结束后会立即回收链接，
-             * 如果之前有声明事务，会被丢弃 ，请在invoke内声明事务
-             */
-            throw new RuntimeError("invoke() after begin() transaction is not allow");
-        }
         try{
-            $client = $this->getClient();
+            $client = $this->getClient(false);
             return call_user_func($call,$client);
         }catch (\Throwable $throwable){
             throw $throwable;
         } finally {
-            foreach ($this->currentConnection[$cid] as $selectDb => $connection){
-                /** @var Pool $pool */
+            if($client){
+                $selectDb = $client->connectionName;
                 $pool = $this->pools[$selectDb];
                 try {
-                    $pool->recycleObj($connection);
+                    $pool->recycleObj($client);
                 }catch (\Throwable $throwable){
                     trigger_error($throwable->getMessage());
                 }
+                $cid = Coroutine::getCid();
                 unset($this->currentConnection[$cid][$selectDb]);
             }
         }
@@ -262,7 +253,7 @@ class FastDb
      * @throws RuntimeError
      * @throws Exception
      */
-    private function getClient():Connection
+    private function getClient(bool $autoRecycle = true):Connection
     {
         $cid = Coroutine::getCid();
         $name = $this->selectConnection;
@@ -282,7 +273,23 @@ class FastDb
             /** @var Pool $pool */
             $pool = $this->pools[$name];
         }
-        $this->currentConnection[$cid][$name] = $pool->defer();
+        try{
+            if($autoRecycle){
+                $obj = $pool->defer();
+            }else{
+                $obj = $pool->getObj();
+            }
+        }catch (\Throwable $throwable){
+            throw new RuntimeError("connection {$name} error case ".$throwable->getMessage());
+        }
+
+        if($obj == null){
+            throw new RuntimeError("connection {$name} error case pool empty");
+        }
+        /** @var Connection $obj */
+        $obj->connectionName = $name;
+        $this->currentConnection[$cid][$name] = $obj;
+
         Coroutine::defer(function ()use($cid,$name){
            unset($this->currentConnection[$cid][$name]);
         });

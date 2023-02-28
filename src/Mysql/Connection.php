@@ -7,7 +7,7 @@ use EasySwoole\Pool\ObjectInterface;
 
 class Connection extends Client implements ObjectInterface
 {
-
+    public string $connectionName;
     public bool $isInTransaction = false;
 
     public int $lastPingTime = 0;
