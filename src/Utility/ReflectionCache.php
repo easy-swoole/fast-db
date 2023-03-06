@@ -83,6 +83,9 @@ class ReflectionCache
 
         $list = $ref->getProperties();
         foreach ($list as $property){
+            if($property->isStatic()){
+                continue;
+            }
             $temp = $property->getAttributes(Property::class);
             if(!empty($temp)){
                 $temp = $temp[0];
