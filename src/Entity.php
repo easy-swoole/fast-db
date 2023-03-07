@@ -206,6 +206,7 @@ abstract class Entity implements \JsonSerializable
             $returnAsArray = $this->fields['returnAsArray'];
         }
         $this->fields = null;
+        $this->page = null;
 
         $query->getOne($this->tableName(),$fields);
 
