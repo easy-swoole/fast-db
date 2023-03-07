@@ -12,7 +12,7 @@ class Config extends \EasySwoole\Pool\Config
     protected string $database;
     protected int $port = 3306;
     protected int $timeout = 5;
-    protected string $charset = 'utf8';
+    protected string $charset = 'utf8mb4';
     protected int $autoPing = 5;
 
     protected string $name = "default";
