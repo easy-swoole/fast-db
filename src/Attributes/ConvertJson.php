@@ -2,18 +2,10 @@
 
 namespace EasySwoole\FastDb\Attributes;
 
-use EasySwoole\FastDb\Attributes\Beans\Json;
-use EasySwoole\FastDb\Exception\RuntimeError;
+use EasySwoole\Spl\Attribute\ConvertBean;
 
 #[\Attribute(\Attribute::TARGET_PROPERTY)]
-class ConvertJson
+class ConvertJson extends ConvertBean
 {
-    function __construct(
-        public string $className
-    ){
-        $ref = new \ReflectionClass($this->className);
-        if(!$ref->isSubclassOf(Json::class)){
-            throw new RuntimeError("{$this->className} not subclass of ".Json::class);
-        }
-    }
+
 }
