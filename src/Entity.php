@@ -478,7 +478,9 @@ abstract class Entity implements \JsonSerializable
         }else if(isset($finalData[$this->primaryKey])){
             $query->where($this->primaryKey,$finalData[$this->primaryKey]);
             $singleRecord = true;
-        }else if(is_callable($this->whereCall)){
+        }
+        //update 的whereCall为单独检测执行，用于版本模式update
+        if(is_callable($this->whereCall)){
             call_user_func($this->whereCall,$query);
         }
         $this->whereCall = null;
