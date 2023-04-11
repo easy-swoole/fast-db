@@ -29,8 +29,6 @@ abstract class Entity implements \JsonSerializable
 
     private ?Page $page = null;
 
-    private ?array $orderBy = null;
-
     private $whereCall = null;
 
     final function __construct(?array $data = null,bool $realData = false){
@@ -133,15 +131,6 @@ abstract class Entity implements \JsonSerializable
     function whereCall(?callable $call):static
     {
         $this->whereCall = $call;
-        return $this;
-    }
-
-    function orderBy(string $colName,string  $orderByDirection = "DESC"):static
-    {
-        if(!is_array($this->orderBy)){
-            $this->orderBy = [];
-        }
-        $this->orderBy[$colName] = $orderByDirection;
         return $this;
     }
 
@@ -260,13 +249,6 @@ abstract class Entity implements \JsonSerializable
             $tableName = $this->tableName();
         }
 
-        if(is_array($this->orderBy)){
-            foreach ($this->orderBy as $col => $op){
-                $query->orderBy($col,$op);
-            }
-        }
-        $this->orderBy = null;
-
         $query->get($tableName,null,$fields);
 
         $ret = FastDb::getInstance()->query($query);
@@ -298,12 +280,10 @@ abstract class Entity implements \JsonSerializable
         $page = 1;
         //因为all会重置whereCall
         $whereCall = $this->whereCall;
-        $orderBy = $this->orderBy;
         while (true){
             $this->fields = $cache;
             $list = $this->page($page,false,$pageSize)->all($tableName);
             $this->whereCall = $whereCall;
-            $this->orderBy = $orderBy;
             foreach ($list as $item){
                 call_user_func($func,$item);
             }
@@ -478,9 +458,7 @@ abstract class Entity implements \JsonSerializable
         }else if(isset($finalData[$this->primaryKey])){
             $query->where($this->primaryKey,$finalData[$this->primaryKey]);
             $singleRecord = true;
-        }
-        //update 的whereCall为单独检测执行，用于版本模式update
-        if(is_callable($this->whereCall)){
+        }else if(is_callable($this->whereCall)){
             call_user_func($this->whereCall,$query);
         }
         $this->whereCall = null;
