@@ -405,7 +405,7 @@ abstract class Entity implements \JsonSerializable
             }
         }
         $finalData = [];
-        if($data != null){
+        if(!empty($data)){
             foreach ($data as $key => $datum){
                 if(array_key_exists($key,$this->properties)){
                     if($ref->getPropertyConvertJson($key)){
