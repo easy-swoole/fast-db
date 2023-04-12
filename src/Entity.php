@@ -386,7 +386,7 @@ abstract class Entity implements \JsonSerializable
      * 也就是 (new model())->update(["a"=>null])
      */
 
-    function update(?array $data = null)
+    function update(?array $data = null,bool $reSync = false)
     {
         $ref = ReflectionCache::getInstance()->entityReflection(static::class);
         if($ref->onUpdate()){
@@ -471,7 +471,7 @@ abstract class Entity implements \JsonSerializable
         }
 
         $singleRecord = false;
-        //当主键有值的时候，不执行wherecall，因为pk可以确定唯一记录，再wherecall无意义
+        //当主键有值的时候，pk可以确定唯一记录
         if(isset($this->{$this->primaryKey})){
             $query->where($this->primaryKey,$this->{$this->primaryKey});
             $singleRecord = true;
@@ -490,12 +490,16 @@ abstract class Entity implements \JsonSerializable
         $queryResult = FastDb::getInstance()->query($query);
         $affectRows = $queryResult->getConnection()->mysqlClient()->affected_rows;
 
-        if($singleRecord && $affectRows == 1){
+        if($singleRecord && ($affectRows == 1) && $reSync){
             $query = new QueryBuilder();
-            if(!isset($this->{$this->primaryKey})){
-                $pkval = $finalData[$this->primaryKey];
-            }else{
+            $pkval = null;
+            if(isset($this->{$this->primaryKey})){
                 $pkval = $this->{$this->primaryKey};
+            }else if(isset($finalData[$this->primaryKey])){
+                $pkval = $finalData[$this->primaryKey];
+            }
+            if($pkval === null){
+                throw new RuntimeError("primary key value can not be null where enable reSync after update");
             }
             $query->where($this->primaryKey,$pkval)->getOne($this->tableName());
             $info = FastDb::getInstance()->query($query);
