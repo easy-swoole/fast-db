@@ -42,6 +42,13 @@ class FastDb
             if($index === null){
                 return $this->queryStack[$cid];
             }
+            $data = $this->queryStack[$cid];
+            if($index < 0){
+                $index = count($data) + $index;
+            }
+            if(isset($data[$index])){
+                return $data[$index];
+            }
         }
         return null;
     }
