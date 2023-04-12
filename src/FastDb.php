@@ -3,6 +3,7 @@
 namespace EasySwoole\FastDb;
 
 use EasySwoole\Component\Singleton;
+use EasySwoole\FastDb\Beans\QueryStack;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\Pool;
@@ -24,6 +25,28 @@ class FastDb
     protected string $selectConnection = "default";
 
     protected $onQuery = null;
+    protected bool $enableQueryStack = false;
+
+    protected array $queryStack = [];
+
+    function isEnableQueryStack(bool $bool):static
+    {
+        $this->enableQueryStack = $bool;
+        return $this;
+    }
+
+    function getQueryStack(?int $index = null):null|array|QueryStack
+    {
+        $cid = Coroutine::getCid();
+        if(isset($this->queryStack[$cid])){
+            if($index === null){
+                return $this->queryStack[$cid];
+            }
+        }
+        return null;
+    }
+
+
 
     function addDb(Config $config):static
     {
@@ -128,10 +151,10 @@ class FastDb
         $return->setResult($ret);
         $return->setConnection($client);
         $return->setRawSql("start transaction");
+        $this->logStack($return);
         if(is_callable($this->onQuery)){
             call_user_func($this->onQuery,$return);
         }
-
         if($ret === true){
             $client->isInTransaction = true;
             return true;
@@ -158,6 +181,7 @@ class FastDb
         $return->setResult($ret);
         $return->setRawSql("commit");
         $return->setConnection($client);
+        $this->logStack($return);
         if(is_callable($this->onQuery)){
             call_user_func($this->onQuery,$return);
         }
@@ -188,6 +212,7 @@ class FastDb
         $return->setResult($ret);
         $return->setRawSql("rollback");
         $return->setConnection($client);
+        $this->logStack($return);
         if(is_callable($this->onQuery)){
             call_user_func($this->onQuery,$return);
         }
@@ -222,6 +247,7 @@ class FastDb
         $return->setResult($ret);
         $return->setConnection($client);
         $return->setQueryBuilder(clone $queryBuilder);
+        $this->logStack($return);
         if(is_callable($this->onQuery)){
             call_user_func($this->onQuery,$return);
         }
@@ -242,6 +268,7 @@ class FastDb
         $return->setResult($ret);
         $return->setConnection($client);
         $return->setRawSql($sql);
+        $this->logStack($return);
         if(is_callable($this->onQuery)){
             call_user_func($this->onQuery,$return);
         }
@@ -300,6 +327,7 @@ class FastDb
 
         Coroutine::defer(function ()use($cid,$name){
            unset($this->currentConnection[$cid][$name]);
+           unset( $this->queryStack[$cid]);
         });
         return $this->currentConnection[$cid][$name];
     }
@@ -338,5 +366,22 @@ class FastDb
             return $connection->isInTransaction;
         }
         return false;
+    }
+
+    protected function logStack(QueryResult $result)
+    {
+        if($this->enableQueryStack){
+            $stack = new QueryStack();
+            $stack->connectionName = $this->selectConnection;
+            $stack->endTime = $result->getEndTime();
+            $stack->startTime = $result->getStartTime();
+            $stack->query = $result->getQueryBuilder();
+            $stack->rawQuery = $result->getRawSql();
+            $cid = Coroutine::getCid();
+            if(!isset($this->queryStack[$cid])){
+                $this->queryStack[$cid] = [];
+            }
+            $this->queryStack[$cid][] = $stack;
+        }
     }
 }

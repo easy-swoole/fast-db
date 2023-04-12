@@ -11,9 +11,9 @@ class QueryResult
     protected mixed $result;
     protected Connection $connection;
 
-    protected ?QueryBuilder $queryBuilder;
+    protected ?QueryBuilder $queryBuilder = null;
 
-    protected ?string $rawSql;
+    protected ?string $rawSql = null;
 
     function __construct(float $startTime)
     {
