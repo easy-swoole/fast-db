@@ -661,7 +661,7 @@ abstract class Entity implements \JsonSerializable
         }
 
         $fields = null;
-        $returnAsArray = false;
+        $returnAsArray = null;
         if(!empty($this->fields)){
             $fields = $this->fields['fields'];
             $returnAsArray = $this->fields['returnAsArray'];
@@ -685,7 +685,7 @@ abstract class Entity implements \JsonSerializable
         $ret = FastDb::getInstance()->query($query);
         if(!empty($ret->getResult())){
             $return = $ret->getResult()[0];
-            if($relate->returnAsTargetEntity || (!$returnAsArray)){
+            if($relate->returnAsTargetEntity || ($returnAsArray === false)){
                 $return = new $relate->targetEntity($return);
             }
             if($relate->allowCache){
@@ -718,7 +718,7 @@ abstract class Entity implements \JsonSerializable
         }
 
         $fields = null;
-        $returnAsArray = false;
+        $returnAsArray = null;
         if(!empty($this->fields)){
             $fields = $this->fields['fields'];
             $returnAsArray = $this->fields['returnAsArray'];
@@ -756,7 +756,7 @@ abstract class Entity implements \JsonSerializable
         $this->page = null;
 
         if(!empty($ret->getResult())){
-            if($relate->returnAsTargetEntity || (!$returnAsArray)){
+            if($relate->returnAsTargetEntity || ($returnAsArray === false)){
                 $list = [];
                 foreach ($ret->getResult() as $item){
                     $list[] = new $relate->targetEntity($item);
