@@ -614,7 +614,7 @@ abstract class Entity implements \JsonSerializable
 
         $ret = FastDb::getInstance()->query($query)->getResult();
         if(!empty($ret)){
-            return FastDb::getInstance()->query($query)->getResult()[0]['count'];
+            return FastDb::getInstance()->query($query)->getResult()[0];
         }
         return [];
     }
