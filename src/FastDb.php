@@ -110,10 +110,13 @@ class FastDb
         return $this;
     }
 
-    function selectConnection(string $name):static
+    function selectConnection(?string $name = null):static|string
     {
-        $this->selectConnection = $name;
-        return $this;
+        if($name){
+            $this->selectConnection = $name;
+            return $this;
+        }
+        return $this->selectConnection;
     }
 
     /**

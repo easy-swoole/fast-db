@@ -33,6 +33,8 @@ abstract class Entity implements \JsonSerializable
 
     private $whereCall = null;
 
+    private string $appointConnection;
+
     final function __construct(?array $data = null,bool $realData = false){
         $info = ReflectionCache::getInstance()->entityReflection(static::class);
         /**
@@ -94,6 +96,12 @@ abstract class Entity implements \JsonSerializable
                 }
             }
         }
+        return $this;
+    }
+
+    public function appointConnection(?string $connectionName = null):static
+    {
+        $this->appointConnection = $connectionName;
         return $this;
     }
 
@@ -268,7 +276,9 @@ abstract class Entity implements \JsonSerializable
         $this->orderBy = null;
 
         $query->get($tableName,null,$fields);
-
+        if(!empty($this->appointConnection)){
+            FastDb::getInstance()->selectConnection($this->appointConnection);
+        }
         $ret = FastDb::getInstance()->query($query);
         if($this->page && $this->page->isWithTotalCount()){
             $info = FastDb::getInstance()->rawQuery('SELECT FOUND_ROWS() as count')->getResult();
@@ -299,11 +309,18 @@ abstract class Entity implements \JsonSerializable
         //因为all会重置whereCall
         $whereCall = $this->whereCall;
         $orderBy = $this->orderBy;
+        $appointConnection = $this->appointConnection;
+        if(empty($appointConnection)){
+            $appointConnection = FastDb::getInstance()->selectConnection();
+        }
         while (true){
             $this->fields = $cache;
-            $list = $this->page($page,false,$pageSize)->all($tableName);
+            //如果在call_user_func($func,$item)改变了currentConnection
+            //会导致chunk的时候，连接不准确。
+            $this->appointConnection = $appointConnection;
             $this->whereCall = $whereCall;
             $this->orderBy = $orderBy;
+            $list = $this->page($page,false,$pageSize)->all($tableName);
             foreach ($list as $item){
                 call_user_func($func,$item);
             }
@@ -356,6 +373,11 @@ abstract class Entity implements \JsonSerializable
         }
         
         $query->insert($this->tableName(),$data);
+
+        if(!empty($this->appointConnection)){
+            FastDb::getInstance()->selectConnection($this->appointConnection);
+        }
+
         $ret = FastDb::getInstance()->query($query);
         if($ret->getResult()){
             $id = $ret->getConnection()->mysqlClient()->insert_id;
@@ -486,7 +508,9 @@ abstract class Entity implements \JsonSerializable
         $this->whereCall = null;
 
         $query->update($this->tableName(),$finalData);
-
+        if(!empty($this->appointConnection)){
+            FastDb::getInstance()->selectConnection($this->appointConnection);
+        }
         $queryResult = FastDb::getInstance()->query($query);
         $affectRows = $queryResult->getConnection()->mysqlClient()->affected_rows;
 
@@ -542,7 +566,9 @@ abstract class Entity implements \JsonSerializable
         $this->whereCall = null;
 
         $query->delete($this->tableName());
-
+        if(!empty($this->appointConnection)){
+            FastDb::getInstance()->selectConnection($this->appointConnection);
+        }
         $ret = FastDb::getInstance()->query($query);
         if($ret->getResult()){
             return $ret->getConnection()->mysqlClient()->affected_rows;
@@ -611,7 +637,9 @@ abstract class Entity implements \JsonSerializable
 
         $query->fields($str);
         $query->get($this->tableName());
-
+        if(!empty($this->appointConnection)){
+            FastDb::getInstance()->selectConnection($this->appointConnection);
+        }
         $ret = FastDb::getInstance()->query($query)->getResult();
         if(!empty($ret)){
             return FastDb::getInstance()->query($query)->getResult()[0];
@@ -627,6 +655,9 @@ abstract class Entity implements \JsonSerializable
         }
         $this->whereCall = null;
         $query->get($this->tableName(),null,"count(*) as count");
+        if(!empty($this->appointConnection)){
+            FastDb::getInstance()->selectConnection($this->appointConnection);
+        }
         $ret = FastDb::getInstance()->query($query)->getResult();
         if(!empty($ret)){
             return FastDb::getInstance()->query($query)->getResult()[0]['count'];
@@ -682,6 +713,9 @@ abstract class Entity implements \JsonSerializable
 
         $query->where($relate->targetProperty,$selfValue)
             ->getOne($temp->tableName(),$fields);
+        if(!empty($this->appointConnection)){
+            FastDb::getInstance()->selectConnection($this->appointConnection);
+        }
         $ret = FastDb::getInstance()->query($query);
         if(!empty($ret->getResult())){
             $return = $ret->getResult()[0];
@@ -742,6 +776,9 @@ abstract class Entity implements \JsonSerializable
 
         $query->where($relate->targetProperty,$selfValue)
             ->get($temp->tableName(),null,$fields);
+        if(!empty($this->appointConnection)){
+            FastDb::getInstance()->selectConnection($this->appointConnection);
+        }
         $ret = FastDb::getInstance()->query($query);
 
         $total = null;
