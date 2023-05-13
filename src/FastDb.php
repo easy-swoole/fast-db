@@ -55,8 +55,11 @@ class FastDb
 
 
 
-    function addDb(Config $config):static
+    function addDb(Config $config,?string $name = null):static
     {
+        if($name != null){
+            $config->setName($name);
+        }
         $this->configs[$config->getName()] = $config;
         return $this;
     }
