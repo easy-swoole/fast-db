@@ -33,7 +33,7 @@ abstract class Entity implements \JsonSerializable
 
     private $whereCall = null;
 
-    private string $appointConnection;
+    private ?string $appointConnection = null;
 
     final function __construct(?array $data = null,bool $realData = false){
         $info = ReflectionCache::getInstance()->entityReflection(static::class);
