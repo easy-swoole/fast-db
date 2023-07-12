@@ -4,11 +4,16 @@ namespace EasySwoole\FastDb\Beans;
 
 class Page
 {
-    private int $page = 1;
+    private ?int $page = 1;
     private int $pageSize = 10;
     private bool $withTotalCount = false;
 
-    function __construct(int $page,bool $withTotalCount = false,int $pageSize = 10)
+    /**
+     * @param int|null $page 当为null的时候，标示取limit $pageSize 数量
+     * @param bool $withTotalCount
+     * @param int $pageSize
+     */
+    function __construct(?int $page = null,bool $withTotalCount = false,int $pageSize = 10)
     {
         $this->page = $page;
         $this->pageSize = $pageSize;
@@ -41,8 +46,12 @@ class Page
 
     function toLimitArray():array
     {
-        return [
-            ($this->page - 1)*$this->pageSize,$this->pageSize
-        ];
+        if($this->page >= 1){
+            return [
+                ($this->page - 1)*$this->pageSize,$this->pageSize
+            ];
+        }else{
+            return [$this->pageSize];
+        }
     }
 }
