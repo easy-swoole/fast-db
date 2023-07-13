@@ -198,9 +198,15 @@ abstract class Entity implements \JsonSerializable
         return $this;
     }
 
-    function page(int $page,bool $withTotalCount = false,int $pageSize = 10):static
+    function page(?int $page,bool $withTotalCount = false,int $pageSize = 10):static
     {
         $this->page = new Page($page,$withTotalCount,$pageSize);
+        return $this;
+    }
+
+    function limit(int $num,bool $withTotalCount = false):static
+    {
+        $this->page(null,$withTotalCount,$num);
         return $this;
     }
 
