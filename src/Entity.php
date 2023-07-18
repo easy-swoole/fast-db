@@ -653,20 +653,32 @@ abstract class Entity implements \JsonSerializable
         return [];
     }
 
-    function count():int
+    function count():int|array
     {
         $query = new QueryBuilder();
         if(is_callable($this->whereCall)){
             call_user_func($this->whereCall,$query);
         }
         $this->whereCall = null;
-        $query->get($this->tableName(),null,"count(*) as count");
+        $hasFiled = false;
+        if(!empty($this->fields)){
+            $fields = $this->fields['fields'];
+            $query->get($this->tableName(),null,$fields);
+            $hasFiled = true;
+        }else{
+            $query->get($this->tableName(),null,"count(*) as count");
+        }
+        $this->fields = null;
+
         if(!empty($this->appointConnection)){
             FastDb::getInstance()->selectConnection($this->appointConnection);
         }
         $ret = FastDb::getInstance()->query($query)->getResult();
         if(!empty($ret)){
-            return FastDb::getInstance()->query($query)->getResult()[0]['count'];
+            if(count($ret) == 1 && !$hasFiled){
+                return $ret[0]['count'];
+            }
+            return $ret;
         }
         return 0;
     }
