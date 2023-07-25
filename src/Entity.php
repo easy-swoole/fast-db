@@ -679,8 +679,12 @@ abstract class Entity implements \JsonSerializable
                 return $ret[0]['count'];
             }
             return $ret;
+        }else{
+            if(!$hasFiled){
+                return 0;
+            }
+            return [];
         }
-        return 0;
     }
 
 
