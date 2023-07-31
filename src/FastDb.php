@@ -12,7 +12,6 @@ use EasySwoole\Mysqli\Client;
 use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\Pool\Exception\Exception;
 use Swoole\Coroutine;
-use EasySwoole\Mysqli\Config as MysqliConfig;
 use Swoole\Coroutine\Scheduler;
 
 class FastDb

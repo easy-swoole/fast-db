@@ -17,7 +17,7 @@ class Connection extends Client implements ObjectInterface
         if($this->isInTransaction){
             try {
                 $this->mysqlClient()->rollback();
-            }catch (\Throwable $exception){
+            }catch (\Throwable $throwable){
                 trigger_error($throwable->getMessage());
             }
         }
@@ -30,7 +30,7 @@ class Connection extends Client implements ObjectInterface
         if($this->isInTransaction){
             try {
                 $this->mysqlClient()->rollback();
-            }catch (\Throwable $exception){
+            }catch (\Throwable $throwable){
                 trigger_error($throwable->getMessage());
             }
         }
