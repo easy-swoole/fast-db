@@ -539,7 +539,7 @@ abstract class Entity implements \JsonSerializable
         return $affectRows;
     }
 
-    function delete()
+    function delete(?array $data = null)
     {
         $ref = ReflectionCache::getInstance()->entityReflection(static::class);
         if($ref->onDelete()){
@@ -559,15 +559,22 @@ abstract class Entity implements \JsonSerializable
             }
         }
 
-        if($this->whereCall == null && !isset($this->{$this->primaryKey})){
-            throw new RuntimeError("can not delete data without primaryKey or whereCall set in ".static::class);
+        if($this->whereCall == null && !isset($this->{$this->primaryKey}) && empty($data)){
+            throw new RuntimeError("can not delete data without primaryKey , whereCall function or data limit in ".static::class);
         }
 
         $query = new QueryBuilder();
         if(isset($this->{$this->primaryKey})){
             $query->where($this->primaryKey,$this->{$this->primaryKey});
-        }else if(is_callable($this->whereCall)){
-            call_user_func($this->whereCall,$query);
+        }else {
+            if(is_callable($this->whereCall)){
+                call_user_func($this->whereCall,$query);
+            }
+            if($data){
+                foreach ($data as $k => $v){
+                    $query->where($k,$v);
+                }
+            }
         }
         $this->whereCall = null;
 
