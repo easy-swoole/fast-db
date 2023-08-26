@@ -210,45 +210,52 @@ abstract class Entity implements \JsonSerializable
         return $this;
     }
 
-    function find(?array $data = null):static|array|null
+//    function find(?array $data = null):static|array|null
+//    {
+//        $query = new QueryBuilder();
+//        if($data){
+//            foreach ($data as $key => $item){
+//                $query->where($key,$item);
+//            }
+//        }
+//
+//        if(is_callable($this->whereCall)){
+//            call_user_func($this->whereCall,$query);
+//        }
+//        $this->whereCall = null;
+//
+//        $fields = null;
+//        $returnAsArray = false;
+//        if(!empty($this->fields)){
+//            $fields = $this->fields['fields'];
+//            $returnAsArray = $this->fields['returnAsArray'];
+//        }
+//        $this->fields = null;
+//        $this->page = null;
+//
+//        $query->getOne($this->tableName(),$fields);
+//
+//        $info = FastDb::getInstance()->query($query)->getResult();
+//        if(!empty($info)){
+//            if($returnAsArray){
+//                return $info[0];
+//            }
+//            return new static($info[0],true);
+//        }else{
+//            return null;
+//        }
+//    }
+
+    function all(?string $tableName = null,?array $data = null):ListResult
     {
         $query = new QueryBuilder();
+
         if($data){
             foreach ($data as $key => $item){
                 $query->where($key,$item);
             }
         }
 
-        if(is_callable($this->whereCall)){
-            call_user_func($this->whereCall,$query);
-        }
-        $this->whereCall = null;
-
-        $fields = null;
-        $returnAsArray = false;
-        if(!empty($this->fields)){
-            $fields = $this->fields['fields'];
-            $returnAsArray = $this->fields['returnAsArray'];
-        }
-        $this->fields = null;
-        $this->page = null;
-
-        $query->getOne($this->tableName(),$fields);
-
-        $info = FastDb::getInstance()->query($query)->getResult();
-        if(!empty($info)){
-            if($returnAsArray){
-                return $info[0];
-            }
-            return new static($info[0],true);
-        }else{
-            return null;
-        }
-    }
-
-    function all(?string $tableName = null):ListResult
-    {
-        $query = new QueryBuilder();
         if(is_callable($this->whereCall)){
             call_user_func($this->whereCall,$query);
         }
