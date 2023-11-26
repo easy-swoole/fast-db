@@ -2,6 +2,8 @@
 
 namespace EasySwoole\FastDb\Attributes;
 
+use EasySwoole\FastDb\AbstractInterface\ConvertObjectInterface;
+
 #[\Attribute(\Attribute::TARGET_PROPERTY)]
 class Property
 {
@@ -9,7 +11,8 @@ class Property
     public function __construct(
         public bool $isPrimaryKey = false,
         public bool $allowNull = false,
-        public mixed $defaultValue = null
+        public string|int|float|null|bool $defaultValue = null,
+        public ?ConvertObjectInterface $convertObject = null
     ){}
 
     public function name():string
