@@ -10,6 +10,8 @@ use EasySwoole\FastDb\Utility\ReflectionCache;
 abstract class AbstractEntity
 {
 
+    private $compareData = [];
+
     abstract function tableName():string;
 
 
@@ -24,9 +26,12 @@ abstract class AbstractEntity
         //初始化所有变量和转化
         /** @var Property $property */
         foreach ($entityRef->allProperties() as $property){
+            $this->compareData[$property->name()] = null;
             if($property->defaultValue !== null){
                 $this->{$property->name()} = $property->defaultValue;
+                $this->compareData[$property->name()] = $property->defaultValue;
             }
+            //判断转化
         }
     }
 }
