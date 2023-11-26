@@ -17,6 +17,10 @@ class ReflectionCache
 
     private $entityData = [];
 
+    /**
+     * @throws \ReflectionException
+     * @throws RuntimeError
+     */
     function parseEntity(string $entityClass)
     {
         $ref = new \ReflectionClass($entityClass);
@@ -73,16 +77,19 @@ class ReflectionCache
                 continue;
             }
             $temp = $propertyRef->getAttributes(Property::class);
-            if($temp){
-                $temp = $temp[0];
-                $property = new Property(...$temp->getArguments());
-                $property->__setName($propertyRef->name);
-                if($propertyRef->getType()){
-                    $property->allowNull = $propertyRef->getType()->allowsNull();
-                }
-                $property->defaultValue = $propertyRef->getDefaultValue();
-                $entityReflection->addProperty($property);
+            if(empty($temp)){
+               continue;
             }
+            $temp = $temp[0];
+            $property = new Property(...$temp->getArguments());
+            $property->__setName($propertyRef->name);
+            if($propertyRef->getType()){
+                $property->allowNull = $propertyRef->getType()->allowsNull();
+            }
+            $property->defaultValue = $propertyRef->getDefaultValue();
+            $entityReflection->addProperty($property);
         }
+
+
     }
 }
