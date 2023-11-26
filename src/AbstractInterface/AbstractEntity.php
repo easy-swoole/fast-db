@@ -12,7 +12,7 @@ abstract class AbstractEntity
     abstract function tableName():string;
 
 
-    function __construct()
+    function __construct(?array $data = null)
     {
         $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
 

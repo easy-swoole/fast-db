@@ -21,8 +21,12 @@ class ReflectionCache
      * @throws \ReflectionException
      * @throws RuntimeError
      */
-    function parseEntity(string $entityClass)
+    function parseEntity(string $entityClass):EntityReflection
     {
+        $key = md5($entityClass);
+        if(isset($this->entityData[$key])){
+            return $this->entityData[$key];
+        }
         $ref = new \ReflectionClass($entityClass);
         $entityReflection = new EntityReflection($entityClass);
 
@@ -91,5 +95,8 @@ class ReflectionCache
             $property->defaultValue = $propertyRef->getDefaultValue();
             $entityReflection->addProperty($property);
         }
+
+        $this->entityData[$key] = $entityReflection;
+        return $entityReflection;
     }
 }
