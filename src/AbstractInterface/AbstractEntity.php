@@ -41,7 +41,7 @@ abstract class AbstractEntity
                     $this->compareData[$property->name()] = $property->defaultValue;
                 }
             }else{
-                if($property->defaultValue !== null || $property->allowNull){
+                if(($property->defaultValue !== null) || $property->allowNull){
                     $this->{$property->name()} = $property->defaultValue;
                 }
                 $this->compareData[$property->name()] = $property->defaultValue;
