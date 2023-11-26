@@ -84,12 +84,12 @@ class ReflectionCache
             $property = new Property(...$temp->getArguments());
             $property->__setName($propertyRef->name);
             if($propertyRef->getType()){
-                $property->allowNull = $propertyRef->getType()->allowsNull();
+                if($propertyRef->getType()->allowsNull()){
+                    $property->allowNull = true;
+                }
             }
             $property->defaultValue = $propertyRef->getDefaultValue();
             $entityReflection->addProperty($property);
         }
-
-
     }
 }
