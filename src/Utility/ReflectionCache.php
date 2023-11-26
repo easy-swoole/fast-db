@@ -92,7 +92,10 @@ class ReflectionCache
                     $property->allowNull = true;
                 }
             }
-            $property->defaultValue = $propertyRef->getDefaultValue();
+            if($propertyRef->getDefaultValue() !== null){
+                $property->defaultValue = $propertyRef->getDefaultValue();
+            }
+
             $entityReflection->addProperty($property);
         }
 
