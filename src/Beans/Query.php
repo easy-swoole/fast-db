@@ -51,6 +51,12 @@ class Query
         return $this->fields;
     }
 
+    function orderBy($orderByField, $orderbyDirection = "DESC", $customFieldsOrRegExp = null):Query
+    {
+        $this->queryBuilder->orderBy($orderByField, $orderbyDirection, $customFieldsOrRegExp);
+        return $this;
+    }
+
     function where(string $col, mixed $whereValue, $operator = '=', $cond = 'AND'):Query
     {
         $this->queryBuilder->where($col,$whereValue,$operator,$cond);
