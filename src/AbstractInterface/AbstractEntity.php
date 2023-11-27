@@ -15,7 +15,7 @@ abstract class AbstractEntity
 
     private array $compareData = [];
 
-    private ?Query $queryBuilder;
+    private ?Query $queryBuilder = null;
 
     abstract function tableName():string;
 
@@ -205,6 +205,39 @@ abstract class AbstractEntity
             return $ret;
         }
         return $ret['count'];
+    }
+
+    function sum(string|array $cols):int|array
+    {
+        $multiFields = false;
+        if(is_string($cols)){
+            $cols = [$cols];
+        }
+        if(count($cols) > 1){
+            $multiFields = true;
+        }
+        $str = "";
+        while ($item = array_shift($cols)){
+            $str .= "sum(`{$item}`) as {$item}";
+            if(!empty($cols)){
+                $str .= " , ";
+            }
+        }
+        $query = $this->queryLimit()->__getQueryBuilder();
+        $query->get($this->tableName(),null,$str);
+        $ret = FastDb::getInstance()->query($query)->getResult();
+        if(empty($ret)){
+            if($multiFields){
+                return [];
+            }
+            return 0;
+        }
+        $ret = $ret[0];
+        if($multiFields){
+            return $ret;
+        }else{
+            return array_values($ret)[0] ?: 0;
+        }
     }
 
     function queryLimit():Query
