@@ -4,7 +4,9 @@ namespace EasySwoole\FastDb\AbstractInterface;
 
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Beans\EntityReflection;
+use EasySwoole\FastDb\Beans\Query;
 use EasySwoole\FastDb\Exception\Exception;
+use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Utility\ReflectionCache;
 
 abstract class AbstractEntity
@@ -12,13 +14,17 @@ abstract class AbstractEntity
 
     private $compareData = [];
 
+    private $queryBuilder;
+
     abstract function tableName():string;
 
 
-    function __construct(?array $data = null)
+    function __construct(array $data = null)
     {
         $this->init();
-        $this->setData($data,true);
+        if(!empty($data)){
+            $this->setData($data,true);
+        }
     }
 
     private function init()
@@ -77,5 +83,34 @@ abstract class AbstractEntity
         }
     }
 
+    function all()
+    {
+        $query = $this->queryLimit()->__getQueryBuilder();
+        $query->get($this->tableName());
+        $ret = FastDb::getInstance()->query($query)->getResult();
+        $total = null;
+        if(in_array('SQL_CALC_FOUND_ROWS',$query->getLastQueryOptions())){
+            $info = FastDb::getInstance()->rawQuery('SELECT FOUND_ROWS() as count')->getResult();
+            if(isset($info[0]['count'])){
+                $total = $info[0]['count'];
+            }
+        }
+        var_dump($total);
+        return $ret;
+    }
+
+    function queryLimit():Query
+    {
+        if(!$this->queryBuilder){
+            $this->queryBuilder = new Query($this);
+        }
+        return $this->queryBuilder;
+    }
+
+
+    function __destruct()
+    {
+        var_dump("entity des");
+    }
 
 }
