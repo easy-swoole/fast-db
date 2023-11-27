@@ -4,6 +4,7 @@ namespace EasySwoole\FastDb\Mysql;
 
 use EasySwoole\Mysqli\Client;
 use EasySwoole\Pool\ObjectInterface;
+use Swoole\Coroutine\MySQL;
 
 class Connection extends Client implements ObjectInterface
 {
@@ -34,11 +35,14 @@ class Connection extends Client implements ObjectInterface
                 trigger_error($throwable->getMessage());
             }
         }
-        $this->reset();
     }
 
     function beforeUse(): ?bool
     {
-        return $this->mysqlClient()->connected;
+        if($this->mysqlClient() instanceof MySQL){
+            return $this->mysqlClient()->connected;
+        }else{
+            return $this->mysqlClient()->ping();
+        }
     }
 }

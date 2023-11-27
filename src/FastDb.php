@@ -73,25 +73,24 @@ class FastDb
 
         $success = false;
         $error = '';
+        $client = new Client(new \EasySwoole\Mysqli\Config($config->toArray()));
         if(Coroutine::getCid() > 0){
-            $client = new Coroutine\MySQL();
             $ret = $client->connect($config->toArray());
             if($ret){
                 $success = true;
                 $client->close();
             }else{
-                $error = $client->connect_error;
+                $error = $client->mysqlClient()->connect_error;
             }
         }else{
             $scheduler = new Scheduler();
-            $scheduler->add(function ()use($config,&$success,&$error){
-                $client = new Coroutine\MySQL();
-                $ret = $client->connect($config->toArray());
+            $scheduler->add(function ()use($client,&$success,&$error){
+                $ret = $client->connect();
                 if($ret){
                     $success = true;
                     $client->close();
                 }else{
-                    $error = $client->connect_error;
+                    $error = $client->mysqlClient()->connect_error;
                 }
             });;
             $scheduler->start();
@@ -158,7 +157,12 @@ class FastDb
         }
 
         $t = microtime(true);
-        $ret = $client->mysqlClient()->begin($timeout);
+        if($client->mysqlClient() instanceof \mysqli){
+            $ret = $client->mysqlClient()->begin_transaction();
+        }else{
+            $ret = $client->mysqlClient()->begin($timeout);
+        }
+
         $return = new QueryResult($t);
         $return->setResult($ret);
         $return->setConnection($client);

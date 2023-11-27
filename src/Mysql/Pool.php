@@ -41,8 +41,10 @@ class Pool extends AbstractPool
         }
     }
 
+
     protected function itemIntervalCheck($item): bool
     {
+        /** @var Connection $item */
         /** @var \EasySwoole\FastDb\Config $config */
         $config = $this->getConfig();
         /**

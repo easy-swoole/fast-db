@@ -17,6 +17,8 @@ class Config extends \EasySwoole\Pool\Config
 
     protected string $name = "default";
 
+    protected bool $useMysqli = false;
+
     /**
      * @return string
      */
@@ -159,5 +161,15 @@ class Config extends \EasySwoole\Pool\Config
     public function setAutoPing(int $autoPing): void
     {
         $this->autoPing = $autoPing;
+    }
+
+    public function isUseMysqli(): bool
+    {
+        return $this->useMysqli;
+    }
+
+    public function setUseMysqli(bool $useMysqli): void
+    {
+        $this->useMysqli = $useMysqli;
     }
 }

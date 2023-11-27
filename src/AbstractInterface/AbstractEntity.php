@@ -17,7 +17,8 @@ abstract class AbstractEntity
 
     function __construct(?array $data = null)
     {
-        $this->init();;
+        $this->init();
+        $this->setData($data,true);
     }
 
     private function init()
@@ -48,4 +49,33 @@ abstract class AbstractEntity
             }
         }
     }
+
+    function setData(array $data,bool $mergeCompare = false)
+    {
+        $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
+        /** @var Property $property */
+        foreach ($entityRef->allProperties() as $property){
+            $column = $property->name();
+            if(!array_key_exists($column,$data)){
+                continue;
+            }
+            if($property->convertObject){
+                if(!isset($this->{$column})){
+                    $object = clone $property->convertObject;
+                    $this->{$column} = $object;
+                }
+                $this->{$column}->restore($data[$column]);
+                if($mergeCompare){
+                    $this->compareData[$column] = $this->{$column}->toValue();
+                }
+            }else{
+                $this->{$column} = $data[$column];
+                if($mergeCompare){
+                    $this->compareData[$column] = $data[$column];
+                }
+            }
+        }
+    }
+
+
 }
