@@ -96,6 +96,7 @@ abstract class AbstractEntity
         }
 
         $query->get($this->tableName(),null,$fields);
+        var_dump($query->getLastPrepareQuery());
         $ret = FastDb::getInstance()->query($query);
         $total = null;
         if(in_array('SQL_CALC_FOUND_ROWS',$query->getLastQueryOptions())){
@@ -115,7 +116,28 @@ abstract class AbstractEntity
             }
         }
 
+        $this->reset();
+
         return new ListResult($list,$total);
+    }
+
+    function chunk(callable $func,int $chunkSize = 10)
+    {
+        $page = 1;
+        while (true){
+            $this->queryLimit()->page($page,true,$chunkSize);
+            $builder = clone $this->queryBuilder;
+            $list = $this->all()->list();
+            foreach ($list as $item){
+                call_user_func($func,$item);
+            }
+            if(count($list) < $chunkSize){
+                break;
+            }else{
+                $page++;
+                $this->queryBuilder = $builder;
+            }
+        }
     }
 
     function queryLimit():Query
@@ -125,8 +147,6 @@ abstract class AbstractEntity
         }
         return $this->queryBuilder;
     }
-
-
 
 
     private function reset()

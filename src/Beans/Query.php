@@ -79,4 +79,9 @@ class Query
         return $this->queryBuilder;
     }
 
+    function __clone()
+    {
+        //chunk 的时候，复用query builder
+        $this->queryBuilder = clone $this->queryBuilder;
+    }
 }
