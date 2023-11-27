@@ -171,6 +171,40 @@ abstract class AbstractEntity
         return $temp;
     }
 
+
+    function count():int|array
+    {
+        $fields = null;
+        if(!empty($this->queryLimit()->getFields())){
+            $fields = $this->queryLimit()->getFields()['fields'];
+        }
+        $query = $this->queryLimit()->__getQueryBuilder();
+        $hasFiled = false;
+        if(!empty($fields)){
+            $hasFiled = true;
+            $temp = [];
+            foreach ($fields as $field){
+                $temp[] = "count(`{$field}`) as $field";
+            }
+            $fields = $temp;
+            $query->get($this->tableName(),null,$fields);
+        }else{
+            $query->get($this->tableName(),null,'count(*) as count');
+        }
+        $ret = FastDb::getInstance()->query($query)->getResult();
+        if(empty($ret)){
+            if($hasFiled){
+                return [];
+            }
+            return 0;
+        }
+        $ret = $ret[0];
+        if($hasFiled){
+            return $ret;
+        }
+        return $ret['count'];
+    }
+
     function queryLimit():Query
     {
         if(!$this->queryBuilder){
