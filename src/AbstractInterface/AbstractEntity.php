@@ -90,9 +90,9 @@ abstract class AbstractEntity
 
         $fields = null;
         $returnAsArray = false;
-        if(!empty($this->fields)){
-            $fields = $this->fields['fields'];
-            $returnAsArray = $this->fields['returnAsArray'];
+        if(!empty($this->queryLimit()->getFields())){
+            $fields = $this->queryLimit()->getFields()['fields'];
+            $returnAsArray = $this->queryLimit()->getFields()['returnAsArray'];
         }
 
         $query->get($this->tableName(),null,$fields);
