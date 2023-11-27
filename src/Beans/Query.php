@@ -11,6 +11,8 @@ class Query
 
     private ?array $fields = null;
 
+    private ?array $hideFields = null;
+
     public function __construct(
         private AbstractEntity $entity
     ){
@@ -33,17 +35,24 @@ class Query
         return $this;
     }
 
-    function fields(?array $fields,bool $returnAsArray = false):Query
+    function fields(array $fields,bool $returnAsArray = false):Query
     {
-        if($fields == null && (!$returnAsArray)){
-            $this->fields = null;
-        }else{
-            $this->fields = [
-                'fields'=>$fields,
-                'returnAsArray'=>$returnAsArray
-            ];
-        }
+        $this->fields = [
+            'fields'=>$fields,
+            'returnAsArray'=>$returnAsArray
+        ];
         return $this;
+    }
+
+    function hideFields(array $hideFields):Query
+    {
+        $this->hideFields = $hideFields;
+        return $this;
+    }
+
+    function getHideFields():?array
+    {
+        return $this->hideFields;
     }
 
     function getFields():?array

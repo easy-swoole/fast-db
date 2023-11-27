@@ -105,16 +105,24 @@ abstract class AbstractEntity
             }
         }
         $list = [];
+
+        $hideFields = $this->queryLimit()->getHideFields() ?:[];
+
         if($returnAsArray){
             foreach ($ret->getResult() as $item){
+                foreach ($hideFields as $field){
+                    unset($item[$field]);
+                }
                 $list[] = $item;
             }
         }else{
             foreach ($ret->getResult() as $item){
+                foreach ($hideFields as $field){
+                    unset($item[$field]);
+                }
                 $list[] = new static($item);
             }
         }
-
         $this->reset();
 
         return new ListResult($list,$total);
@@ -139,8 +147,9 @@ abstract class AbstractEntity
         }
     }
 
-    function toArray(bool $filterNull = false)
+    function toArray(bool $filterNull = false):array
     {
+        $hideFields = $this->queryLimit()->getHideFields() ?:[];
         $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
         $temp = [];
         /** @var Property $property */
@@ -155,7 +164,9 @@ abstract class AbstractEntity
             if($filterNull && $val === null){
                 continue;
             }
-            $temp[$property->name()] = $val;
+            if(!isset($hideFields[$property->name()])){
+                $temp[$property->name()] = $val;
+            }
         }
         return $temp;
     }
