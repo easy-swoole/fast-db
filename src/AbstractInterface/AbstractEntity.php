@@ -13,9 +13,9 @@ use EasySwoole\FastDb\Utility\ReflectionCache;
 abstract class AbstractEntity
 {
 
-    private $compareData = [];
+    private array $compareData = [];
 
-    private $queryBuilder;
+    private ?Query $queryBuilder;
 
     abstract function tableName():string;
 
@@ -145,6 +145,7 @@ abstract class AbstractEntity
                 $this->queryBuilder = $builder;
             }
         }
+        $this->reset();
     }
 
     function toArray(bool $filterNull = false):array
@@ -192,6 +193,7 @@ abstract class AbstractEntity
             $query->get($this->tableName(),null,'count(*) as count');
         }
         $ret = FastDb::getInstance()->query($query)->getResult();
+        $this->reset();
         if(empty($ret)){
             if($hasFiled){
                 return [];
@@ -214,7 +216,7 @@ abstract class AbstractEntity
     }
 
 
-    private function reset()
+    private function reset():void
     {
         $this->queryBuilder = null;
     }
