@@ -96,7 +96,6 @@ abstract class AbstractEntity
         }
 
         $query->get($this->tableName(),null,$fields);
-        var_dump($query->getLastPrepareQuery());
         $ret = FastDb::getInstance()->query($query);
         $total = null;
         if(in_array('SQL_CALC_FOUND_ROWS',$query->getLastQueryOptions())){
@@ -138,6 +137,27 @@ abstract class AbstractEntity
                 $this->queryBuilder = $builder;
             }
         }
+    }
+
+    function toArray(bool $filterNull = false)
+    {
+        $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
+        $temp = [];
+        /** @var Property $property */
+        foreach ($entityRef->allProperties() as $property){
+            $val = null;
+            if(isset($this->{$property->name()})){
+                $val = $this->{$property->name()};
+            }
+            if($val instanceof ConvertObjectInterface){
+                $val = $val->toValue();
+            }
+            if($filterNull && $val === null){
+                continue;
+            }
+            $temp[$property->name()] = $val;
+        }
+        return $temp;
     }
 
     function queryLimit():Query
