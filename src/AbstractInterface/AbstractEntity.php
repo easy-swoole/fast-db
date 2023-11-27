@@ -4,6 +4,7 @@ namespace EasySwoole\FastDb\AbstractInterface;
 
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Beans\EntityReflection;
+use EasySwoole\FastDb\Beans\ListResult;
 use EasySwoole\FastDb\Beans\Query;
 use EasySwoole\FastDb\Exception\Exception;
 use EasySwoole\FastDb\FastDb;
@@ -83,11 +84,19 @@ abstract class AbstractEntity
         }
     }
 
-    function all()
+    function all():ListResult
     {
         $query = $this->queryLimit()->__getQueryBuilder();
-        $query->get($this->tableName());
-        $ret = FastDb::getInstance()->query($query)->getResult();
+
+        $fields = null;
+        $returnAsArray = false;
+        if(!empty($this->fields)){
+            $fields = $this->fields['fields'];
+            $returnAsArray = $this->fields['returnAsArray'];
+        }
+
+        $query->get($this->tableName(),null,$fields);
+        $ret = FastDb::getInstance()->query($query);
         $total = null;
         if(in_array('SQL_CALC_FOUND_ROWS',$query->getLastQueryOptions())){
             $info = FastDb::getInstance()->rawQuery('SELECT FOUND_ROWS() as count')->getResult();
@@ -95,8 +104,18 @@ abstract class AbstractEntity
                 $total = $info[0]['count'];
             }
         }
-        var_dump($total);
-        return $ret;
+        $list = [];
+        if($returnAsArray){
+            foreach ($ret->getResult() as $item){
+                $list[] = $item;
+            }
+        }else{
+            foreach ($ret->getResult() as $item){
+                $list[] = new static($item);
+            }
+        }
+
+        return new ListResult($list,$total);
     }
 
     function queryLimit():Query
@@ -108,9 +127,11 @@ abstract class AbstractEntity
     }
 
 
-    function __destruct()
+
+
+    private function reset()
     {
-        var_dump("entity des");
+        $this->queryBuilder = null;
     }
 
 }

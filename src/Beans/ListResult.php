@@ -2,6 +2,8 @@
 
 namespace EasySwoole\FastDb\Beans;
 
+use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
+
 class ListResult  implements \Iterator , \JsonSerializable, \Countable
 {
 
@@ -44,6 +46,14 @@ class ListResult  implements \Iterator , \JsonSerializable, \Countable
     function list():array
     {
         return $this->data;
+    }
+
+    function first():array|AbstractEntity|null
+    {
+        if(isset($this->data[0])){
+            return $this->data[0];
+        }
+        return null;
     }
 
     function totalCount():?int

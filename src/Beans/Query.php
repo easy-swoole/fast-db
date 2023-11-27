@@ -8,6 +8,9 @@ use EasySwoole\Mysqli\QueryBuilder;
 class Query
 {
     private QueryBuilder $queryBuilder;
+
+    private ?array $fields = null;
+
     public function __construct(
         private AbstractEntity $entity
     ){
@@ -28,6 +31,24 @@ class Query
             $this->queryBuilder->withTotalCount();
         }
         return $this;
+    }
+
+    function fields(?array $fields,bool $returnAsArray = false):Query
+    {
+        if($fields == null && (!$returnAsArray)){
+            $this->fields = null;
+        }else{
+            $this->fields = [
+                'fields'=>$fields,
+                'returnAsArray'=>$returnAsArray
+            ];
+        }
+        return $this;
+    }
+
+    function getFields():?array
+    {
+        return $this->fields;
     }
 
     function where(string $col, mixed $whereValue, $operator = '=', $cond = 'AND'):Query
