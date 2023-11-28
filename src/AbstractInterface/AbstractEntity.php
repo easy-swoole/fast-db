@@ -159,8 +159,7 @@ abstract class AbstractEntity implements \JsonSerializable
             }
             if($val instanceof ConvertObjectInterface){
                 $val = $val->toValue();
-            }
-            if($filterNull && $val === null){
+            }else if($filterNull && $val === null){
                 continue;
             }
             if(!isset($hideFields[$property->name()])){
