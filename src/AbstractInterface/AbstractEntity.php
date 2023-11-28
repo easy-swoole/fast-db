@@ -255,7 +255,7 @@ abstract class AbstractEntity implements \JsonSerializable
         return $ret->getConnection()->getLastAffectRows() >= 1;
     }
 
-    public static function fastDelete(array|callable $deleteLimit,string $tableName = null):int|null|string
+    public static function fastDelete(array|callable|string $deleteLimit,string $tableName = null):int|null|string
     {
         if(empty($tableName)){
             $tableName = (new static())->tableName();
@@ -265,8 +265,15 @@ abstract class AbstractEntity implements \JsonSerializable
             foreach ($deleteLimit as $key => $item){
                 $query->where($key,$item);
             }
-        }else{
+        }else if(is_callable($deleteLimit)){
             call_user_func($deleteLimit,$query);
+        }else{
+            $pk = ReflectionCache::getInstance()->parseEntity(static::class)->getPrimaryKey();
+            if(empty($pk)){
+                $msg = "entity can not delete record without primary key define";
+                throw new RuntimeError($msg);
+            }
+            $query->where($pk,$deleteLimit);
         }
         $query->delete($tableName);
         $ret = FastDb::getInstance()->query($query);
@@ -305,7 +312,7 @@ abstract class AbstractEntity implements \JsonSerializable
         return $ret->getConnection()->getLastAffectRows() > 0;
     }
 
-    public static function fastUpdate(array|callable $updateLimit,array $data,string $tableName = null):bool|int|string
+    public static function fastUpdate(array|callable|string $updateLimit,array $data,string $tableName = null):bool|int|string
     {
         if(empty($tableName)){
             $tableName = (new static())->tableName();
@@ -315,8 +322,15 @@ abstract class AbstractEntity implements \JsonSerializable
             foreach ($updateLimit as $key => $item){
                 $query->where($key,$item);
             }
-        }else{
+        }else if(is_callable($updateLimit)){
             call_user_func($updateLimit,$query);
+        }else{
+            $pk = ReflectionCache::getInstance()->parseEntity(static::class)->getPrimaryKey();
+            if(empty($pk)){
+                $msg = "entity can not update record without primary key define";
+                throw new RuntimeError($msg);
+            }
+            $query->where($pk,$updateLimit);
         }
         $query->update($tableName,$data);
         $ret = FastDb::getInstance()->query($query);
