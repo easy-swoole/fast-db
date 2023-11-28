@@ -10,6 +10,7 @@ use EasySwoole\FastDb\Exception\Exception;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Utility\ReflectionCache;
+use EasySwoole\Mysqli\QueryBuilder;
 
 abstract class AbstractEntity
 {
@@ -268,9 +269,22 @@ abstract class AbstractEntity
         return $ret->getConnection()->getLastAffectRows() >= 1;
     }
 
-    public static function fastDelete(array|callable $deleteLimit)
+    public static function fastDelete(array|callable $deleteLimit,string $tableName = null):int|null|string
     {
-
+        if(empty($tableName)){
+            $tableName = (new static())->tableName();
+        }
+        $query = new QueryBuilder();
+        if(is_array($deleteLimit)){
+            foreach ($deleteLimit as $key => $item){
+                $query->where($key,$item);
+            }
+        }else{
+            call_user_func($deleteLimit,$query);
+        }
+        $query->delete($tableName);
+        $ret = FastDb::getInstance()->query($query);
+        return $ret->getConnection()->getLastAffectRows();
     }
 
     function update()
