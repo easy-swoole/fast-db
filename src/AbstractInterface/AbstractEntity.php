@@ -12,7 +12,7 @@ use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Utility\ReflectionCache;
 use EasySwoole\Mysqli\QueryBuilder;
 
-abstract class AbstractEntity
+abstract class AbstractEntity implements \JsonSerializable
 {
 
     private array $compareData = [];
@@ -380,5 +380,10 @@ abstract class AbstractEntity
             throw new RuntimeError($msg);
         }
         return $pk;
+    }
+
+    public function jsonSerialize(): mixed
+    {
+        return $this->toArray();
     }
 }
