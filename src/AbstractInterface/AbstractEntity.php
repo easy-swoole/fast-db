@@ -367,17 +367,17 @@ abstract class AbstractEntity implements \JsonSerializable
         $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
         $pk = $entityRef->getPrimaryKey();
         if(empty($pk)){
-            $msg = "can not delete entity without primary key set";
+            $msg = "can not delete or update entity without primary key set";
             throw new RuntimeError($msg);
         }
         if(empty($this->{$pk})){
-            $msg = "can not delete entity without primary key value";
+            $msg = "can not delete or update entity without primary key value";
             throw new RuntimeError($msg);
         }
         return $pk;
     }
 
-    public static function findRecord(callable|array $queryLimit, string $tableName = null):?static
+    public static function findRecord(callable|array|string $queryLimit, string $tableName = null):?static
     {
         if(empty($tableName)){
             $tableName = (new static())->tableName();
@@ -387,8 +387,15 @@ abstract class AbstractEntity implements \JsonSerializable
             foreach ($queryLimit as $key => $item){
                 $query->where($key,$item);
             }
-        }else{
+        }else if(is_callable($query)){
             call_user_func($queryLimit,$query);
+        }else{
+            $pk = ReflectionCache::getInstance()->parseEntity(static::class)->getPrimaryKey();
+            if(empty($pk)){
+                $msg = "entity can not find record without primary key define";
+                throw new RuntimeError($msg);
+            }
+            $query->where($pk,$queryLimit);
         }
         $query->get($tableName,2);
         $ret = FastDb::getInstance()->query($query)->getResult();
@@ -400,6 +407,11 @@ abstract class AbstractEntity implements \JsonSerializable
             return new static($ret[0]);
         }
         return null;
+    }
+
+    protected function relateOne()
+    {
+
     }
 
     public function jsonSerialize(): mixed

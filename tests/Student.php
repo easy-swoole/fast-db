@@ -17,4 +17,10 @@ class Student extends AbstractEntity
     {
         return 'student';
     }
+
+
+    function studentInfo()
+    {
+        
+    }
 }
