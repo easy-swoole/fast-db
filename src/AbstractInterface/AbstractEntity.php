@@ -7,6 +7,7 @@ use EasySwoole\FastDb\Beans\EntityReflection;
 use EasySwoole\FastDb\Beans\ListResult;
 use EasySwoole\FastDb\Beans\Query;
 use EasySwoole\FastDb\Exception\Exception;
+use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Utility\ReflectionCache;
 
@@ -246,6 +247,45 @@ abstract class AbstractEntity
             $this->queryBuilder = new Query($this);
         }
         return $this->queryBuilder;
+    }
+
+    function delete()
+    {
+        $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
+        $pk = $entityRef->getPrimaryKey();
+        if(empty($pk)){
+            $msg = "can not delete entity without primary key set";
+            throw new RuntimeError($msg);
+        }
+        if(empty($this->{$pk})){
+            $msg = "can not delete entity without primary key value";
+            throw new RuntimeError($msg);
+        }
+        $this->queryLimit()->where($pk,$this->{$pk});
+        $query = $this->queryLimit()->__getQueryBuilder();
+        $query->delete($this->tableName());
+        $ret = FastDb::getInstance()->query($query);
+        return $ret->getConnection()->getLastAffectRows() >= 1;
+    }
+
+    public static function fastDelete(array|callable $deleteLimit)
+    {
+
+    }
+
+    function update()
+    {
+
+    }
+
+    public static function fastUpdate(array|callable $deleteLimit,array $data)
+    {
+
+    }
+
+    function insert()
+    {
+
     }
 
 

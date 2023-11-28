@@ -65,6 +65,11 @@ class EntityReflection
         $this->onUpdate = $onUpdate;
     }
 
+    function getPrimaryKey():?string
+    {
+        return $this->primaryKey;
+    }
+
 
     function addProperty(Property $property):void
     {
