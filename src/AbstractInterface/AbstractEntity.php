@@ -382,6 +382,31 @@ abstract class AbstractEntity implements \JsonSerializable
         return $pk;
     }
 
+    public static function findRecord(callable|array $queryLimit, string $tableName = null):?static
+    {
+        if(empty($tableName)){
+            $tableName = (new static())->tableName();
+        }
+        $query = new QueryBuilder();
+        if(is_array($queryLimit)){
+            foreach ($queryLimit as $key => $item){
+                $query->where($key,$item);
+            }
+        }else{
+            call_user_func($queryLimit,$query);
+        }
+        $query->get($tableName,2);
+        $ret = FastDb::getInstance()->query($query)->getResult();
+        if(!empty($ret)){
+            if(count($ret) > 1){
+                $msg = "multi record match with your query limit";
+                throw new RuntimeError($msg);
+            }
+            return new static($ret[0]);
+        }
+        return null;
+    }
+
     public function jsonSerialize(): mixed
     {
         return $this->toArray();
