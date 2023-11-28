@@ -35,7 +35,7 @@ class Query
         return $this;
     }
 
-    function fields(array $fields,bool $returnAsArray = false):Query
+    function fields(?array $fields = null,bool $returnAsArray = false):Query
     {
         $this->fields = [
             'fields'=>$fields,

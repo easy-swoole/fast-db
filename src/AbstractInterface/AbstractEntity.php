@@ -253,15 +253,7 @@ abstract class AbstractEntity
     function delete()
     {
         $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
-        $pk = $entityRef->getPrimaryKey();
-        if(empty($pk)){
-            $msg = "can not delete entity without primary key set";
-            throw new RuntimeError($msg);
-        }
-        if(empty($this->{$pk})){
-            $msg = "can not delete entity without primary key value";
-            throw new RuntimeError($msg);
-        }
+        $pk = $this->primaryKeyCheck();
         $this->queryLimit()->where($pk,$this->{$pk});
         $query = $this->queryLimit()->__getQueryBuilder();
         $query->delete($this->tableName());
@@ -289,7 +281,34 @@ abstract class AbstractEntity
 
     function update()
     {
+        $data = [];
+        foreach ($this->compareData as $key => $compareDatum){
+            $pVal = null;
+            if(isset($this->{$key})){
+                $pVal = $this->{$key};
+            }
+            if($pVal !== $compareDatum){
+                $data[$key] = $pVal;
+            }
+        }
 
+        if(!empty($this->queryLimit()->getFields())){
+            $fields = $this->queryLimit()->getFields()['fields'];
+            if(!empty($fields)){
+                foreach ($fields as $field){
+                    unset($data[$field]);
+                }
+            }
+        }
+        if(empty($data)){
+            return true;
+        }
+        $pk = $this->primaryKeyCheck();
+        $this->queryLimit()->where($pk,$this->{$pk});
+        $query = $this->queryLimit()->__getQueryBuilder();
+        $query->update($this->tableName(),$data);
+        $ret = FastDb::getInstance()->query($query);
+        return $ret->getConnection()->getLastAffectRows() > 0;
     }
 
     public static function fastUpdate(array|callable $deleteLimit,array $data)
@@ -297,9 +316,36 @@ abstract class AbstractEntity
 
     }
 
-    function insert()
+    function insert(array $updateDuplicateCols = null)
     {
-
+        //插入的时候，null值一般无意义，default值在数据库层做。
+        $data = $this->toArray(true);
+        $query = $this->queryLimit()->__getQueryBuilder();
+        if($query){
+            $query->onDuplicate($updateDuplicateCols);
+        }
+        $query->insert($this->tableName(),$data);
+        $ret = FastDb::getInstance()->query($query);
+        $isSuccess = false;
+        //swoole客户端问题 https://github.com/swoole/swoole-src/issues/5202
+        if($ret->getResult()){
+            $isSuccess = true;
+        }else if($ret->getConnection()->getLastAffectRows() >= 1){
+            $isSuccess = true;
+        }else if($ret->getConnection()->getLastInsertId() >= 1){
+            $ref = ReflectionCache::getInstance()->parseEntity(static::class);
+            if($ref->getPrimaryKey()){
+                $this->{$ref->getPrimaryKey()} = $ret->getConnection()->getLastInsertId();
+                $data[$ref->getPrimaryKey()] =  $ret->getConnection()->getLastInsertId();
+            }
+            $isSuccess = true;
+        }else if(!empty($updateDuplicateCols)){
+            return true;
+        }
+        if($isSuccess){
+            $this->setData($data,true);
+        }
+        return $isSuccess;
     }
 
 
@@ -308,4 +354,19 @@ abstract class AbstractEntity
         $this->queryBuilder = null;
     }
 
+
+    private function primaryKeyCheck():string
+    {
+        $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
+        $pk = $entityRef->getPrimaryKey();
+        if(empty($pk)){
+            $msg = "can not delete entity without primary key set";
+            throw new RuntimeError($msg);
+        }
+        if(empty($this->{$pk})){
+            $msg = "can not delete entity without primary key value";
+            throw new RuntimeError($msg);
+        }
+        return $pk;
+    }
 }
