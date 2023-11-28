@@ -252,7 +252,6 @@ abstract class AbstractEntity
 
     function delete()
     {
-        $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
         $pk = $this->primaryKeyCheck();
         $this->queryLimit()->where($pk,$this->{$pk});
         $query = $this->queryLimit()->__getQueryBuilder();
@@ -311,9 +310,22 @@ abstract class AbstractEntity
         return $ret->getConnection()->getLastAffectRows() > 0;
     }
 
-    public static function fastUpdate(array|callable $deleteLimit,array $data)
+    public static function fastUpdate(array|callable $updateLimit,array $data,string $tableName = null):bool|int|string
     {
-
+        if(empty($tableName)){
+            $tableName = (new static())->tableName();
+        }
+        $query = new QueryBuilder();
+        if(is_array($updateLimit)){
+            foreach ($updateLimit as $key => $item){
+                $query->where($key,$item);
+            }
+        }else{
+            call_user_func($updateLimit,$query);
+        }
+        $query->update($tableName,$data);
+        $ret = FastDb::getInstance()->query($query);
+        return $ret->getConnection()->getLastAffectRows();
     }
 
     function insert(array $updateDuplicateCols = null)
