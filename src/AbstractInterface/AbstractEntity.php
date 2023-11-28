@@ -40,10 +40,8 @@ abstract class AbstractEntity implements \JsonSerializable
             if($property->convertObject){
                 //如果不允许为null或者是存在默认值
                 if((!$property->allowNull) || ($property->defaultValue !== null)){
-                    $object = clone $property->convertObject;
-                    if($property->defaultValue !== null){
-                        $object->restore($property->defaultValue);
-                    }
+                    /** @var ConvertObjectInterface $object */
+                    $object = call_user_func([$property->convertObject,'toObject'],$property->defaultValue);
                     $this->{$property->name()} = $object;
                     $this->compareData[$property->name()] = $object->toValue();
                 }else{
@@ -62,25 +60,23 @@ abstract class AbstractEntity implements \JsonSerializable
     function setData(array $data,bool $mergeCompare = false)
     {
         $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
-        /** @var Property $property */
-        foreach ($entityRef->allProperties() as $property){
-            $column = $property->name();
-            if(!array_key_exists($column,$data)){
+        $allProperties = $entityRef->allProperties();
+        foreach ($data as $key => $val){
+            if(!isset($allProperties[$key])){
                 continue;
             }
-            if($property->convertObject){
-                if(!isset($this->{$column})){
-                    $object = clone $property->convertObject;
-                    $this->{$column} = $object;
-                }
-                $this->{$column}->restore($data[$column]);
+            /** @var Property $property */
+            $property = $allProperties[$key];
+            if($property->convertObject && ($val !== null)){
+                $object = call_user_func([$property->convertObject,'toObject'],$val);
+                $this->{$key} = $object;
                 if($mergeCompare){
-                    $this->compareData[$column] = $this->{$column}->toValue();
+                    $this->compareData[$key] = $this->{$key}->toValue();
                 }
             }else{
-                $this->{$column} = $data[$column];
+                $this->{$key} = $val;
                 if($mergeCompare){
-                    $this->compareData[$column] = $data[$column];
+                    $this->compareData[$key] = $val;
                 }
             }
         }

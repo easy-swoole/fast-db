@@ -4,6 +4,6 @@ namespace EasySwoole\FastDb\AbstractInterface;
 
 interface ConvertObjectInterface
 {
-    function restore(mixed $data);
-    function toValue();
+    public static function toObject(mixed $data):object;
+    public function toValue();
 }
