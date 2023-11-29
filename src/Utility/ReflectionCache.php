@@ -3,11 +3,13 @@
 namespace EasySwoole\FastDb\Utility;
 
 use EasySwoole\Component\Singleton;
+use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Attributes\Hook\OnDelete;
 use EasySwoole\FastDb\Attributes\Hook\OnInitialize;
 use EasySwoole\FastDb\Attributes\Hook\OnInsert;
 use EasySwoole\FastDb\Attributes\Hook\OnUpdate;
 use EasySwoole\FastDb\Attributes\Property;
+use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Beans\EntityReflection;
 use EasySwoole\FastDb\Exception\RuntimeError;
 
@@ -28,6 +30,9 @@ class ReflectionCache
             return $this->entityData[$key];
         }
         $ref = new \ReflectionClass($entityClass);
+        if(!$ref->isSubclassOf(AbstractEntity::class)){
+            throw new RuntimeError("{$entityClass} not a subclass of ".AbstractEntity::class);
+        }
         $entityReflection = new EntityReflection($entityClass);
 
         $temp = $ref->getAttributes(OnDelete::class);
@@ -101,5 +106,10 @@ class ReflectionCache
 
         $this->entityData[$key] = $entityReflection;
         return $entityReflection;
+    }
+
+    function cacheRelate(string $class,$method,Relate $relate)
+    {
+
     }
 }

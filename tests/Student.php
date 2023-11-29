@@ -4,6 +4,7 @@ namespace EasySwoole\FastDb\Tests;
 
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Attributes\Property;
+use EasySwoole\FastDb\Attributes\Relate;
 
 class Student extends AbstractEntity
 {
@@ -19,8 +20,11 @@ class Student extends AbstractEntity
     }
 
 
+    #[Relate(
+        targetEntity: StudentInfo::class
+    )]
     function studentInfo()
     {
-        
+        $this->relateOne();
     }
 }

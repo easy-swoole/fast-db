@@ -3,6 +3,7 @@
 namespace EasySwoole\FastDb\AbstractInterface;
 
 use EasySwoole\FastDb\Attributes\Property;
+use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Beans\EntityReflection;
 use EasySwoole\FastDb\Beans\ListResult;
 use EasySwoole\FastDb\Beans\Query;
@@ -257,7 +258,7 @@ abstract class AbstractEntity implements \JsonSerializable
                 return  false;
             }
         }
-        $pk = $this->primaryKeyCheck();
+        $pk = $this->primaryKeyCheck('delete');
         $this->queryLimit()->where($pk,$this->{$pk});
         $query = $this->queryLimit()->__getQueryBuilder();
         $query->delete($this->tableName());
@@ -321,7 +322,7 @@ abstract class AbstractEntity implements \JsonSerializable
         if(empty($data)){
             return true;
         }
-        $pk = $this->primaryKeyCheck();
+        $pk = $this->primaryKeyCheck('update');
         $this->queryLimit()->where($pk,$this->{$pk});
         $query = $this->queryLimit()->__getQueryBuilder();
         $query->update($this->tableName(),$data);
@@ -400,16 +401,16 @@ abstract class AbstractEntity implements \JsonSerializable
     }
 
 
-    private function primaryKeyCheck():string
+    private function primaryKeyCheck(string $op,bool $emptyCheck = true):string
     {
         $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
         $pk = $entityRef->getPrimaryKey();
         if(empty($pk)){
-            $msg = "can not delete or update entity without primary key set";
+            $msg = "can not {$op} entity without primary key set";
             throw new RuntimeError($msg);
         }
-        if(empty($this->{$pk})){
-            $msg = "can not delete or update entity without primary key value";
+        if(empty($this->{$pk}) && $emptyCheck){
+            $msg = "can not {$op} entity without primary key value";
             throw new RuntimeError($msg);
         }
         return $pk;
@@ -447,10 +448,6 @@ abstract class AbstractEntity implements \JsonSerializable
         return null;
     }
 
-    protected function relateOne()
-    {
-
-    }
 
     public function jsonSerialize(): mixed
     {
@@ -468,5 +465,50 @@ abstract class AbstractEntity implements \JsonSerializable
                 throw new RuntimeError("{$callback} no a method of class ".static::class);
             }
         }
+    }
+
+    protected function relateOne()
+    {
+        $relate = $this->parseRelate();
+    }
+
+    private function parseRelate(?Relate $relate = null)
+    {
+        if($relate == null){
+            //解析是否有注释Relate
+            $trace = debug_backtrace(DEBUG_BACKTRACE_PROVIDE_OBJECT,3);
+            $method = $trace[2]['function'];
+            $ref = new \ReflectionClass(static::class);
+            $ret = $ref->getMethod($method)->getAttributes(Relate::class);
+            if(empty($ret)){
+                $msg = "{$method} did not define Relate attribute in ".static::class;
+                throw new RuntimeError($msg);
+            }
+            $relate = new Relate(...$ret[0]->getArguments());
+        }
+        //检查目标对象
+        $check = ReflectionCache::getInstance()->parseEntity($relate->targetEntity);
+        //在没有指定目标和当前属性的情况下，都以自身主键为准。
+        if(empty($relate->selfProperty)){
+            $relate->selfProperty = $this->primaryKeyCheck('relate',false);
+        }else{
+            if(!key_exists($relate->selfProperty,$this->compareData)){
+                $msg = "{$relate->selfProperty} is not a define property in ".static::class;
+                throw new RuntimeError($msg);
+            }
+        }
+        if(empty($relate->targetProperty)){
+            if(empty($check->getPrimaryKey())){
+                $msg = "{$relate->targetEntity} have not define any primary key";
+                throw new RuntimeError($msg);
+            }
+            $relate->targetProperty = $check->getPrimaryKey();
+        }else{
+            if(!key_exists($relate->targetProperty,$check->allProperties())){
+                $msg = "{$relate->selfProperty} is not a define property in {$relate->targetEntity}";
+                throw new RuntimeError($msg);
+            }
+        }
+        return $relate;
     }
 }
