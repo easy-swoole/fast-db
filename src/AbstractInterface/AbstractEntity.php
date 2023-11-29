@@ -55,6 +55,9 @@ abstract class AbstractEntity implements \JsonSerializable
                 $this->compareData[$property->name()] = $property->defaultValue;
             }
         }
+        if($entityRef->getOnInitialize()){
+            $this->callHook($entityRef->getOnInitialize()->callback);
+        }
     }
 
     function setData(array $data,bool $mergeCompare = false)
@@ -247,6 +250,13 @@ abstract class AbstractEntity implements \JsonSerializable
 
     function delete()
     {
+        $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
+        if($entityRef->getOnDelete()){
+            $ret = $this->callHook($entityRef->getOnDelete()->callback);
+            if($ret === false){
+                return  false;
+            }
+        }
         $pk = $this->primaryKeyCheck();
         $this->queryLimit()->where($pk,$this->{$pk});
         $query = $this->queryLimit()->__getQueryBuilder();
@@ -282,6 +292,13 @@ abstract class AbstractEntity implements \JsonSerializable
 
     function update()
     {
+        $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
+        if($entityRef->getOnUpdate()){
+            $ret = $this->callHook($entityRef->getOnUpdate()->callback);
+            if($ret === false){
+                return  false;
+            }
+        }
         $data = [];
         foreach ($this->compareData as $key => $compareDatum){
             $pVal = null;
@@ -339,6 +356,13 @@ abstract class AbstractEntity implements \JsonSerializable
 
     function insert(array $updateDuplicateCols = null)
     {
+        $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
+        if($entityRef->getOnInsert()){
+            $ret = $this->callHook($entityRef->getOnInsert()->callback);
+            if($ret === false){
+                return false;
+            }
+        }
         //插入的时候，null值一般无意义，default值在数据库层做。
         $data = $this->toArray(true);
         $query = $this->queryLimit()->__getQueryBuilder();
@@ -431,5 +455,18 @@ abstract class AbstractEntity implements \JsonSerializable
     public function jsonSerialize(): mixed
     {
         return $this->toArray();
+    }
+
+    protected function callHook(callable|string $callback):mixed
+    {
+        if(is_callable($callback)){
+            return call_user_func($callback,$this);
+        }else{
+            if(method_exists($this,$callback)){
+                return $this->$callback();
+            }else{
+                throw new RuntimeError("{$callback} no a method of class ".static::class);
+            }
+        }
     }
 }
