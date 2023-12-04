@@ -467,9 +467,46 @@ abstract class AbstractEntity implements \JsonSerializable
         }
     }
 
-    protected function relateOne()
+    protected function relateOne(?Relate $relate = null,string $tableName = null)
     {
-        $relate = $this->parseRelate();
+        $relate = $this->parseRelate($relate);
+        /** @var AbstractEntity $temp */
+        $temp = new $relate->targetEntity();
+
+        $query = $this->queryLimit()->__getQueryBuilder();
+        $fields = null;
+        $returnAsArray = false;
+        if(!empty($this->queryLimit()->getFields())){
+            $fields = $this->queryLimit()->getFields()['fields'];
+            $returnAsArray = $this->queryLimit()->getFields()['returnAsArray'];
+        }
+        if(isset($this->{$relate->selfProperty})){
+            $selfValue = $this->{$relate->selfProperty};
+        }else{
+            $selfValue = null;
+        }
+
+        if(empty($tableName)){
+            $tableName = $temp->tableName();
+        }
+
+        $query->where($relate->targetProperty,$selfValue)
+            ->get($tableName,2,$fields);
+
+        $ret = FastDb::getInstance()->query($query)->getResult();
+        if(empty($ret)){
+            return null;
+        }
+        if(count($ret) > 1){
+            $msg = "more than one record hit is no allow in relateOne method";
+            throw new RuntimeError($msg);
+        }
+        if($returnAsArray){
+            return $ret[0];
+        }
+        $temp->setData($ret[0]);
+        return $temp;
+
     }
 
     private function parseRelate(?Relate $relate = null)

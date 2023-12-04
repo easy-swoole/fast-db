@@ -25,6 +25,6 @@ class Student extends AbstractEntity
     )]
     function studentInfo()
     {
-        $this->relateOne();
+        return $this->relateOne();
     }
 }
