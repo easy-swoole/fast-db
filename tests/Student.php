@@ -19,9 +19,9 @@ class Student extends AbstractEntity
         return 'student';
     }
 
-
     #[Relate(
-        targetEntity: StudentInfo::class
+        targetEntity: StudentInfo::class,
+        targetProperty: 'studentId'
     )]
     function studentInfo()
     {

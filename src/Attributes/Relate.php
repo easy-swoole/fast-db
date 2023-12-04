@@ -7,8 +7,7 @@ class Relate
 {
     function __construct(
         public string $targetEntity,
-        public ?string $targetProperty = null,
+        public string $targetProperty,
         public ?string $selfProperty = null,
-        public bool $allowCache = true
     ){}
 }

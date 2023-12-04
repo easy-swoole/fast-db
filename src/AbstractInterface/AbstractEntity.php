@@ -534,17 +534,9 @@ abstract class AbstractEntity implements \JsonSerializable
                 throw new RuntimeError($msg);
             }
         }
-        if(empty($relate->targetProperty)){
-            if(empty($check->getPrimaryKey())){
-                $msg = "{$relate->targetEntity} have not define any primary key";
-                throw new RuntimeError($msg);
-            }
-            $relate->targetProperty = $check->getPrimaryKey();
-        }else{
-            if(!key_exists($relate->targetProperty,$check->allProperties())){
-                $msg = "{$relate->selfProperty} is not a define property in {$relate->targetEntity}";
-                throw new RuntimeError($msg);
-            }
+        if(!key_exists($relate->targetProperty,$check->allProperties())){
+            $msg = "{$relate->selfProperty} is not a define property in {$relate->targetEntity}";
+            throw new RuntimeError($msg);
         }
         return $relate;
     }
