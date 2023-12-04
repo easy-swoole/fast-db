@@ -467,7 +467,7 @@ abstract class AbstractEntity implements \JsonSerializable
         }
     }
 
-    protected function relateOne(?Relate $relate = null,string $tableName = null)
+    protected function relateOne(?Relate $relate = null,string $tableName = null):null|array|AbstractEntity
     {
         $relate = $this->parseRelate($relate);
         /** @var AbstractEntity $temp */

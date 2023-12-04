@@ -27,4 +27,13 @@ class Student extends AbstractEntity
     {
         return $this->relateOne();
     }
+
+    #[Relate(
+        targetEntity: StudentScore::class,
+        targetProperty: "studentId"
+    )]
+    function score()
+    {
+
+    }
 }
