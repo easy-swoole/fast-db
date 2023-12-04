@@ -34,6 +34,6 @@ class Student extends AbstractEntity
     )]
     function score()
     {
-
+        return $this->relateMany();
     }
 }

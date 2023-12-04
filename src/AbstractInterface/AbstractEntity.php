@@ -509,6 +509,51 @@ abstract class AbstractEntity implements \JsonSerializable
 
     }
 
+    protected function relateMany(?Relate $relate = null,string $tableName = null)
+    {
+        $relate = $this->parseRelate($relate);
+        /** @var AbstractEntity $temp */
+        $temp = new $relate->targetEntity();
+
+        $query = $this->queryLimit()->__getQueryBuilder();
+        $fields = null;
+        $returnAsArray = false;
+        if(!empty($this->queryLimit()->getFields())){
+            $fields = $this->queryLimit()->getFields()['fields'];
+            $returnAsArray = $this->queryLimit()->getFields()['returnAsArray'];
+        }
+        if(isset($this->{$relate->selfProperty})){
+            $selfValue = $this->{$relate->selfProperty};
+        }else{
+            $selfValue = null;
+        }
+
+        if(empty($tableName)){
+            $tableName = $temp->tableName();
+        }
+
+        $query->where($relate->targetProperty,$selfValue)
+            ->get($tableName,null,$fields);
+
+        $ret = FastDb::getInstance()->query($query)->getResult();
+        $final = [];
+        foreach ($ret as $item){
+            if($returnAsArray){
+                $final[] = $item;
+            }else{
+                $final[] = new $relate->targetEntity($item);
+            }
+        }
+        $total = null;
+        if(in_array('SQL_CALC_FOUND_ROWS',$query->getLastQueryOptions())){
+            $info = FastDb::getInstance()->rawQuery('SELECT FOUND_ROWS() as count')->getResult();
+            if(isset($info[0]['count'])){
+                $total = $info[0]['count'];
+            }
+        }
+        return new ListResult($final,$total);
+    }
+
     private function parseRelate(?Relate $relate = null)
     {
         if($relate == null){
