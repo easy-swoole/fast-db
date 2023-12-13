@@ -44,8 +44,11 @@ class Query
         return $this;
     }
 
-    function hideFields(array $hideFields):Query
+    function hideFields(array|string $hideFields):Query
     {
+        if(is_string($hideFields)){
+            $hideFields = [$hideFields];
+        }
         $this->hideFields = $hideFields;
         return $this;
     }
