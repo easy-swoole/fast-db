@@ -540,7 +540,6 @@ abstract class AbstractEntity implements \JsonSerializable
 
         $ret = FastDb::getInstance()->query($query)->getResult();
 
-        $this->reset();
         $final = [];
         foreach ($ret as $item){
             if($returnAsArray){
@@ -556,6 +555,7 @@ abstract class AbstractEntity implements \JsonSerializable
                 $total = $info[0]['count'];
             }
         }
+        $this->reset();
         return new ListResult($final,$total);
     }
 
