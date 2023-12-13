@@ -4,10 +4,8 @@ namespace EasySwoole\FastDb\AbstractInterface;
 
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Attributes\Relate;
-use EasySwoole\FastDb\Beans\EntityReflection;
 use EasySwoole\FastDb\Beans\ListResult;
 use EasySwoole\FastDb\Beans\Query;
-use EasySwoole\FastDb\Exception\Exception;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Utility\ReflectionCache;
@@ -170,6 +168,7 @@ abstract class AbstractEntity implements \JsonSerializable
                 $temp[$property->name()] = $val;
             }
         }
+        $this->reset();
         return $temp;
     }
 
@@ -227,6 +226,7 @@ abstract class AbstractEntity implements \JsonSerializable
         $query = $this->queryLimit()->__getQueryBuilder();
         $query->get($this->tableName(),null,$str);
         $ret = FastDb::getInstance()->query($query)->getResult();
+        $this->reset();
         if(empty($ret)){
             if($multiFields){
                 return [];
@@ -262,6 +262,7 @@ abstract class AbstractEntity implements \JsonSerializable
         $this->queryLimit()->where($pk,$this->{$pk});
         $query = $this->queryLimit()->__getQueryBuilder();
         $query->delete($this->tableName());
+        $this->reset();
         $ret = FastDb::getInstance()->query($query);
         return $ret->getConnection()->getLastAffectRows() >= 1;
     }
@@ -327,6 +328,7 @@ abstract class AbstractEntity implements \JsonSerializable
         $query = $this->queryLimit()->__getQueryBuilder();
         $query->update($this->tableName(),$data);
         $ret = FastDb::getInstance()->query($query);
+        $this->reset();
         return $ret->getConnection()->getLastAffectRows() > 0;
     }
 
@@ -494,6 +496,7 @@ abstract class AbstractEntity implements \JsonSerializable
             ->get($tableName,2,$fields);
 
         $ret = FastDb::getInstance()->query($query)->getResult();
+        $this->reset();
         if(empty($ret)){
             return null;
         }
@@ -536,6 +539,8 @@ abstract class AbstractEntity implements \JsonSerializable
             ->get($tableName,null,$fields);
 
         $ret = FastDb::getInstance()->query($query)->getResult();
+
+        $this->reset();
         $final = [];
         foreach ($ret as $item){
             if($returnAsArray){
