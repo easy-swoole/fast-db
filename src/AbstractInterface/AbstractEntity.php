@@ -307,6 +307,9 @@ abstract class AbstractEntity implements \JsonSerializable
             if(isset($this->{$key})){
                 $pVal = $this->{$key};
             }
+            if($pVal instanceof ConvertObjectInterface){
+                $pVal = $pVal->toValue();
+            }
             if($pVal !== $compareDatum){
                 $data[$key] = $pVal;
             }
