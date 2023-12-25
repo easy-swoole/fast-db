@@ -431,7 +431,7 @@ abstract class AbstractEntity implements \JsonSerializable
             foreach ($queryLimit as $key => $item){
                 $query->where($key,$item);
             }
-        }else if(is_callable($query)){
+        }else if(is_callable($queryLimit)){
             call_user_func($queryLimit,$query);
         }else{
             $pk = ReflectionCache::getInstance()->parseEntity(static::class)->getPrimaryKey();
