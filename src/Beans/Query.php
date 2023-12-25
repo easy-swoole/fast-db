@@ -81,6 +81,18 @@ class Query
         return $this;
     }
 
+    function join($joinTable, $joinCondition, $joinType = ''):Query
+    {
+        $this->queryBuilder->join($joinTable,$joinCondition,$joinType);
+        return $this;
+    }
+
+    function func(callable $func):Query
+    {
+        call_user_func($func,$this->queryBuilder);
+        return $this;
+    }
+
     function returnEntity():AbstractEntity
     {
         return $this->entity;
