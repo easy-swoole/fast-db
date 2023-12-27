@@ -453,6 +453,23 @@ abstract class AbstractEntity implements \JsonSerializable
         return null;
     }
 
+    public static function findAll(array|string $queryLimit, string $tableName = null):mixed
+    {
+        if(empty($tableName)){
+            $tableName = (new static())->tableName();
+        }
+        $query = new QueryBuilder();
+        if(is_array($queryLimit)){
+            foreach ($queryLimit as $key => $item){
+                $query->where($key,$item);
+            }
+        }else if(is_callable($queryLimit)){
+            call_user_func($queryLimit,$query);
+        }
+        $query->get($tableName);
+        return FastDb::getInstance()->query($query)->getResult();
+    }
+
 
     public function jsonSerialize(): mixed
     {
