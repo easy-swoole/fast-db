@@ -372,7 +372,7 @@ abstract class AbstractEntity implements \JsonSerializable
         //插入的时候，null值一般无意义，default值在数据库层做。
         $data = $this->toArray(true);
         $query = $this->queryLimit()->__getQueryBuilder();
-        if($query){
+        if($updateDuplicateCols){
             $query->onDuplicate($updateDuplicateCols);
         }
         $query->insert($this->tableName(),$data);
