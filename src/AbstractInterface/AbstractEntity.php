@@ -383,7 +383,8 @@ abstract class AbstractEntity implements \JsonSerializable
             $isSuccess = true;
         }else if($ret->getConnection()->getLastAffectRows() >= 1){
             $isSuccess = true;
-        }else if($ret->getConnection()->getLastInsertId() >= 1){
+        }
+        if($ret->getConnection()->getLastInsertId() >= 1){
             $ref = ReflectionCache::getInstance()->parseEntity(static::class);
             if($ref->getPrimaryKey()){
                 $this->{$ref->getPrimaryKey()} = $ret->getConnection()->getLastInsertId();
@@ -391,7 +392,7 @@ abstract class AbstractEntity implements \JsonSerializable
             }
             $isSuccess = true;
         }else if(!empty($updateDuplicateCols)){
-            return true;
+            $isSuccess = true;
         }
         if($isSuccess){
             $this->setData($data,true);
