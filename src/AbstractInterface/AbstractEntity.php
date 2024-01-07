@@ -13,13 +13,11 @@ use EasySwoole\Mysqli\QueryBuilder;
 
 abstract class AbstractEntity implements \JsonSerializable
 {
-
     private array $compareData = [];
 
     private ?Query $queryBuilder = null;
 
     abstract function tableName():string;
-
 
     function __construct(array $data = null)
     {
@@ -164,7 +162,7 @@ abstract class AbstractEntity implements \JsonSerializable
             }else if($filterNull && $val === null){
                 continue;
             }
-            if(!isset($hideFields[$property->name()])){
+            if (!in_array($property->name(), $hideFields)){
                 $temp[$property->name()] = $val;
             }
         }
@@ -172,73 +170,114 @@ abstract class AbstractEntity implements \JsonSerializable
         return $temp;
     }
 
-
-    function count():int|array
+    public function count(string|null $field = '*', string $group = null): int|array
     {
         $fields = null;
-        if(!empty($this->queryLimit()->getFields())){
+        if (!empty($this->queryLimit()->getFields())) {
             $fields = $this->queryLimit()->getFields()['fields'];
         }
         $query = $this->queryLimit()->__getQueryBuilder();
         $hasFiled = false;
-        if(!empty($fields)){
+
+        if ($group) {
+            $query->groupBy($group);
+        }
+
+        if (!empty($fields)) {
             $hasFiled = true;
             $temp = [];
-            foreach ($fields as $field){
-                $temp[] = "count(`{$field}`) as $field";
+            foreach ($fields as $fieldName){
+                $temp[] = "COUNT(`{$fieldName}`) as $fieldName";
             }
             $fields = $temp;
-            $query->get($this->tableName(),null,$fields);
-        }else{
-            $query->get($this->tableName(),null,'count(*) as count');
+            $query->get($this->tableName(),1, $fields);
+        } else {
+            $query->get($this->tableName(),1, "count({$field}) as count");
         }
+
         $ret = FastDb::getInstance()->query($query)->getResult();
         $this->reset();
-        if(empty($ret)){
-            if($hasFiled){
+        if (empty($ret)) {
+            if ($hasFiled) {
                 return [];
             }
             return 0;
         }
         $ret = $ret[0];
-        if($hasFiled){
+        if ($hasFiled) {
             return $ret;
         }
+
         return $ret['count'];
     }
 
-    function sum(string|array $cols):int|array
+    private function aggregate(string $aggregate, string|array $cols, string $group = null, bool $force = false): int|array|float
     {
         $multiFields = false;
-        if(is_string($cols)){
+        if (is_string($cols)) {
             $cols = [$cols];
         }
-        if(count($cols) > 1){
+
+        if (count($cols) > 1) {
             $multiFields = true;
         }
+
         $str = "";
-        while ($item = array_shift($cols)){
-            $str .= "sum(`{$item}`) as {$item}";
-            if(!empty($cols)){
+        while ($item = array_shift($cols)) {
+            $str .= "{$aggregate}(`{$item}`) as {$item}";
+            if (!empty($cols)) {
                 $str .= " , ";
             }
         }
         $query = $this->queryLimit()->__getQueryBuilder();
-        $query->get($this->tableName(),null,$str);
+        if ($group) {
+            $query->groupBy($group);
+        }
+        $query->get($this->tableName(), 1, $str);
         $ret = FastDb::getInstance()->query($query)->getResult();
         $this->reset();
-        if(empty($ret)){
-            if($multiFields){
+        if (empty($ret)) {
+            if ($multiFields) {
                 return [];
             }
             return 0;
         }
         $ret = $ret[0];
-        if($multiFields){
+        if ($multiFields) {
+            if ($force) {
+                foreach ($ret as &$row) {
+                    $row = (float) $row;
+                }
+                unset($row);
+            }
             return $ret;
-        }else{
-            return array_values($ret)[0] ?: 0;
+        } else {
+            $ret = array_values($ret)[0] ?: 0;
+            if ($force) {
+                return (float) $ret;
+            }
+            return $ret;
         }
+    }
+
+    public function sum(string|array $cols, string $group = null, bool $force = true): int|array|float
+    {
+        return $this->aggregate('SUM', $cols, $group, $force);
+    }
+
+    public function avg(string|array $cols, string $group = null, bool $force = true): int|array|float
+    {
+        return $this->aggregate('AVG', $cols, $group, $force);
+    }
+
+    public function max(string|array|null $cols, string $group = null, bool $force = true): int|array|float
+    {
+        return $this->aggregate('MAX', $cols, $group, $force);
+    }
+
+    public function min(string|array $cols, string $group = null, bool $force = true): int|array|float
+    {
+        return $this->aggregate('MIN', $cols, $group, $force);
     }
 
     function queryLimit():Query
@@ -267,26 +306,48 @@ abstract class AbstractEntity implements \JsonSerializable
         return $ret->getConnection()->getLastAffectRows() >= 1;
     }
 
-    public static function fastDelete(array|callable|string $deleteLimit,string $tableName = null):int|null|string
+    public static function fastDelete(array|callable|string|int $deleteLimit,string $tableName = null):int|null|string
     {
-        if(empty($tableName)){
-            $tableName = (new static())->tableName();
+        if (empty($deleteLimit) && 0 !== $deleteLimit) {
+            return 0;
+        }
+
+        $entity = new static();
+        if (empty($tableName)) {
+            $tableName = $entity->tableName();
         }
         $query = new QueryBuilder();
-        if(is_array($deleteLimit)){
-            foreach ($deleteLimit as $key => $item){
-                $query->where($key,$item);
+        if (is_array($deleteLimit)) {
+            foreach ($deleteLimit as $key => $item) {
+                if (is_array($item)) {
+                    $query->where($key, ...$item);
+                } else {
+                    $query->where($key, $item);
+                }
             }
-        }else if(is_callable($deleteLimit)){
-            call_user_func($deleteLimit,$query);
-        }else{
+        } else if (is_callable($deleteLimit)) {
+            call_user_func($deleteLimit, $query);
+        } else if (is_string($deleteLimit) || is_int($deleteLimit)) {
             $pk = ReflectionCache::getInstance()->parseEntity(static::class)->getPrimaryKey();
-            if(empty($pk)){
+            if (empty($pk)) {
                 $msg = "entity can not delete record without primary key define";
                 throw new RuntimeError($msg);
             }
-            $query->where($pk,$deleteLimit);
+
+            if (is_string($deleteLimit)) {
+                if (strpos($deleteLimit, ',') !== false) {
+                    $pkIds = explode(',', $deleteLimit);
+                    foreach ($pkIds as &$pkId) {
+                        $pkId = intval($pkId);
+                    }
+                    unset($pkId);
+                    $query->where($pk, $pkIds, 'IN');
+                }
+            } else {
+                $query->where($pk, $deleteLimit);
+            }
         }
+
         $query->delete($tableName);
         $ret = FastDb::getInstance()->query($query);
         return $ret->getConnection()->getLastAffectRows();
@@ -335,10 +396,77 @@ abstract class AbstractEntity implements \JsonSerializable
         return $ret->getConnection()->getLastAffectRows() > 0;
     }
 
-    public static function fastUpdate(array|callable|string $updateLimit,array $data,string $tableName = null):bool|int|string
+    public function updateWithLimit(array $data, array|callable $queryLimit = null)
     {
+        $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
+        if ($entityRef->getOnUpdate()) {
+            $ret = $this->callHook($entityRef->getOnUpdate()->callback);
+            if($ret === false){
+                return  false;
+            }
+        }
+
+        $pk = $entityRef->getPrimaryKey();
+
+        $updateData = [];
+        foreach ($this->compareData as $key => $compareDatum){
+            $pVal = null;
+            if (isset($this->{$key})) {
+                $pVal = $this->{$key};
+            }
+            if ($pVal instanceof ConvertObjectInterface) {
+                $pVal = $pVal->toValue();
+            }
+            if ($pVal !== $compareDatum) {
+                $updateData[$key] = $pVal;
+            }
+        }
+
+        $updateData = array_merge($updateData, $data);
+
+        if (!empty($this->queryLimit()->getFields())) {
+            $fields = $this->queryLimit()->getFields()['fields'];
+            if (!empty($fields)) {
+                foreach ($fields as $field) {
+                    unset($updateData[$field]);
+                }
+            }
+        }
+
+        if (empty($updateData)) {
+            return true;
+        }
+
+        if ($queryLimit) {
+            if (is_array($queryLimit)) {
+                foreach ($queryLimit as $key => $item) {
+                    if (is_array($item)) {
+                        $this->queryLimit()->where($key, ...$item);
+                    } else {
+                        $this->queryLimit()->where($key, $item);
+                    }
+                }
+            } else if (is_callable($queryLimit)) {
+                call_user_func($queryLimit, $this->queryLimit());
+            }
+        }
+
+        if ($pk && !empty($this->{$pk})) {
+            $this->queryLimit()->where($pk, $this->{$pk});
+        }
+
+        $query = $this->queryLimit()->__getQueryBuilder();
+        $query->update($this->tableName(), $data);
+        $ret = FastDb::getInstance()->query($query);
+        $this->reset();
+        return $ret->getConnection()->getLastAffectRows();
+    }
+
+    public static function fastUpdate(array|callable|string|int $updateLimit,array $data,string $tableName = null):bool|int|string
+    {
+        $entity = new static();
         if(empty($tableName)){
-            $tableName = (new static())->tableName();
+            $tableName = $entity->tableName();
         }
         $query = new QueryBuilder();
         if(is_array($updateLimit)){
@@ -353,11 +481,85 @@ abstract class AbstractEntity implements \JsonSerializable
                 $msg = "entity can not update record without primary key define";
                 throw new RuntimeError($msg);
             }
-            $query->where($pk,$updateLimit);
+
+            if (is_string($updateLimit)) {
+                if (strpos($updateLimit, ',') !== false) {
+                    $pkIds = explode(',', $updateLimit);
+                    foreach ($pkIds as &$pkId) {
+                        $pkId = intval($pkId);
+                    }
+                    unset($pkId);
+                    $query->where($pk, $pkIds, 'IN');
+                }
+            } else {
+                $query->where($pk,$updateLimit);
+            }
         }
         $query->update($tableName,$data);
         $ret = FastDb::getInstance()->query($query);
         return $ret->getConnection()->getLastAffectRows();
+    }
+
+    /**
+     * @param array $dataList
+     * @param bool  $replace
+     * @param bool  $transaction
+     *
+     * @return array
+     * @throws RuntimeError
+     * @throws \EasySwoole\Pool\Exception\Exception
+     * @throws \ReflectionException
+     * @throws \Throwable
+     */
+    public function insertAll(array $dataList, bool $replace = true, bool $transaction = true)
+    {
+        $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
+        if (empty($entityRef->getPrimaryKey())){
+            throw new RuntimeError('insertAll() needs primaryKey for model ' . static::class);
+        }
+        $primaryKey = $entityRef->getPrimaryKey();
+
+        $returnAsArray = false;
+        if (!empty($this->queryLimit()->getFields())) {
+            $returnAsArray = $this->queryLimit()->getFields()['returnAsArray'];
+        }
+
+        // 开启事务
+        if ($transaction){
+            FastDb::getInstance()->begin();
+        }
+
+        $result = [];
+        try {
+            foreach ($dataList as $key => $row) {
+                // 如果有设置更新
+                if ($replace && isset($row[$primaryKey])) {
+                    $model = (new static())->find($row[$primaryKey]);
+                    unset($row[$primaryKey]);
+                    $model->setData($row);
+                    $model->update();
+                } else {
+                    $model = (new static($row));
+                    $model->insert();
+                }
+                if ($returnAsArray) {
+                    $result[$key] = $model->toArray();
+                } else {
+                    $result[$key] = $model;
+                }
+            }
+            if ($transaction) {
+                FastDb::getInstance()->commit();
+            }
+            $this->reset();
+            return $result;
+        } catch (\Throwable $throwable) {
+            if ($transaction) {
+                FastDb::getInstance()->rollback();
+            }
+            $this->reset();
+            throw $throwable;
+        }
     }
 
     function insert(array $updateDuplicateCols = null)
@@ -422,53 +624,126 @@ abstract class AbstractEntity implements \JsonSerializable
         return $pk;
     }
 
-    public static function findRecord(callable|array|string $queryLimit, string $tableName = null):?static
+    public function find(array|string|int $queryLimit = null): ?static
     {
-        if(empty($tableName)){
-            $tableName = (new static())->tableName();
+        $fields = null;
+        if (!empty($this->queryLimit()->getFields())) {
+            $fields = $this->queryLimit()->getFields()['fields'];
         }
-        $query = new QueryBuilder();
-        if(is_array($queryLimit)){
-            foreach ($queryLimit as $key => $item){
-                $query->where($key,$item);
+
+        if (is_array($queryLimit)) {
+            foreach ($queryLimit as $key => $item) {
+                if (is_array($item)) {
+                    $this->queryLimit()->where($key, ...$item);
+                } else {
+                    $this->queryLimit()->where($key, $item);
+                }
             }
-        }else if(is_callable($queryLimit)){
-            call_user_func($queryLimit,$query);
-        }else{
+        } else if ($queryLimit) {
             $pk = ReflectionCache::getInstance()->parseEntity(static::class)->getPrimaryKey();
-            if(empty($pk)){
+            if (empty($pk)) {
                 $msg = "entity can not find record without primary key define";
                 throw new RuntimeError($msg);
             }
-            $query->where($pk,$queryLimit);
+            $this->queryLimit()->where($pk, $queryLimit);
         }
-        $query->get($tableName,2);
+
+        $query = $this->queryLimit()->__getQueryBuilder();
+        if ($fields) {
+            $query->fields($fields);
+        }
+        $query->get($this->tableName(), 1);
         $ret = FastDb::getInstance()->query($query)->getResult();
-        if(!empty($ret)){
-            if(count($ret) > 1){
-                $msg = "multi record match with your query limit";
-                throw new RuntimeError($msg);
-            }
+        $this->reset();
+        if (!empty($ret[0])) {
             return new static($ret[0]);
         }
+
         return null;
     }
 
-    public static function findAll(array|callable $queryLimit, string $tableName = null):mixed
+    public static function findRecord(callable|array|string|int $queryLimit, string $tableName = null): ?static
     {
-        if(empty($tableName)){
-            $tableName = (new static())->tableName();
+        $entity = new static();
+        if (empty($tableName)) {
+            $tableName = $entity->tableName();
         }
         $query = new QueryBuilder();
-        if(is_array($queryLimit)){
-            foreach ($queryLimit as $key => $item){
-                $query->where($key,$item);
+        if (is_array($queryLimit)) {
+            foreach ($queryLimit as $key => $item) {
+                if (is_array($item)) {
+                    $query->where($key, ...$item);
+                } else {
+                    $query->where($key, $item);
+                }
             }
-        }else if(is_callable($queryLimit)){
-            call_user_func($queryLimit,$query);
+        } else if (is_callable($queryLimit)) {
+            call_user_func($queryLimit, $query);
+        } else {
+            $pk = ReflectionCache::getInstance()->parseEntity(static::class)->getPrimaryKey();
+            if (empty($pk)) {
+                $msg = "entity can not find record without primary key define";
+                throw new RuntimeError($msg);
+            }
+            $query->where($pk, $queryLimit);
         }
+
+        $query->get($tableName, 1);
+        $ret = FastDb::getInstance()->query($query)->getResult();
+        if (!empty($ret[0])) {
+            return new static($ret[0]);
+        }
+
+        return null;
+    }
+
+    public static function findAll(array|callable|string|null $queryLimit, string $tableName = null, bool $returnAsArray = true):mixed
+    {
+        $entity = new static();
+        if (empty($tableName)) {
+            $tableName = $entity->tableName();
+        }
+        $query = new QueryBuilder();
+        if (is_array($queryLimit)) {
+            foreach ($queryLimit as $key => $item) {
+                if (is_array($item)) {
+                    $query->where($key, ...$item);
+                } else {
+                    $query->where($key, $item);
+                }
+            }
+        } else if (is_callable($queryLimit)) {
+            call_user_func($queryLimit, $query);
+        } else if (is_string($queryLimit)) {
+            $pk = ReflectionCache::getInstance()->parseEntity(static::class)->getPrimaryKey();
+            if (empty($pk)) {
+                $msg = "entity can not find all record without primary key define";
+                throw new RuntimeError($msg);
+            }
+
+            if (is_string($queryLimit)) {
+                if (strpos($queryLimit, ',') !== false) {
+                    $pkIds = explode(',', $queryLimit);
+                    foreach ($pkIds as &$pkId) {
+                        $pkId = intval($pkId);
+                    }
+                    unset($pkId);
+                    $query->where($pk, $pkIds, 'IN');
+                }
+            }
+        }
+
         $query->get($tableName);
-        return FastDb::getInstance()->query($query)->getResult();
+        $result = FastDb::getInstance()->query($query)->getResult();
+        if (!$returnAsArray) {
+            $list = [];
+            foreach ($result as $item) {
+                $list[] = new static($item);
+            }
+            return $list;
+        } else {
+            return $result;
+        }
     }
 
 
@@ -610,5 +885,110 @@ abstract class AbstractEntity implements \JsonSerializable
             throw new RuntimeError($msg);
         }
         return $relate;
+    }
+
+    public function where(string|array|callable $col, mixed $whereValue = null, string $operator = '=', string $cond = 'AND')
+    {
+        if (is_array($col)) {
+            // 数组批量查询
+            $where = $col;
+            foreach ($where as $k => $val) {
+                if (is_array($val)) {
+                    $this->queryLimit()->where($k, ...$val);
+                } else {
+                    $this->queryLimit()->where($k, $val);
+                }
+            }
+        } elseif (is_callable($col)) {
+            call_user_func($col, $this->queryLimit());
+        } else {
+            $this->queryLimit()->where($col, $whereValue, $operator, $cond);
+        }
+
+        return $this;
+    }
+
+    public function field(?array $fields = null, bool $returnAsArray = false)
+    {
+        $this->queryLimit()->fields($fields, $returnAsArray);
+        return $this;
+    }
+
+    public function hidden(array|string $hideFields)
+    {
+        $this->queryLimit()->hideFields($hideFields);
+        return $this;
+    }
+
+    public function value(string $field, mixed $default = null, bool $force = false)
+    {
+        $query = $this->queryLimit()->__getQueryBuilder();
+        $query->get($this->tableName(), 1, $field);
+        $ret = FastDb::getInstance()->query($query)->getResult();
+        $this->reset();
+        $result = false;
+        if (!empty($ret[0])) {
+            $row = $ret[0];
+            $result = $row[$field] ?? false;
+            if ($force) {
+                $result = (float) ($result);
+            }
+        }
+
+        return false !== $result ? $result : $default;
+    }
+
+    public function column(string $field = null, string $key = '')
+    {
+        if (is_null($field)) {
+            $field = '*';
+        } elseif ($key && '*' != $field) {
+            $field = $key . ',' . $field;
+        }
+
+        $query = $this->queryLimit()->__getQueryBuilder();
+        $query->get($this->tableName(), null, $field);
+        $ret = FastDb::getInstance()->query($query)->getResult();
+        $this->reset();
+
+        $result = [];
+
+        if (is_array($ret) && !empty($ret)) {
+            $fields = array_keys($ret[0]);
+            $count  = count($fields);
+            $key1   = array_shift($fields);
+            $key2   = $fields ? array_shift($fields) : '';
+            $key    = $key ?: $key1;
+            if (strpos($key, '.')) {
+                list($alias, $key) = explode('.', $key);
+            }
+            foreach ($ret as $val) {
+                if ($count > 2) {
+                    $result[$val[$key]] = $val;
+                } elseif (2 == $count) {
+                    $result[$val[$key]] = $val[$key2];
+                } elseif (1 == $count) {
+                    $result[$val[$key]] = $val[$key1];
+                }
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * 转换当前模型对象为 JSON 字符串
+     * @param int $flag
+     * @return false|string
+     */
+    public function toJson(int $flag = JSON_UNESCAPED_UNICODE)
+    {
+        return json_encode($this->toArray(), $flag);
+    }
+
+    public function page(?int $page, int $pageSize = 10, bool $withTotalCount = false)
+    {
+        $this->queryLimit()->page($page, $withTotalCount, $pageSize);
+        return $this;
     }
 }

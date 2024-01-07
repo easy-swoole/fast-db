@@ -1,0 +1,21 @@
+<?php
+
+declare(strict_types=1);
+
+namespace %NAMESPACE%;
+
+use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
+use EasySwoole\FastDb\Attributes\Property;
+
+%PROPERTY_DESC%
+class %CLASS% extends AbstractEntity
+{
+    %PRIMARY_KEY_ANNOTATION%
+    %PRIMARY_KEY%
+    %FIELD%
+
+    public function tableName(): string
+    {
+        return '%TABLE_NAME%';
+    }
+}

@@ -9,7 +9,7 @@ declare(strict_types=1);
  * @license  https://github.com/easy-swoole/easyswoole/blob/3.x/LICENSE
  */
 
-namespace EasySwoole\FastDb\Tests;
+namespace EasySwoole\FastDb\Tests\Model;
 
 use EasySwoole\FastDb\AbstractInterface\ConvertObjectInterface;
 
