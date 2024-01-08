@@ -132,12 +132,12 @@ class FastDb
     {
         try{
             $client = $this->getClient(false);
+            $selectDb = $client->connectionName;
             return call_user_func($call,$client);
         }catch (\Throwable $throwable){
             throw $throwable;
         } finally {
             if($client){
-                $selectDb = $client->connectionName;
                 $pool = $this->pools[$selectDb];
                 try {
                     $pool->recycleObj($client);
@@ -147,6 +147,23 @@ class FastDb
                 $cid = Coroutine::getCid();
                 unset($this->currentConnection[$cid][$selectDb]);
             }
+        }
+    }
+
+    function recycleContext():void
+    {
+        $cid = Coroutine::getCid();
+        if(isset($this->currentConnection[$cid])){
+            foreach ($this->currentConnection[$cid] as $selectDb => $client){
+                $pool = $this->pools[$selectDb];
+                try {
+                    $pool->recycleObj($client);
+                }catch (\Throwable $throwable){
+                    trigger_error($throwable->getMessage());
+                }
+            }
+            unset($this->currentConnection[$cid]);
+            unset($this->queryStack[$cid]);
         }
     }
 
@@ -363,7 +380,7 @@ class FastDb
         }
     }
 
-    function preConnect()
+    function preConnect():void
     {
         foreach ($this->configs as $name => $config){
             /** @var Config $dbConfig */
@@ -391,7 +408,7 @@ class FastDb
         return false;
     }
 
-    protected function logStack(QueryResult $result)
+    protected function logStack(QueryResult $result): void
     {
         if($this->enableQueryStack){
             $stack = new QueryStack();
@@ -412,7 +429,7 @@ class FastDb
      * @param string $name
      * @return false|Config
      */
-    public function getConfig(string $name = 'default')
+    public function getConfig(string $name = 'default'): bool|Config
     {
         return $this->configs[$name] ?? false;
     }
