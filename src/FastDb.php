@@ -21,7 +21,7 @@ class FastDb
     protected array $configs = [];
     protected array $pools = [];
     protected array $currentConnection = [];
-    protected string $selectConnection = "default";
+    protected array $selectConnection = [];
 
     protected $onQuery = null;
     protected bool $enableQueryStack = false;
@@ -110,11 +110,18 @@ class FastDb
 
     function selectConnection(?string $name = null):static|string
     {
-        if($name){
-            $this->selectConnection = $name;
+        $cid = Coroutine::getCid();
+        if($name && !isset($this->selectConnection[$cid])){
+            $this->selectConnection[$cid] = $name;
+            Coroutine::defer(function ()use($cid){
+                unset($this->selectConnection[$cid]);
+            });
             return $this;
         }
-        return $this->selectConnection;
+        if(isset($this->selectConnection[$cid])){
+            return $this->selectConnection[$cid];
+        }
+        return 'default';
     }
 
     /**
@@ -294,8 +301,8 @@ class FastDb
     function currentConnection():?Connection
     {
         $cid = Coroutine::getCid();
-        if(isset($this->currentConnection[$cid][$this->selectConnection])){
-            return $this->currentConnection[$cid][$this->selectConnection];
+        if(isset($this->currentConnection[$cid][$this->selectConnection()])){
+            return $this->currentConnection[$cid][$this->selectConnection()];
         }
         return null;
     }
@@ -307,7 +314,7 @@ class FastDb
     private function getClient(bool $autoRecycle = true):Connection
     {
         $cid = Coroutine::getCid();
-        $name = $this->selectConnection;
+        $name = $this->selectConnection();
         if(isset($this->currentConnection[$cid][$name])){
             return $this->currentConnection[$cid][$name];
         }
@@ -388,7 +395,7 @@ class FastDb
     {
         if($this->enableQueryStack){
             $stack = new QueryStack();
-            $stack->connectionName = $this->selectConnection;
+            $stack->connectionName = $this->selectConnection();
             $stack->endTime = $result->getEndTime();
             $stack->startTime = $result->getStartTime();
             $stack->query = $result->getQueryBuilder();
