@@ -15,6 +15,7 @@ use EasySwoole\FastDb\Config;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\Utility\File;
 use PHPUnit\Framework\TestCase;
+use Swoole\Coroutine;
 
 class BaseTestCase extends TestCase
 {
@@ -22,21 +23,23 @@ class BaseTestCase extends TestCase
     {
         parent::setUp();
 
-        $config = new Config(MYSQL_CONFIG);
-        FastDb::getInstance()->addDb($config);
-
         // check table exists
         $this->createTestTable();
     }
 
     private function createTestTable()
     {
+        $config = new Config(MYSQL_CONFIG);
+        $fastDb = (new FastDb())->addDb($config);
+
         $ddlFileDirs = File::scanDirectory(__DIR__ . '/resources');
         $ddlFiles = $ddlFileDirs['files'];
         foreach ($ddlFiles as $ddlFile) {
             $sql = trim(file_get_contents($ddlFile));
-            FastDb::getInstance()->rawQuery($sql);
+            $fastDb->rawQuery($sql);
         }
+
+        $fastDb->reset();
     }
 
     protected function truncateTable(string $table)

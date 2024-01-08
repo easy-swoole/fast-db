@@ -400,4 +400,13 @@ class FastDb
             $this->queryStack[$cid][] = $stack;
         }
     }
+
+    /**
+     * @param string $name
+     * @return false|Config
+     */
+    public function getConfig(string $name = 'default')
+    {
+        return $this->configs[$name] ?? false;
+    }
 }

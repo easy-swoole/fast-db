@@ -1,4 +1,5 @@
 <?php
+defined('USE_MYSQLI') ?: define('USE_MYSQLI', false);
 defined("MYSQL_CONFIG") ?: define('MYSQL_CONFIG', [
     'host'              => '127.0.0.1',
     'port'              => 3306,
@@ -9,7 +10,7 @@ defined("MYSQL_CONFIG") ?: define('MYSQL_CONFIG', [
     'charset'           => 'utf8mb4',
     'autoPing'          => 5,
     'name'              => 'default',
-    'useMysqli'         => false,
+    'useMysqli'         => USE_MYSQLI,
     'intervalCheckTime' => 10 * 1000,
     'maxIdleTime'       => 15,
     'maxObjectNum'      => 20,

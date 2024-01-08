@@ -116,4 +116,13 @@ class QueryResult
     {
         $this->startTime = $startTime;
     }
+
+    public function getResultOne(): mixed
+    {
+        if (is_array($this->result)) {
+            return $this->result[0] ?? null;
+        }
+
+        return null;
+    }
 }
