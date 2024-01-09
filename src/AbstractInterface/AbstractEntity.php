@@ -697,7 +697,7 @@ abstract class AbstractEntity implements \JsonSerializable
         return null;
     }
 
-    public static function findAll(array|callable|string|null $queryLimit, string $tableName = null, bool $returnAsArray = true):mixed
+    public static function findAll(array|callable|string|null $queryLimit, string $tableName = null, bool $returnAsArray = false):mixed
     {
         $entity = new static();
         if (empty($tableName)) {
