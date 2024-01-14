@@ -17,6 +17,9 @@ use EasySwoole\FastDb\Beans\Query;
 use EasySwoole\FastDb\Config;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\QueryResult;
+use EasySwoole\FastDb\Tests\Model\Address;
+use EasySwoole\FastDb\Tests\Model\SexEnum;
+use EasySwoole\FastDb\Tests\Model\StudentInfoModel;
 use EasySwoole\FastDb\Tests\Model\StudentModel;
 use EasySwoole\FastDb\Tests\Model\User;
 use EasySwoole\Mysqli\QueryBuilder;
@@ -29,7 +32,8 @@ final class ModelTest extends BaseTestCase
     {
         parent::setUp();
         $configObj = new Config(MYSQL_CONFIG);
-        FastDb::getInstance()->addDb($configObj)->setOnQuery(function (QueryResult $queryResult) {
+        FastDb::getInstance()->addDb($configObj);
+        FastDb::getInstance()->setOnQuery(function (QueryResult $queryResult) {
             if ($queryResult->getQueryBuilder()) {
                 echo $queryResult->getQueryBuilder()->getLastQuery() . "\n";
             } else {
@@ -411,7 +415,7 @@ final class ModelTest extends BaseTestCase
         $this->assertNull($student);
 
         // Delete a record that does not exist
-        $arrayWhere = ['id' => 'EasySwoole888'];
+        $arrayWhere = ['id' => 888];
         $result = StudentModel::fastDelete($arrayWhere);
         $this->assertIsInt($result);
         $this->assertSame(0, $result);
@@ -449,13 +453,17 @@ final class ModelTest extends BaseTestCase
     public function testFind()
     {
         $this->testInsert();
-        $result = (new StudentModel())->where('name', 'EasySwoole1')->find();
+        $studentModel = new StudentModel();
+        $studentModel->queryLimit()->where('name', 'EasySwoole1');
+        $result = $studentModel->find();
         $this->assertInstanceOf(StudentModel::class, $result);
         $this->assertSame(1, $result->id);
         $this->assertSame('EasySwoole1', $result->name);
 
         // Query a record that does not exist
-        $result = (new StudentModel())->where('name', 'EasySwoole888')->find();
+        $studentModel = new StudentModel();
+        $studentModel->queryLimit()->where('name', 'EasySwoole888');
+        $result = $studentModel->find();
         $this->assertNull($result);
     }
 
@@ -464,7 +472,7 @@ final class ModelTest extends BaseTestCase
         $this->testInsert();
         (new StudentModel())->insertAll([['id' => 2, 'name' => 'EasySwoole2']], false);
         // 1. with primary key str as query conditions
-        $list = StudentModel::findAll('1,2');
+        $list = StudentModel::findAll('1,2', null, true);
         $this->assertIsArray($list);
         $this->assertEquals(2, count($list));
         foreach ($list as $student) {
@@ -473,7 +481,7 @@ final class ModelTest extends BaseTestCase
         }
 
         // 2. with array as query conditions
-        $list = StudentModel::findAll(['name' => 'EasySwoole1']);
+        $list = StudentModel::findAll(['name' => 'EasySwoole1'], null, true);
         $this->assertIsArray($list);
         $this->assertEquals(1, count($list));
         foreach ($list as $student) {
@@ -484,7 +492,7 @@ final class ModelTest extends BaseTestCase
         // 3. with callable as query conditions
         $list = StudentModel::findAll(function (\EasySwoole\Mysqli\QueryBuilder $query) {
             $query->where('name', 'EasySwoole1')->limit(3)->orderBy('id', 'asc');
-        }, null, false);
+        });
         $this->assertIsArray($list);
         $this->assertEquals(1, count($list));
         foreach ($list as $student) {
@@ -542,11 +550,6 @@ final class ModelTest extends BaseTestCase
         }
     }
 
-//    public function testChunk()
-//    {
-//
-//    }
-
     public function testToArray()
     {
         $model = $this->testInsert();
@@ -556,26 +559,197 @@ final class ModelTest extends BaseTestCase
         $this->assertSame('EasySwoole1', $array['name']);
     }
 
+    public function testConvertField()
+    {
+        $studentInfoModel = new StudentInfoModel();
+        $this->truncateTable($studentInfoModel->tableName());
+
+        $address = new Address([
+            'province' => 'FuJian',
+            'city'     => 'XiaMen'
+        ]);
+        $sex     = SexEnum::MALE;
+        $model   = new StudentInfoModel([
+            'studentId' => 1,
+            'address'   => $address->toValue(),
+            'sex'       => $sex->toValue(),
+            'note'      => 'this is note',
+        ]);
+        $result  = $model->insert();
+        $this->assertSame(1, $model->id);
+        $this->assertTrue($result);
+
+        $studentInfo = StudentInfoModel::findRecord(1);
+        $this->assertSame('FuJian', $studentInfo->address->province);
+        $this->assertSame('XiaMen', $studentInfo->address->city);
+        $this->assertSame(SexEnum::MALE, $studentInfo->sex);
+
+        $this->truncateTable($studentInfoModel->tableName());
+    }
+
+    private function mockUserData(int $count = 20)
+    {
+        $user = new User();
+        $this->truncateTable($user->tableName());
+        $inserts = [];
+        $ids = range(1, $count);
+        foreach ($ids as $num) {
+            $inserts[] = ['name' => 'easyswoole' . $num, 'status' => 0];
+        }
+        $user->insertAll($inserts);
+    }
+
+    public function testChunk()
+    {
+        $this->mockUserData();
+
+        $user = new User();
+        $user->chunk(function (User $user) {
+            // 处理 user 模型对象
+            $user->updateWithLimit(['status' => 1]);
+        }, 1);
+
+        // check the result after chunk
+        $list = User::findAll();
+        foreach ($list as $model) {
+            $this->assertSame(1, $model->status);
+        }
+
+        $this->truncateTable($user->tableName());
+    }
+
+    public function testPage()
+    {
+        $this->mockUserData(25);
+
+        $user = new User();
+        $user->queryLimit()->page(1, false, 10);
+        $resultObject = $user->all();
+        foreach ($resultObject as $oneUser) {
+            $this->assertStringStartsWith('easyswoole', $oneUser->name);
+        }
+        $this->assertNull($resultObject->totalCount());
+
+        $user = new User();
+        $user->queryLimit()->page(1, true, 10);
+        $resultObject = $user->all();
+        foreach ($resultObject as $user) {
+            $this->assertStringStartsWith('easyswoole', $oneUser->name);
+        }
+        $this->assertSame(25, $resultObject->totalCount());
+
+        $this->truncateTable($user->tableName());
+    }
+
     public function testCount()
     {
-        $this->testInsert();
+        $total = 20;
+        $this->mockUserData($total);
 
-        $model = new StudentModel();
-        $result = $model->count();
-        $this->assertSame(1, $result);
+        $user = new User();
+        $count = $user->count();
+        $this->assertSame($total, $count);
 
-        // todo::
+        $count = $user->count('id', 'name');
+        $this->assertSame(1, $count);
+
+        $user->queryLimit()->fields(['id', 'name']);
+        $result = $user->count(null, 'name');
+        $this->assertIsArray($result);
+        $this->assertArrayHasKey('id', $result);
+        $this->assertArrayHasKey('name', $result);
+        $this->assertSame(1, $result['id']);
+        $this->assertSame(1, $result['name']);
+
+        $this->truncateTable($user->tableName());
+    }
+
+    public function testMax()
+    {
+        $total = 20;
+        $this->mockUserData($total);
+
+        $user = new User();
+        $result = $user->max('id');
+        $this->assertSame((float)$total, $result);
+
+        $result = $user->max('id', 'name');
+        $this->assertSame((float)1, $result);
+
+        $result = $user->max(['id', 'name'], 'name');
+        $this->assertIsArray($result);
+        $this->assertArrayHasKey('id', $result);
+        $this->assertArrayHasKey('name', $result);
+        $this->assertSame(1.0, $result['id']);
+        $this->assertSame(0.0, $result['name']);
+
+        $this->truncateTable($user->tableName());
+    }
+
+    public function testMin()
+    {
+        $total = 20;
+        $this->mockUserData($total);
+
+        $user = new User();
+        $result = $user->min('id');
+        $this->assertSame(1.0, $result);
+
+        $result = $user->min('id', 'name');
+        $this->assertSame(1.0, $result);
+
+        $result = $user->min(['id', 'name'], 'name');
+        $this->assertIsArray($result);
+        $this->assertArrayHasKey('id', $result);
+        $this->assertArrayHasKey('name', $result);
+        $this->assertSame(1.0, $result['id']);
+        $this->assertSame(0.0, $result['name']);
+
+        $this->truncateTable($user->tableName());
+    }
+
+    public function testAvg()
+    {
+        $total = 20;
+        $this->mockUserData($total);
+
+        $user = new User();
+        $result = $user->avg('id');
+        $this->assertSame(10.5, $result);
+
+        $result = $user->avg('id', 'name');
+        $this->assertSame(1.0, $result);
+
+        $result = $user->avg(['id', 'name'], 'name');
+        $this->assertIsArray($result);
+        $this->assertArrayHasKey('id', $result);
+        $this->assertArrayHasKey('name', $result);
+        $this->assertSame(1.0, $result['id']);
+        $this->assertSame(0.0, $result['name']);
+
+        $this->truncateTable($user->tableName());
     }
 
     public function testSum()
     {
-        $this->testInsert();
+        $total = 20;
+        $this->mockUserData($total);
 
-        $model = new StudentModel();
-        $result = $model->sum('id');
+        $user = new User();
+        $result = $user->sum('id');
+        $this->assertSame(210.0, $result);
+
+        $result = $user->sum('id', 'name');
         $this->assertSame(1.0, $result);
 
-        // todo::
+        $result = $user->sum(['id', 'name'], 'name');
+        $this->assertIsArray($result);
+        $this->assertArrayHasKey('id', $result);
+        $this->assertArrayHasKey('name', $result);
+        $this->assertSame(1.0, $result['id']);
+        $this->assertSame(0.0, $result['name']);
+
+        $this->truncateTable($user->tableName());
     }
 
     public function testQueryLimit()

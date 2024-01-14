@@ -15,10 +15,9 @@ use EasySwoole\FastDb\Config;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
-use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\Mysqli\QueryBuilder;
 
-class FastDbTest extends BaseTestCase
+final class FastDbTest extends BaseTestCase
 {
     public const ERROR_CONFIG = [
         'host'              => '127.0.0.1',
@@ -49,13 +48,16 @@ class FastDbTest extends BaseTestCase
             $config = new Config(MYSQL_CONFIG);
         }
         $config->setName($name);
-        return $fastDb->addDb($config)->setOnQuery(function (QueryResult $queryResult) {
-            if ($queryResult->getQueryBuilder()) {
-                echo $queryResult->getQueryBuilder()->getLastQuery() . "\n";
-            } else {
-                echo $queryResult->getRawSql() . "\n";
-            }
-        });
+        $fastDb->addDb($config);
+        // debug
+//        $fastDb->setOnQuery(function (QueryResult $queryResult) {
+//            if ($queryResult->getQueryBuilder()) {
+//                echo $queryResult->getQueryBuilder()->getLastQuery() . "\n";
+//            } else {
+//                echo $queryResult->getRawSql() . "\n";
+//            }
+//        });
+        return $fastDb;
     }
 
     public function testAddDb()
@@ -86,7 +88,7 @@ class FastDbTest extends BaseTestCase
                 $this->assertSame("Access denied for user 'error'@'localhost' (using password: YES)", $throwable->getMessage());
             } else {
                 $this->assertInstanceOf(RuntimeError::class, $throwable);
-                $this->assertSame("SQLSTATE[28000] [1045] Access denied for user 'error'@'localhost' (using password: NO)", $throwable->getMessage());
+                $this->assertSame("SQLSTATE[28000] [1045] Access denied for user 'error'@'localhost' (using password: YES)", $throwable->getMessage());
             }
         }
     }
@@ -113,6 +115,24 @@ class FastDbTest extends BaseTestCase
         });
         $this->assertSame(1, $result[0]['result']);
     }
+
+//    public function testRecycleContext()
+//    {
+//        $fastDb = $this->getFastDb();
+//
+//        try {
+//            $fastDb->begin();
+//            $fastDb->recycleContext();
+//            $result = $fastDb->currentConnection();
+//            $this->assertNull($result);
+//            // business
+//            $this->mockTransactionBusiness($fastDb);
+//            $fastDb->commit();
+//        } catch (\Throwable $throwable) {
+//            $fastDb->rollback();
+//            throw $throwable;
+//        }
+//    }
 
     private function mockTransactionBusiness($fastDb)
     {
@@ -198,7 +218,7 @@ class FastDbTest extends BaseTestCase
             if (USE_MYSQLI) {
                 $this->assertSame("connection error error case initObject fail after 3 times case Access denied for user 'error'@'localhost' (using password: YES)", $throwable->getMessage());
             } else {
-                $this->assertSame("connection error error case initObject fail after 3 times case connection [error@127.0.0.1]  connect error: SQLSTATE[28000] [1045] Access denied for user 'error'@'localhost' (using password: NO)", $throwable->getMessage());
+                $this->assertSame("connection error error case initObject fail after 3 times case connection [error@127.0.0.1]  connect error: SQLSTATE[28000] [1045] Access denied for user 'error'@'localhost' (using password: YES)", $throwable->getMessage());
             }
             $errorFastDb->rollback();
         }

@@ -270,7 +270,7 @@ abstract class AbstractEntity implements \JsonSerializable
         return $this->aggregate('AVG', $cols, $group, $force);
     }
 
-    public function max(string|array|null $cols, string $group = null, bool $force = true): int|array|float
+    public function max(string|array $cols, string $group = null, bool $force = true): int|array|float
     {
         return $this->aggregate('MAX', $cols, $group, $force);
     }
@@ -697,7 +697,7 @@ abstract class AbstractEntity implements \JsonSerializable
         return null;
     }
 
-    public static function findAll(array|callable|string|null $queryLimit, string $tableName = null, bool $returnAsArray = false):mixed
+    public static function findAll(array|callable|string $queryLimit = null, string $tableName = null, bool $returnAsArray = false):mixed
     {
         $entity = new static();
         if (empty($tableName)) {

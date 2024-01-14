@@ -72,6 +72,7 @@ class EasySwooleEvent implements Event
     {
         // 注册方式2：在 mainServerCreate 方法中注册连接
 //        $config = new \EasySwoole\FastDb\Config([
+//            'name'              => 'default',    // 设置 连接池名称，默认为 default
 //            'host'              => '127.0.0.1',  // 设置 数据库 host
 //            'user'              => 'easyswoole', // 设置 数据库 用户名
 //            'password'          => 'easyswoole', // 设置 数据库 用户密码
@@ -80,7 +81,6 @@ class EasySwooleEvent implements Event
 //            'timeout'           => 5,            // 设置 数据库连接超时时间
 //            'charset'           => 'utf8',       // 设置 数据库字符编码，默认为 utf8
 //            'autoPing'          => 5,            // 设置 自动 ping 客户端链接的间隔
-//            'name'              => 'default',    // 设置 连接池名称，默认为 default
 //            // 配置 数据库 连接池配置，配置详细说明请看连接池组件 https://www.easyswoole.com/Components/Pool/introduction.html
 //            // 下面的参数可使用组件提供的默认值
 //            'intervalCheckTime' => 15 * 1000,    // 设置 连接池定时器执行频率
@@ -204,7 +204,7 @@ class EasySwooleUser extends AbstractEntity
 
     public function tableName(): string
     {
-        return 'easyswoole_user1';
+        return 'easyswoole_user';
     }
 }
 ```
@@ -526,18 +526,18 @@ User::fastUpdate(['id' => 1], [
 User::fastUpdate(function (\EasySwoole\Mysqli\QueryBuilder $queryBuilder) {
   $queryBuilder->where('id', 1);
 }, [
-  'name'  => 'easyswoole112',
-  'email' => 'easyswoole112@qq.com'
+    'name'  => 'easyswoole112',
+    'email' => 'easyswoole112@qq.com'
 ]);
 
 User::fastUpdate(1, [
-  'name'  => 'easyswoole112',
-  'email' => 'easyswoole112@qq.com'
+    'name'  => 'easyswoole112',
+    'email' => 'easyswoole112@qq.com'
 ]);
 
 User::fastUpdate('1,2', [
-  'name'  => 'easyswoole112',
-  'email' => 'easyswoole112@qq.com'
+    'name'  => 'easyswoole112',
+    'email' => 'easyswoole112@qq.com'
 ]);
 ```
 
@@ -644,7 +644,8 @@ echo $user->name;
 ```php
 $user = new User();
 // 查询单个数据
-$userModel = $user->where('name', 'easyswoole')->find();
+$user->qyeryLimit()->where('name', 'easyswoole');
+$userModel = $user->find();
 echo $userModel->name;
 ```
 
@@ -808,8 +809,8 @@ enum SexEnum implements ConvertObjectInterface
 <?php
 // 添加记录
 $address = new \EasySwoole\FastDb\Tests\Model\Address();
-$address->province = 'XiaMen';
-$address->city = 'FuJian';
+$address->province = 'FuJian';
+$address->city = 'XiaMen';
 $sex = \EasySwoole\FastDb\Tests\Model\SexEnum::MALE;
 $model = new StudentInfoModel([
     'studentId' => 1,
@@ -820,7 +821,7 @@ $model = new StudentInfoModel([
 // or
 // $model->address = $address;
 // $model->sex = $sex;
-$model->insert(); // INSERT  INTO `student_info` (`studentId`, `address`, `note`, `sex`)  VALUES (1, '{\"city\":\"FuJian\",\"province\":\"XiaMen\"}', 'this is note', 1)
+$model->insert(); // INSERT  INTO `student_info` (`studentId`, `address`, `note`, `sex`)  VALUES (1, '{\"city\":\"XiaMen\",\"province\":\"FuJian\"}', 'this is note', 1)
 
 // 查询一条数据
 $studentInfo = StudentInfoModel::findRecord(1);
@@ -858,30 +859,6 @@ $returnAsArray = true;
 (new User())->queryLimit()->fields(null, $returnAsArray);
 ```
 
-#### 获取某个字段或者某个列的值
-
-```php
-<?php
-// 获取某个用户的积分
-$user = new User();
-$user->queryLimit()->where('id', 1);
-$user->value('score');
-
-// 获取某个列的所有值
-$user = new User();
-$user->queryLimit()->where('status', 1);
-$user->column('name');
-
-// 以id为索引
-$user = new User();
-$user->queryLimit()->where('status', 1);
-$user->column('name', 'id');
-$user->queryLimit()->where('status', 1);
-$user->column('id,name'); // 同 thinkphp3 的 getField 方法
-```
-
-> 注意 `value()` 和 `column()` 方法返回的不再是一个模型对象实例，而是单纯的值或者某个列的数组。
-
 #### 数据分批处理 chunk
 
 模型也支持对返回的数据分批处理。特别是如果你需要处理成千上百条数据库记录，可以考虑使用 `chunk` 方法，该方法一次获取结果集的一小块，然后填充每一小块数据到要处理的闭包，该方法在编写处理大量数据库记录的时候非常有用。
@@ -900,8 +877,10 @@ $user->column('id,name'); // 同 thinkphp3 的 getField 方法
 
 - 方法说明：
 
-```php 
-function page(?int $page, int $pageSize = 10, bool $withTotalCount = false): static
+```\EasySwoole\FastDb\Beans\Query::page``` 方法
+
+```php
+function page(?int $page,bool $withTotalCount = false,int $pageSize = 10): Query
 ```
 
 - 使用示例：
@@ -910,18 +889,20 @@ function page(?int $page, int $pageSize = 10, bool $withTotalCount = false): sta
 // 使用条件的分页查询 不进行汇总 withTotalCount=false
 // 查询 第1页 每页10条 page=1 pageSize=10
 $user = new User();
-$resultObject = $user->page(1, 10)->where('id', 3, '>')->all();
-foreach ($resultObject as $user) {
-    var_dump($user->name);
+$user->queryLimit()->page(1, false, 10);
+$resultObject = $user->all();
+foreach ($resultObject as $oneUser) {
+    var_dump($oneUser->name);
 }
 
 // 使用条件的分页查询 进行汇总 withTotalCount=true
 // 查询 第1页 每页10条 page=1 pageSize=10
 $user = new User();
-$resultObject = $user->page(1, 10, true)->where('id', 3, '>')->all();
+$user->queryLimit()->page(1, true, 10)->where('id', 3, '>');
+$resultObject = $user->all();
 $total = $resultObject->totalCount(); // 汇总数量
-foreach ($resultObject as $user) {
-    var_dump($user->name);
+foreach ($resultObject as $oneUser) {
+    var_dump($oneUser->name);
 }
 var_dump($total);
 ```
@@ -949,7 +930,8 @@ $user->count();
 $user->count('id', 'name');
 // SELECT  COUNT(id) as count FROM `easyswoole_user` GROUP BY name  LIMIT 1
 
-$user->field(['id','name'])->count(null, 'name');
+$user->queryLimit()->fields(['id', 'name']);
+$user->count(null, 'name');
 // SELECT  COUNT(`id`) as id, COUNT(`name`) as name FROM `easyswoole_user` GROUP BY name  LIMIT 1
 ```
 
@@ -1026,48 +1008,6 @@ var_dump($user->toArray(false));
 /** @var \EasySwoole\FastDb\Beans\ListResult $listResult */
 $listResult = (new User)->all();
 $objectArr = $listResult->toArray(); // 转换为 对象数组
-```
-
-支持设置不输出的字段属性：
-
-```php
-<?php
-$user = User::findRecord(1);
-$user->hidden('name')->toArray(false);
-
-$user = (new User())->hidden(['name'])->find(1);
-$user->toArray(false);
-```
-
-### JSON 序列化
-
-可以调用模型的toJson方法进行JSON序列化
-
-```php
-<?php
-$user = User::findRecord(1);
-echo $user->toJson();
-```
-
-可以设置无需输出的字段，例如：
-
-```php
-<?php
-$user = User::findRecord(1);
-echo $user->hidden(['create_time','update_time'])->toJson();
-```
-
-模型对象可以直接被 JSON 序列化，例如：
-
-```php
-<?php
-echo json_encode(User::findRecord(1));
-```
-
-输出结果类似于：
-
-```bash
-{"id":1,"name":"easyswoole-1","status":1,"score":11,"create_time":1704526809,"info":null,"foo":null,"bar":null,"login_time":null,"login_times":null,"read":null,"title":null,"content":null,"email":"easyswoole1@qq.com"}
 ```
 
 ### 事件注解
@@ -1585,3 +1525,9 @@ FastDb::getInstance()->setOnQuery(function (\asySwoole\FastDb\Mysql\QueryResult 
 ```php
 $result = FastDb::getInstance()->rawQuery('call sp_query(8)');
 ```
+
+## 组件使用常见问题
+
+### 1.Method Swoole\Coroutine\MySQL::__construct() is deprecated
+
+如果在运行过程中出现类似 `PHP Deprecated: Method Swoole\Coroutine\MySQL::__construct() is deprecated in /demo/vendor/easyswoole/mysqli/src/Client.php on line 160` 这样的警告，请修改连接时使用的配置中的 `useMysqli` 为 `true` 选项，即可解决这个告警。
