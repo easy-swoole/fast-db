@@ -274,22 +274,26 @@ class FastDb
     {
         $client = $this->getClient();
         $t = microtime(true);
-        if(is_callable($queryBuilder)){
-            $call = $queryBuilder;
-            $queryBuilder = new QueryBuilder();
-            call_user_func($call,$queryBuilder);
-            $ret = $client->query($queryBuilder,$timeout);
-        }else{
-            $ret = $client->query($queryBuilder,$timeout);
-        }
-
         $return = new QueryResult($t);
-        $return->setResult($ret);
-        $return->setConnection($client);
-        $return->setQueryBuilder(clone $queryBuilder);
-        $this->logStack($return);
-        if(is_callable($this->onQuery)){
-            call_user_func($this->onQuery,$return);
+        try{
+            if(is_callable($queryBuilder)){
+                $call = $queryBuilder;
+                $queryBuilder = new QueryBuilder();
+                call_user_func($call,$queryBuilder);
+                $ret = $client->query($queryBuilder,$timeout);
+            }else{
+                $ret = $client->query($queryBuilder,$timeout);
+            }
+            $return->setResult($ret);
+        }catch (\Throwable $throwable){
+            throw  $throwable;
+        } finally {
+            $return->setConnection($client);
+            $return->setQueryBuilder(clone $queryBuilder);
+            $this->logStack($return);
+            if(is_callable($this->onQuery)){
+                call_user_func($this->onQuery,$return);
+            }
         }
         return $return;
     }
@@ -303,14 +307,19 @@ class FastDb
     {
         $client = $this->getClient();
         $t = microtime(true);
-        $ret =  $client->rawQuery($sql);
         $return = new QueryResult($t);
-        $return->setResult($ret);
-        $return->setConnection($client);
-        $return->setRawSql($sql);
-        $this->logStack($return);
-        if(is_callable($this->onQuery)){
-            call_user_func($this->onQuery,$return);
+        try {
+            $ret = $client->rawQuery($sql);
+            $return->setResult($ret);
+        }catch (\Throwable $throwable){
+            throw $throwable;
+        } finally {
+            $return->setConnection($client);
+            $return->setRawSql($sql);
+            $this->logStack($return);
+            if(is_callable($this->onQuery)){
+                call_user_func($this->onQuery,$return);
+            }
         }
         return $return;
     }
@@ -366,8 +375,8 @@ class FastDb
         $this->currentConnection[$cid][$name] = $obj;
 
         Coroutine::defer(function ()use($cid,$name){
-           unset($this->currentConnection[$cid][$name]);
-           unset( $this->queryStack[$cid]);
+            unset($this->currentConnection[$cid][$name]);
+            unset( $this->queryStack[$cid]);
         });
         return $this->currentConnection[$cid][$name];
     }
