@@ -68,7 +68,11 @@ abstract class AbstractEntity implements \JsonSerializable
             /** @var Property $property */
             $property = $allProperties[$key];
             if($property->convertObject && ($val !== null)){
-                $object = call_user_func([$property->convertObject,'toObject'],$val);
+                if($val instanceof $property->convertObject){
+                    $object = $val;
+                }else{
+                    $object = call_user_func([$property->convertObject,'toObject'],$val);
+                }
                 $this->{$key} = $object;
                 if($mergeCompare){
                     $this->compareData[$key] = $this->{$key}->toValue();
