@@ -170,6 +170,16 @@ abstract class AbstractEntity implements \JsonSerializable
                 $temp[$property->name()] = $val;
             }
         }
+
+        $fields = $this->queryLimit()->getFields();
+        if(!empty($fields)){
+            foreach ($temp as $key => $val){
+                if(!in_array($key,$fields)){
+                    unset($temp[$key]);
+                }
+            }
+        }
+
         $this->reset();
         return $temp;
     }
