@@ -172,7 +172,8 @@ abstract class AbstractEntity implements \JsonSerializable
         }
 
         $fields = $this->queryLimit()->getFields();
-        if(!empty($fields)){
+        if(!empty($fields['fields'])){
+            $fields = $fields['fields'];
             foreach ($temp as $key => $val){
                 if(!in_array($key,$fields)){
                     unset($temp[$key]);
