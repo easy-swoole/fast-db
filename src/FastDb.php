@@ -204,7 +204,7 @@ class FastDb
         return false;
     }
 
-    function commit(?Connection $client = null,float $timeout = 3.0):bool
+    function commit(?Connection $client = null,float|int $timeout = 3.0):bool
     {
         if(!$client){
             $client = FastDb::getInstance()->currentConnection();
@@ -218,7 +218,17 @@ class FastDb
         }
 
         $t = microtime(true);
-        $ret = $client->mysqlClient()->commit($timeout);
+        $realClient = $client->mysqlClient();
+        if($realClient instanceof \mysqli){
+            //MYSQLI_TRANS_COR_标记
+            if(is_int($timeout)){
+                $ret = $realClient->commit($timeout);
+            }else{
+                $ret = $realClient->commit();
+            }
+        }else{
+            $ret = $realClient->commit($timeout);
+        }
         $return = new QueryResult($t);
         $return->setResult($ret);
         $return->setRawSql("commit");
