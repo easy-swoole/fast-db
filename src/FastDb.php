@@ -173,7 +173,7 @@ class FastDb
      * @throws RuntimeError
      * @throws Exception
      */
-    function begin(?Connection $client = null,float $timeout = 3.0): bool
+    function begin(?Connection $client = null,float|int $timeout = 3.0): bool
     {
         if(!$client){
             $client = $this->getClient();
@@ -184,7 +184,11 @@ class FastDb
 
         $t = microtime(true);
         if($client->mysqlClient() instanceof \mysqli){
-            $ret = $client->mysqlClient()->begin_transaction();
+            if(is_int($timeout)){
+                $ret = $client->mysqlClient()->begin_transaction($timeout);
+            }else{
+                $ret = $client->mysqlClient()->begin_transaction();
+            }
         }else{
             $ret = $client->mysqlClient()->begin($timeout);
         }
