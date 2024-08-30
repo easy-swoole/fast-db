@@ -245,7 +245,7 @@ class FastDb
         return false;
     }
 
-    function rollback(?Connection $client = null,float $timeout = 3.0):bool
+    function rollback(?Connection $client = null,float|int $timeout = 3.0):bool
     {
         if(!$client){
             $client = FastDb::getInstance()->currentConnection();
@@ -259,7 +259,17 @@ class FastDb
         }
 
         $t = microtime(true);
-        $ret = $client->mysqlClient()->rollback($timeout);
+        $realClient = $client->mysqlClient();
+        if($realClient instanceof \mysqli){
+            //MYSQLI_TRANS_COR_标记
+            if(is_int($timeout)){
+                $ret = $realClient->rollback($timeout);
+            }else{
+                $ret = $realClient->rollback();
+            }
+        }else{
+            $ret = $realClient->rollback($timeout);
+        }
         $return = new QueryResult($t);
         $return->setResult($ret);
         $return->setRawSql("rollback");
