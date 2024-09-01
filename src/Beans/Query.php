@@ -63,6 +63,12 @@ class Query
         return $this->fields;
     }
 
+    function groupBy(string $groupByField):Query
+    {
+        $this->queryBuilder->groupBy($groupByField);
+        return $this;
+    }
+
     function orderBy($orderByField, $orderbyDirection = "DESC", $customFieldsOrRegExp = null):Query
     {
         $this->queryBuilder->orderBy($orderByField, $orderbyDirection, $customFieldsOrRegExp);
