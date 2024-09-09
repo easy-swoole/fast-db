@@ -57,7 +57,7 @@ abstract class AbstractEntity implements \JsonSerializable
         }
     }
 
-    function setData(array $data,bool $mergeCompare = false)
+    function setData(array $data,bool $mergeCompare = false):static
     {
         $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
         $allProperties = $entityRef->allProperties();
@@ -94,6 +94,7 @@ abstract class AbstractEntity implements \JsonSerializable
                 }
             }
         }
+        return $this;
     }
 
     function all():ListResult
