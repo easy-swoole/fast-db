@@ -99,6 +99,12 @@ class Query
         return $this;
     }
 
+    function selectForUpdate():Query
+    {
+        $this->queryBuilder->selectForUpdate();
+        return $this;
+    }
+
     function returnEntity():AbstractEntity
     {
         return $this->entity;

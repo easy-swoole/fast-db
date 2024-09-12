@@ -97,7 +97,7 @@ abstract class AbstractEntity implements \JsonSerializable
         return $this;
     }
 
-    function all():ListResult
+    function all( bool $selectForUpdate = false ):ListResult
     {
         $query = $this->queryLimit()->__getQueryBuilder();
 
@@ -106,6 +106,10 @@ abstract class AbstractEntity implements \JsonSerializable
         if(!empty($this->queryLimit()->getFields())){
             $fields = $this->queryLimit()->getFields()['fields'];
             $returnAsArray = $this->queryLimit()->getFields()['returnAsArray'];
+        }
+
+        if($selectForUpdate){
+            $query->selectForUpdate();
         }
 
         $query->get($this->tableName(),null,$fields);
@@ -622,7 +626,11 @@ abstract class AbstractEntity implements \JsonSerializable
         return null;
     }
 
-    public static function findRecord(callable|array|string|int $queryLimit, string $tableName = null): ?static
+    public static function findRecord(
+        callable|array|string|int $queryLimit,
+        string $tableName = null,
+        bool $selectForUpdate = false
+    ): ?static
     {
         $entity = new static();
         if (empty($tableName)) {
@@ -647,7 +655,9 @@ abstract class AbstractEntity implements \JsonSerializable
             }
             $query->where($pk, $queryLimit);
         }
-
+        if($selectForUpdate){
+            $query->selectForUpdate();
+        }
         $query->get($tableName, 1);
         $ret = FastDb::getInstance()->query($query)->getResult();
         if (!empty($ret[0])) {
@@ -657,7 +667,12 @@ abstract class AbstractEntity implements \JsonSerializable
         return null;
     }
 
-    public static function findAll(array|callable|string $queryLimit = null, string $tableName = null, bool $returnAsArray = false):mixed
+    public static function findAll(
+        array|callable|string $queryLimit = null,
+        string $tableName = null,
+        bool $returnAsArray = false,
+        bool $selectForUpdate = false
+    ):mixed
     {
         $entity = new static();
         if (empty($tableName)) {
@@ -691,6 +706,9 @@ abstract class AbstractEntity implements \JsonSerializable
                     $query->where($pk, $pkIds, 'IN');
                 }
             }
+        }
+        if($selectForUpdate){
+            $query->selectForUpdate();
         }
 
         $query->get($tableName);
