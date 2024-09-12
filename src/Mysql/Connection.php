@@ -11,11 +11,13 @@ class Connection extends Client implements ObjectInterface
     public string $connectionName;
     public bool $isInTransaction = false;
 
+    public bool $isForceRollback = false;
+
     public int $lastPingTime = 0;
 
     function gc()
     {
-        if($this->isInTransaction){
+        if($this->isInTransaction || $this->isForceRollback){
             try {
                 $this->mysqlClient()->rollback();
             }catch (\Throwable $throwable){
@@ -28,7 +30,7 @@ class Connection extends Client implements ObjectInterface
 
     function objectRestore()
     {
-        if($this->isInTransaction){
+        if($this->isInTransaction || $this->isForceRollback){
             try {
                 $this->mysqlClient()->rollback();
             }catch (\Throwable $throwable){

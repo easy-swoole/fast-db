@@ -19,6 +19,8 @@ class Config extends \EasySwoole\Pool\Config
 
     protected bool $useMysqli = false;
 
+    protected bool $isForceRollback = false;
+
     /**
      * @return string
      */
@@ -171,5 +173,15 @@ class Config extends \EasySwoole\Pool\Config
     public function setUseMysqli(bool $useMysqli): void
     {
         $this->useMysqli = $useMysqli;
+    }
+
+    public function isIsForceRollback(): bool
+    {
+        return $this->isForceRollback;
+    }
+
+    public function setIsForceRollback(bool $isForceRollback): void
+    {
+        $this->isForceRollback = $isForceRollback;
     }
 }

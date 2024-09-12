@@ -11,7 +11,9 @@ class Pool extends AbstractPool
     protected function createObject()
     {
         $config = new Config($this->getConfig()->toArray());
-        $con =  new Connection($config);
+        $con = new Connection($config);
+        $con->isForceRollback = $this->getConfig()->isIsForceRollback();
+
         if(!$con->connect()){
             $info = $con->mysqlClient()->connect_error;
             /** @var \EasySwoole\FastDb\Config $config */
