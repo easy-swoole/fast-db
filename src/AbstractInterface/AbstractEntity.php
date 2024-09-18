@@ -464,68 +464,6 @@ abstract class AbstractEntity implements \JsonSerializable
         return $ret->getConnection()->getLastAffectRows();
     }
 
-    /**
-     * @param array $dataList
-     * @param bool  $replace
-     * @param bool  $transaction
-     *
-     * @return array
-     * @throws RuntimeError
-     * @throws \EasySwoole\Pool\Exception\Exception
-     * @throws \ReflectionException
-     * @throws \Throwable
-     */
-    public function insertAll(array $dataList, bool $replace = true, bool $transaction = true)
-    {
-        $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
-        if (empty($entityRef->getPrimaryKey())){
-            throw new RuntimeError('insertAll() needs primaryKey for model ' . static::class);
-        }
-        $primaryKey = $entityRef->getPrimaryKey();
-
-        $returnAsArray = false;
-        if (!empty($this->queryLimit()->getFields())) {
-            $returnAsArray = $this->queryLimit()->getFields()['returnAsArray'];
-        }
-
-        // 开启事务
-        if ($transaction){
-            FastDb::getInstance()->begin();
-        }
-
-        $result = [];
-        try {
-            foreach ($dataList as $key => $row) {
-                // 如果有设置更新
-                if ($replace && isset($row[$primaryKey])) {
-                    $model = (new static())->find($row[$primaryKey]);
-                    unset($row[$primaryKey]);
-                    $model->setData($row);
-                    $model->update();
-                } else {
-                    $model = (new static($row));
-                    $model->insert();
-                }
-                if ($returnAsArray) {
-                    $result[$key] = $model->toArray();
-                } else {
-                    $result[$key] = $model;
-                }
-            }
-            if ($transaction) {
-                FastDb::getInstance()->commit();
-            }
-            $this->reset();
-            return $result;
-        } catch (\Throwable $throwable) {
-            if ($transaction) {
-                FastDb::getInstance()->rollback();
-            }
-            $this->reset();
-            throw $throwable;
-        }
-    }
-
     function insert(array $updateDuplicateCols = null)
     {
         $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
@@ -588,43 +526,6 @@ abstract class AbstractEntity implements \JsonSerializable
         return $pk;
     }
 
-    public function find(array|string|int $queryLimit = null): ?static
-    {
-        $fields = null;
-        if (!empty($this->queryLimit()->getFields())) {
-            $fields = $this->queryLimit()->getFields()['fields'];
-        }
-
-        if (is_array($queryLimit)) {
-            foreach ($queryLimit as $key => $item) {
-                if (is_array($item)) {
-                    $this->queryLimit()->where($key, ...$item);
-                } else {
-                    $this->queryLimit()->where($key, $item);
-                }
-            }
-        } else if ($queryLimit) {
-            $pk = ReflectionCache::getInstance()->parseEntity(static::class)->getPrimaryKey();
-            if (empty($pk)) {
-                $msg = "entity can not find record without primary key define";
-                throw new RuntimeError($msg);
-            }
-            $this->queryLimit()->where($pk, $queryLimit);
-        }
-
-        $query = $this->queryLimit()->__getQueryBuilder();
-        if ($fields) {
-            $query->fields($fields);
-        }
-        $query->get($this->tableName(), 1);
-        $ret = FastDb::getInstance()->query($query)->getResult();
-        $this->reset();
-        if (!empty($ret[0])) {
-            return new static($ret[0]);
-        }
-
-        return null;
-    }
 
     public static function findRecord(
         callable|array|string|int $queryLimit,
