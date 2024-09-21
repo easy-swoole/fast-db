@@ -17,6 +17,8 @@ abstract class AbstractEntity implements \JsonSerializable
 
     private ?Query $queryBuilder = null;
 
+    private $onQuery = null;
+
     abstract function tableName():string;
 
     function __construct(array $data = null)
@@ -114,9 +116,16 @@ abstract class AbstractEntity implements \JsonSerializable
 
         $query->get($this->tableName(),null,$fields);
         $ret = FastDb::getInstance()->query($query);
+        if(is_callable($this->onQuery)){
+            call_user_func($this->onQuery,$ret);
+        }
         $total = null;
         if(in_array('SQL_CALC_FOUND_ROWS',$query->getLastQueryOptions())){
-            $info = FastDb::getInstance()->rawQuery('SELECT FOUND_ROWS() as count')->getResult();
+            $info = FastDb::getInstance()->rawQuery('SELECT FOUND_ROWS() as count');
+            if(is_callable($this->onQuery)){
+                call_user_func($this->onQuery,$info);
+            }
+            $info = $info->getResult();
             if(isset($info[0]['count'])){
                 $total = $info[0]['count'];
             }
@@ -226,6 +235,9 @@ abstract class AbstractEntity implements \JsonSerializable
         }
 
         $ret = FastDb::getInstance()->query($query)->getResult();
+        if(is_callable($this->onQuery)){
+            call_user_func($this->onQuery,$ret);
+        }
         $this->reset();
         if (empty($ret)) {
             if ($hasFiled) {
@@ -265,6 +277,9 @@ abstract class AbstractEntity implements \JsonSerializable
         }
         $query->get($this->tableName(), 1, $str);
         $ret = FastDb::getInstance()->query($query)->getResult();
+        if(is_callable($this->onQuery)){
+            call_user_func($this->onQuery,$ret);
+        }
         $this->reset();
         if (empty($ret)) {
             if ($multiFields) {
@@ -333,6 +348,9 @@ abstract class AbstractEntity implements \JsonSerializable
         $query->delete($this->tableName());
         $this->reset();
         $ret = FastDb::getInstance()->query($query);
+        if(is_callable($this->onQuery)){
+            call_user_func($this->onQuery,$ret);
+        }
         return $ret->getConnection()->getLastAffectRows() >= 1;
     }
 
@@ -422,6 +440,9 @@ abstract class AbstractEntity implements \JsonSerializable
         $query = $this->queryLimit()->__getQueryBuilder();
         $query->update($this->tableName(),$data);
         $ret = FastDb::getInstance()->query($query);
+        if(is_callable($this->onQuery)){
+            call_user_func($this->onQuery,$ret);
+        }
         $this->reset();
         return $ret->getConnection()->getLastAffectRows() > 0;
     }
@@ -481,6 +502,9 @@ abstract class AbstractEntity implements \JsonSerializable
         }
         $query->insert($this->tableName(),$data);
         $ret = FastDb::getInstance()->query($query);
+        if(is_callable($this->onQuery)){
+            call_user_func($this->onQuery,$ret);
+        }
         $isSuccess = false;
         //swoole客户端问题 https://github.com/swoole/swoole-src/issues/5202
         if($ret->getResult()){
@@ -671,6 +695,9 @@ abstract class AbstractEntity implements \JsonSerializable
             ->get($tableName,2,$fields);
 
         $ret = FastDb::getInstance()->query($query)->getResult();
+        if(is_callable($this->onQuery)){
+            call_user_func($this->onQuery,$ret);
+        }
         $this->reset();
         if(empty($ret)){
             return null;
@@ -714,6 +741,9 @@ abstract class AbstractEntity implements \JsonSerializable
             ->get($tableName,null,$fields);
 
         $ret = FastDb::getInstance()->query($query)->getResult();
+        if(is_callable($this->onQuery)){
+            call_user_func($this->onQuery,$ret);
+        }
 
         $final = [];
         foreach ($ret as $item){
@@ -725,7 +755,11 @@ abstract class AbstractEntity implements \JsonSerializable
         }
         $total = null;
         if(in_array('SQL_CALC_FOUND_ROWS',$query->getLastQueryOptions())){
-            $info = FastDb::getInstance()->rawQuery('SELECT FOUND_ROWS() as count')->getResult();
+            $info = FastDb::getInstance()->rawQuery('SELECT FOUND_ROWS() as count');
+            if(is_callable($this->onQuery)){
+                call_user_func($this->onQuery,$info);
+            }
+            $info = $info->getResult();
             if(isset($info[0]['count'])){
                 $total = $info[0]['count'];
             }
@@ -764,5 +798,11 @@ abstract class AbstractEntity implements \JsonSerializable
             throw new RuntimeError($msg);
         }
         return $relate;
+    }
+
+    function setOnQuery(?callable $call):static
+    {
+        $this->onQuery = $call;
+        return $this;
     }
 }
