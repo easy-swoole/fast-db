@@ -354,7 +354,11 @@ abstract class AbstractEntity implements \JsonSerializable
         return $ret->getConnection()->getLastAffectRows() >= 1;
     }
 
-    public static function fastDelete(array|callable|string|int $deleteLimit,string $tableName = null):int|null|string
+    public static function fastDelete(
+        array|callable|string|int $deleteLimit,
+        string $tableName = null,
+        callable $onQuery = null
+    ):int|null|string
     {
         if (empty($deleteLimit) && 0 !== $deleteLimit) {
             return 0;
@@ -447,7 +451,12 @@ abstract class AbstractEntity implements \JsonSerializable
         return $ret->getConnection()->getLastAffectRows() > 0;
     }
 
-    public static function fastUpdate(array|callable|string|int $updateLimit,array $data,string $tableName = null):bool|int|string
+    public static function fastUpdate(
+        array|callable|string|int $updateLimit,
+        array $data,
+        string $tableName = null,
+        callable $onQuery = null
+    ):bool|int|string
     {
         $entity = new static();
         if(empty($tableName)){
@@ -554,7 +563,8 @@ abstract class AbstractEntity implements \JsonSerializable
     public static function findRecord(
         callable|array|string|int $queryLimit,
         string $tableName = null,
-        bool $selectForUpdate = false
+        bool $selectForUpdate = false,
+        callable $onQuery = null
     ): ?static
     {
         $entity = new static();
@@ -596,7 +606,8 @@ abstract class AbstractEntity implements \JsonSerializable
         array|callable|string $queryLimit = null,
         string $tableName = null,
         bool $returnAsArray = false,
-        bool $selectForUpdate = false
+        bool $selectForUpdate = false,
+        callable $onQuery = null
     ):mixed
     {
         $entity = new static();
