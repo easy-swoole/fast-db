@@ -234,10 +234,11 @@ abstract class AbstractEntity implements \JsonSerializable
             $query->get($this->tableName(),1, "count({$field}) as count");
         }
 
-        $ret = FastDb::getInstance()->query($query)->getResult();
+        $ret = FastDb::getInstance()->query($query);
         if(is_callable($this->onQuery)){
             call_user_func($this->onQuery,$ret);
         }
+        $ret = $ret->getResult();
         $this->reset();
         if (empty($ret)) {
             if ($hasFiled) {
@@ -276,10 +277,11 @@ abstract class AbstractEntity implements \JsonSerializable
             $query->groupBy($group);
         }
         $query->get($this->tableName(), 1, $str);
-        $ret = FastDb::getInstance()->query($query)->getResult();
+        $ret = FastDb::getInstance()->query($query);
         if(is_callable($this->onQuery)){
             call_user_func($this->onQuery,$ret);
         }
+        $ret = $ret->getResult();
         $this->reset();
         if (empty($ret)) {
             if ($multiFields) {
