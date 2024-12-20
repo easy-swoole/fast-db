@@ -44,6 +44,14 @@ class Query
         return $this;
     }
 
+    function returnAsArray():Query
+    {
+        $this->fields = [
+            'returnAsArray'=>true
+        ];
+        return $this;
+    }
+
     function hideFields(array|string $hideFields):Query
     {
         if(is_string($hideFields)){
