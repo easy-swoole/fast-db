@@ -95,7 +95,7 @@ final class FastDbTest extends BaseTestCase
                 $this->assertInstanceOf(RuntimeError::class, $throwable);
                 $err = $throwable->getMessage();
                 if (str_contains($err, 'using password: YES')) {
-                    $this->assertSame("connection error error case initObject fail after 3 times case connection [error@127.0.0.1]  connect error: SQLSTATE[28000] [1045] Access denied for user 'error'@'localhost' (using password: YES)", $err);
+                    $this->assertSame("SQLSTATE[28000] [1045] Access denied for user 'error'@'localhost' (using password: YES)", $err);
                 } else {
                     $this->assertSame("SQLSTATE[HY000] [2002] Connection refused", $err);
                 }
