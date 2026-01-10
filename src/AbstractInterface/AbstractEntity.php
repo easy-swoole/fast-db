@@ -396,6 +396,8 @@ abstract class AbstractEntity implements \JsonSerializable
                     }
                     unset($pkId);
                     $query->where($pk, $pkIds, 'IN');
+                }else{
+                    $query->where($pk, $deleteLimit);
                 }
             } else {
                 $query->where($pk, $deleteLimit);
@@ -486,6 +488,8 @@ abstract class AbstractEntity implements \JsonSerializable
                     }
                     unset($pkId);
                     $query->where($pk, $pkIds, 'IN');
+                }else{
+                    $query->where($pk, $updateLimit);
                 }
             } else {
                 $query->where($pk,$updateLimit);
