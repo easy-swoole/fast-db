@@ -8,6 +8,7 @@ use EasySwoole\FastDb\Beans\ListResult;
 use EasySwoole\FastDb\Beans\Query;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\FastDb;
+use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\FastDb\Utility\ReflectionCache;
 use EasySwoole\Mysqli\QueryBuilder;
 
@@ -115,17 +116,10 @@ abstract class AbstractEntity implements \JsonSerializable
         }
 
         $query->get($this->tableName(),null,$fields);
-        $ret = FastDb::getInstance()->query($query);
-        if(is_callable($this->onQuery)){
-            call_user_func($this->onQuery,$ret);
-        }
+        $ret = static::callQuery($query,$this->onQuery);
         $total = null;
         if(in_array('SQL_CALC_FOUND_ROWS',$query->getLastQueryOptions())){
-            $info = FastDb::getInstance()->rawQuery('SELECT FOUND_ROWS() as count');
-            if(is_callable($this->onQuery)){
-                call_user_func($this->onQuery,$info);
-            }
-            $info = $info->getResult();
+            $info = static::callQuery('SELECT FOUND_ROWS() as count',$this->onQuery)->getResult();
             if(isset($info[0]['count'])){
                 $total = $info[0]['count'];
             }
@@ -233,12 +227,7 @@ abstract class AbstractEntity implements \JsonSerializable
         } else {
             $query->get($this->tableName(),1, "count({$field}) as count");
         }
-
-        $ret = FastDb::getInstance()->query($query);
-        if(is_callable($this->onQuery)){
-            call_user_func($this->onQuery,$ret);
-        }
-        $ret = $ret->getResult();
+        $ret = static::callQuery($query,$this->onQuery)->getResult();
         $this->reset();
         if (empty($ret)) {
             if ($hasFiled) {
@@ -277,11 +266,7 @@ abstract class AbstractEntity implements \JsonSerializable
             $query->groupBy($group);
         }
         $query->get($this->tableName(), 1, $str);
-        $ret = FastDb::getInstance()->query($query);
-        if(is_callable($this->onQuery)){
-            call_user_func($this->onQuery,$ret);
-        }
-        $ret = $ret->getResult();
+        $ret = static::callQuery($query,$this->onQuery)->getResult();
         $this->reset();
         if (empty($ret)) {
             if ($multiFields) {
@@ -348,11 +333,8 @@ abstract class AbstractEntity implements \JsonSerializable
         $this->queryLimit()->where($pk,$this->{$pk});
         $query = $this->queryLimit()->__getQueryBuilder();
         $query->delete($this->tableName());
+        $ret = static::callQuery($query,$this->onQuery);
         $this->reset();
-        $ret = FastDb::getInstance()->query($query);
-        if(is_callable($this->onQuery)){
-            call_user_func($this->onQuery,$ret);
-        }
         return $ret->getConnection()->getLastAffectRows() >= 1;
     }
 
@@ -405,7 +387,7 @@ abstract class AbstractEntity implements \JsonSerializable
         }
 
         $query->delete($tableName);
-        $ret = FastDb::getInstance()->query($query);
+        $ret = static::callQuery($query,$onQuery);
         return $ret->getConnection()->getLastAffectRows();
     }
 
@@ -447,10 +429,7 @@ abstract class AbstractEntity implements \JsonSerializable
         $this->queryLimit()->where($pk,$this->{$pk});
         $query = $this->queryLimit()->__getQueryBuilder();
         $query->update($this->tableName(),$data);
-        $ret = FastDb::getInstance()->query($query);
-        if(is_callable($this->onQuery)){
-            call_user_func($this->onQuery,$ret);
-        }
+        $ret = static::callQuery($query,$this->onQuery);
         $this->reset();
         return $ret->getConnection()->getLastAffectRows() > 0;
     }
@@ -496,7 +475,7 @@ abstract class AbstractEntity implements \JsonSerializable
             }
         }
         $query->update($tableName,$data);
-        $ret = FastDb::getInstance()->query($query);
+        $ret = static::callQuery($query,$onQuery);
         return $ret->getConnection()->getLastAffectRows();
     }
 
@@ -516,10 +495,7 @@ abstract class AbstractEntity implements \JsonSerializable
             $query->onDuplicate($updateDuplicateCols);
         }
         $query->insert($this->tableName(),$data);
-        $ret = FastDb::getInstance()->query($query);
-        if(is_callable($this->onQuery)){
-            call_user_func($this->onQuery,$ret);
-        }
+        $ret = static::callQuery($query,$this->onQuery);
         $isSuccess = false;
         //swoole客户端问题 https://github.com/swoole/swoole-src/issues/5202
         if($ret->getResult()){
@@ -600,7 +576,7 @@ abstract class AbstractEntity implements \JsonSerializable
             $query->selectForUpdate();
         }
         $query->get($tableName, 1);
-        $ret = FastDb::getInstance()->query($query)->getResult();
+        $ret = static::callQuery($query,$onQuery)->getResult();
         if (!empty($ret[0])) {
             return new static($ret[0]);
         }
@@ -654,7 +630,7 @@ abstract class AbstractEntity implements \JsonSerializable
         }
 
         $query->get($tableName);
-        $result = FastDb::getInstance()->query($query)->getResult();
+        $result = self::callQuery($query,$onQuery)->getResult();
         if (!$returnAsArray) {
             $list = [];
             foreach ($result as $item) {
@@ -710,11 +686,7 @@ abstract class AbstractEntity implements \JsonSerializable
 
         $query->where($relate->targetProperty,$selfValue)
             ->get($tableName,2,$fields);
-
-        $ret = FastDb::getInstance()->query($query)->getResult();
-        if(is_callable($this->onQuery)){
-            call_user_func($this->onQuery,$ret);
-        }
+        $ret = static::callQuery($query,$this->onQuery)->getResult();
         $this->reset();
         if(empty($ret)){
             return null;
@@ -756,11 +728,7 @@ abstract class AbstractEntity implements \JsonSerializable
 
         $query->where($relate->targetProperty,$selfValue)
             ->get($tableName,null,$fields);
-
-        $ret = FastDb::getInstance()->query($query)->getResult();
-        if(is_callable($this->onQuery)){
-            call_user_func($this->onQuery,$ret);
-        }
+        $ret = static::callQuery($query,$this->onQuery)->getResult();
 
         $final = [];
         foreach ($ret as $item){
@@ -772,10 +740,7 @@ abstract class AbstractEntity implements \JsonSerializable
         }
         $total = null;
         if(in_array('SQL_CALC_FOUND_ROWS',$query->getLastQueryOptions())){
-            $info = FastDb::getInstance()->rawQuery('SELECT FOUND_ROWS() as count');
-            if(is_callable($this->onQuery)){
-                call_user_func($this->onQuery,$info);
-            }
+            $info = static::callQuery('SELECT FOUND_ROWS() as count',$this->onQuery);
             $info = $info->getResult();
             if(isset($info[0]['count'])){
                 $total = $info[0]['count'];
@@ -821,5 +786,27 @@ abstract class AbstractEntity implements \JsonSerializable
     {
         $this->onQuery = $call;
         return $this;
+    }
+
+    private static function callQuery(QueryBuilder|string $query,?callable $onQuery = null):QueryResult
+    {
+        try {
+            if($query instanceof QueryBuilder){
+                $ret = FastDb::getInstance()->query($query);
+            }else{
+                $ret = FastDb::getInstance()->rawQuery($query);
+            }
+        }catch (\Throwable $exception){
+            throw $exception;
+        }finally{
+            if(is_callable($onQuery)){
+                if(empty($ret)){
+                    $ret = new QueryResult(microtime(true));
+                    $ret->setQueryBuilder($query);
+                }
+                call_user_func($onQuery,$ret);
+            }
+        }
+        return $ret;
     }
 }
