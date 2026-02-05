@@ -49,6 +49,9 @@ class Query
         $this->fields = [
             'returnAsArray'=>true
         ];
+        if(empty($this->fields['fields'])){
+            $this->fields['fields'] = null;
+        }
         return $this;
     }
 
