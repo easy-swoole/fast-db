@@ -46,11 +46,13 @@ class Query
 
     function returnAsArray():Query
     {
-        $this->fields = [
-            'returnAsArray'=>true
-        ];
-        if(empty($this->fields['fields'])){
-            $this->fields['fields'] = null;
+        if(!is_array($this->fields)){
+            $this->fields = [
+                'returnAsArray'=>true,
+                'fields'=>null
+            ];
+        }else{
+            $this->fields['returnAsArray'] = true;
         }
         return $this;
     }
