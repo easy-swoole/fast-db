@@ -296,7 +296,7 @@ class FastDb
      * @throws RuntimeError
      * @throws \EasySwoole\Mysqli\Exception\Exception
      */
-    function query(QueryBuilder|callable $queryBuilder,float $timeout = null):QueryResult
+    function query(QueryBuilder|callable $queryBuilder,float|null $timeout = null):QueryResult
     {
         $client = $this->getClient();
         $t = microtime(true);

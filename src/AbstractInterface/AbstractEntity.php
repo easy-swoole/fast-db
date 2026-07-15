@@ -22,7 +22,7 @@ abstract class AbstractEntity implements \JsonSerializable
 
     abstract function tableName():string;
 
-    function __construct(array $data = null)
+    function __construct(array|null $data = null)
     {
         $this->init();
         if(!empty($data)){
@@ -203,7 +203,7 @@ abstract class AbstractEntity implements \JsonSerializable
         return $temp;
     }
 
-    public function count(string|null $field = '*', string $group = null): int|array
+    public function count(string|null $field = '*', string|null $group = null): int|array
     {
         $fields = null;
         if (!empty($this->queryLimit()->getFields())) {
@@ -243,7 +243,7 @@ abstract class AbstractEntity implements \JsonSerializable
         return $ret['count'];
     }
 
-    private function aggregate(string $aggregate, string|array $cols, string $group = null, bool $force = false): int|array|float
+    private function aggregate(string $aggregate, string|array $cols, string|null $group = null, bool $force = false): int|array|float
     {
         $multiFields = false;
         if (is_string($cols)) {
@@ -292,22 +292,22 @@ abstract class AbstractEntity implements \JsonSerializable
         }
     }
 
-    public function sum(string|array $cols, string $group = null, bool $force = true): int|array|float
+    public function sum(string|array $cols, string|null $group = null, bool $force = true): int|array|float
     {
         return $this->aggregate('SUM', $cols, $group, $force);
     }
 
-    public function avg(string|array $cols, string $group = null, bool $force = true): int|array|float
+    public function avg(string|array $cols, string|null $group = null, bool $force = true): int|array|float
     {
         return $this->aggregate('AVG', $cols, $group, $force);
     }
 
-    public function max(string|array $cols, string $group = null, bool $force = true): int|array|float
+    public function max(string|array $cols, string|null $group = null, bool $force = true): int|array|float
     {
         return $this->aggregate('MAX', $cols, $group, $force);
     }
 
-    public function min(string|array $cols, string $group = null, bool $force = true): int|array|float
+    public function min(string|array $cols, string|null $group = null, bool $force = true): int|array|float
     {
         return $this->aggregate('MIN', $cols, $group, $force);
     }
@@ -340,8 +340,8 @@ abstract class AbstractEntity implements \JsonSerializable
 
     public static function fastDelete(
         array|callable|string|int $deleteLimit,
-        string $tableName = null,
-        callable $onQuery = null
+        string|null $tableName = null,
+        callable|null $onQuery = null
     ):int|null|string
     {
         if (empty($deleteLimit) && 0 !== $deleteLimit) {
@@ -437,8 +437,8 @@ abstract class AbstractEntity implements \JsonSerializable
     public static function fastUpdate(
         array|callable|string|int $updateLimit,
         array $data,
-        string $tableName = null,
-        callable $onQuery = null
+        string|null $tableName = null,
+        callable|null $onQuery = null
     ):bool|int|string
     {
         $entity = new static();
@@ -479,7 +479,7 @@ abstract class AbstractEntity implements \JsonSerializable
         return $ret->getConnection()->getLastAffectRows();
     }
 
-    function insert(array $updateDuplicateCols = null)
+    function insert(array|null $updateDuplicateCols = null)
     {
         $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
         if($entityRef->getOnInsert()){
@@ -544,9 +544,9 @@ abstract class AbstractEntity implements \JsonSerializable
 
     public static function findRecord(
         callable|array|string|int $queryLimit,
-        string $tableName = null,
+        string|null $tableName = null,
         bool $selectForUpdate = false,
-        callable $onQuery = null
+        callable|null $onQuery = null
     ): ?static
     {
         $entity = new static();
@@ -585,11 +585,11 @@ abstract class AbstractEntity implements \JsonSerializable
     }
 
     public static function findAll(
-        array|callable|string $queryLimit = null,
-        string $tableName = null,
+        array|callable|string|null $queryLimit = null,
+        string|null $tableName = null,
         bool $returnAsArray = false,
         bool $selectForUpdate = false,
-        callable $onQuery = null
+        callable|null $onQuery = null
     ):mixed
     {
         $entity = new static();
@@ -661,7 +661,7 @@ abstract class AbstractEntity implements \JsonSerializable
         }
     }
 
-    protected function relateOne(?Relate $relate = null,string $tableName = null):null|array|AbstractEntity
+    protected function relateOne(Relate|null $relate = null,string|null $tableName = null):null|array|AbstractEntity
     {
         $relate = $this->parseRelate($relate);
         /** @var AbstractEntity $temp */
@@ -703,7 +703,7 @@ abstract class AbstractEntity implements \JsonSerializable
 
     }
 
-    protected function relateMany(?Relate $relate = null,string $tableName = null)
+    protected function relateMany(Relate|null $relate = null,string|null $tableName = null)
     {
         $relate = $this->parseRelate($relate);
         /** @var AbstractEntity $temp */

@@ -10,7 +10,7 @@ class ListResult  implements \Iterator , \JsonSerializable, \Countable , \ArrayA
     private array $data = [];
     private ?int $totalCount = null;
 
-    function __construct(array $data,?int $totalCount = null)
+    function __construct(array $data,int|null $totalCount = null)
     {
         $this->data = $data;
         $this->totalCount = $totalCount;

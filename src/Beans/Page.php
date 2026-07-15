@@ -13,7 +13,7 @@ class Page
      * @param bool $withTotalCount
      * @param int $pageSize
      */
-    function __construct(?int $page = null,bool $withTotalCount = false,int $pageSize = 10)
+    function __construct(int|null $page = null,bool $withTotalCount = false,int $pageSize = 10)
     {
         $this->page = $page;
         $this->pageSize = $pageSize;
