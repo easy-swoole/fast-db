@@ -17,7 +17,10 @@ class Config extends \EasySwoole\Pool\Config
 
     protected string $name = "default";
 
-    protected bool $useMysqli = false;
+    /*
+     * 自swoole 5.1开始强制使用mysqli hook方案
+     */
+    protected bool $useMysqli = true;
 
     protected bool $isForceRollback = false;
 
@@ -163,16 +166,6 @@ class Config extends \EasySwoole\Pool\Config
     public function setAutoPing(int $autoPing): void
     {
         $this->autoPing = $autoPing;
-    }
-
-    public function isUseMysqli(): bool
-    {
-        return $this->useMysqli;
-    }
-
-    public function setUseMysqli(bool $useMysqli): void
-    {
-        $this->useMysqli = $useMysqli;
     }
 
     public function isIsForceRollback(): bool

@@ -183,14 +183,10 @@ class FastDb
         }
 
         $t = microtime(true);
-        if($client->mysqlClient() instanceof \mysqli){
-            if(is_int($timeout)){
-                $ret = $client->mysqlClient()->begin_transaction($timeout);
-            }else{
-                $ret = $client->mysqlClient()->begin_transaction();
-            }
+        if(is_int($timeout)){
+            $ret = $client->mysqlClient()->begin_transaction($timeout);
         }else{
-            $ret = $client->mysqlClient()->begin($timeout);
+            $ret = $client->mysqlClient()->begin_transaction();
         }
 
         $return = new QueryResult($t);
@@ -222,16 +218,11 @@ class FastDb
         }
 
         $t = microtime(true);
-        $realClient = $client->mysqlClient();
-        if($realClient instanceof \mysqli){
-            //MYSQLI_TRANS_COR_标记
-            if(is_int($timeout)){
-                $ret = $realClient->commit($timeout);
-            }else{
-                $ret = $realClient->commit();
-            }
+        //MYSQLI_TRANS_COR_标记
+        if(is_int($timeout)){
+            $ret = $client->mysqlClient()->commit($timeout);
         }else{
-            $ret = $realClient->commit($timeout);
+            $ret = $client->mysqlClient()->commit();
         }
         $return = new QueryResult($t);
         $return->setResult($ret);
@@ -263,16 +254,11 @@ class FastDb
         }
 
         $t = microtime(true);
-        $realClient = $client->mysqlClient();
-        if($realClient instanceof \mysqli){
-            //MYSQLI_TRANS_COR_标记
-            if(is_int($timeout)){
-                $ret = $realClient->rollback($timeout);
-            }else{
-                $ret = $realClient->rollback();
-            }
+        //MYSQLI_TRANS_COR_标记
+        if(is_int($timeout)){
+            $ret = $client->mysqlClient()->rollback($timeout);
         }else{
-            $ret = $realClient->rollback($timeout);
+            $ret = $client->mysqlClient()->rollback();
         }
         $return = new QueryResult($t);
         $return->setResult($ret);
