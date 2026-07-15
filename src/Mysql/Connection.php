@@ -41,10 +41,11 @@ class Connection extends Client implements ObjectInterface
 
     function beforeUse(): ?bool
     {
-        if($this->mysqlClient() instanceof MySQL){
-            return $this->mysqlClient()->connected;
-        }else{
-            return $this->mysqlClient()->ping();
+        try{
+            $this->mysqlClient()->query('select 1');
+            return true;
+        }catch (\Throwable $throwable){
+            return false;
         }
     }
 }
