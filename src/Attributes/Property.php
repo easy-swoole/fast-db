@@ -12,7 +12,7 @@ class Property
     public function __construct(
         public bool $isPrimaryKey = false,
         public bool $allowNull = false,
-        public string|int|float|null|bool $defaultValue = null,
+        public mixed $defaultValue = null,
         public ?string $convertObject = null
     ){
         if($this->convertObject){
