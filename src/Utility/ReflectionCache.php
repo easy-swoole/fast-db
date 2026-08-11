@@ -35,50 +35,11 @@ class ReflectionCache
         }
         $entityReflection = new EntityReflection($entityClass);
 
-        $temp = $ref->getAttributes(OnDelete::class);
-        if(!empty($temp)){
-            try{
-                $temp = new OnDelete(...$temp[0]->getArguments());
-                $entityReflection->setOnDelete($temp);
-            }catch (\Throwable $throwable){
-                $msg = "OnDelete() attribute parse error in class {$entityClass}";
-                throw new RuntimeError($msg);
-            }
-        }
+        $entityReflection->setOnDelete($this->parseClassTag(OnDelete::class,$ref));
+        $entityReflection->setOnInitialize($this->parseClassTag(OnInitialize::class,$ref));
+        $entityReflection->setOnInsert($this->parseClassTag(OnInsert::class,$ref));
+        $entityReflection->setOnUpdate($this->parseClassTag(OnUpdate::class,$ref));
 
-        $temp = $ref->getAttributes(OnInitialize::class);
-        if(!empty($temp)){
-            try{
-                $temp = new OnInitialize(...$temp[0]->getArguments());
-                $entityReflection->setOnInitialize($temp);
-            }catch (\Throwable $throwable){
-                $msg = "OnInitialize() attribute parse error in class {$entityClass}";
-                throw new RuntimeError($msg);
-            }
-        }
-
-        $temp = $ref->getAttributes(OnInsert::class);
-        if(!empty($temp)){
-            try{
-                $temp = new OnInsert(...$temp[0]->getArguments());
-                $entityReflection->setOnInsert($temp);
-            }catch (\Throwable $throwable){
-                $msg = "OnInsert() attribute parse error in class {$entityClass}";
-                throw new RuntimeError($msg);
-            }
-        }
-
-
-        $temp = $ref->getAttributes(OnUpdate::class);
-        if(!empty($temp)){
-            try{
-                $temp = new OnUpdate(...$temp[0]->getArguments());
-                $entityReflection->setOnUpdate($temp);
-            }catch (\Throwable $throwable){
-                $msg = "OnUpdate() attribute parse error in class {$entityClass}";
-                throw new RuntimeError($msg);
-            }
-        }
 
         $properties = $ref->getProperties();
         foreach ($properties as $propertyRef){
@@ -87,7 +48,7 @@ class ReflectionCache
             }
             $temp = $propertyRef->getAttributes(Property::class);
             if(empty($temp)){
-               continue;
+                continue;
             }
             $temp = $temp[0];
             $property = new Property(...$temp->getArguments());
@@ -111,5 +72,20 @@ class ReflectionCache
     function cacheRelate(string $class,$method,Relate $relate)
     {
 
+    }
+
+    protected function parseClassTag(string $targetTag,\ReflectionClass $ref)
+    {
+        $temp = $ref->getAttributes($targetTag);
+        if(!empty($temp)){
+            return new $targetTag(...$temp[0]->getArguments());
+        }else{
+            $temp = $ref->getParentClass();
+            if($temp){
+                return $this->parseClassTag($targetTag,$temp);
+            }else{
+                return null;
+            }
+        }
     }
 }
