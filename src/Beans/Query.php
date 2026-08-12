@@ -13,8 +13,10 @@ class Query
 
     private ?array $hideFields = null;
 
+    private bool $persistFieldLimit = false;
+
     public function __construct(
-        private AbstractEntity $entity
+        private readonly AbstractEntity $entity
     ){
         $this->queryBuilder = new QueryBuilder();
     }
@@ -23,6 +25,17 @@ class Query
     {
         $this->page(null,$withTotalCount,$num);
         return $this;
+    }
+
+    function persistFieldLimit(bool $persistFieldLimit = true):Query
+    {
+        $this->persistFieldLimit = $persistFieldLimit;
+        return $this;
+    }
+
+    function isPersistFieldLimit():bool
+    {
+        return $this->persistFieldLimit;
     }
 
     function page(?int $page,bool $withTotalCount = false,int $pageSize = 10):Query

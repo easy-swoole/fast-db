@@ -140,7 +140,12 @@ abstract class AbstractEntity implements \JsonSerializable
                 foreach ($hideFields as $field){
                     unset($item[$field]);
                 }
-                $list[] = new static($item);
+                $t = new static($item);
+                if($this->queryLimit()->isPersistFieldLimit()){
+                    $t->queryLimit()->hideFields($hideFields);
+                    $t->queryLimit()->fields(...$this->queryLimit()->getFields());
+                }
+                $list[] = $t;
             }
         }
         $this->reset();
