@@ -18,7 +18,7 @@ abstract class AbstractEntity implements \JsonSerializable
 
     private ?Query $queryBuilder = null;
 
-    private $onQuery = null;
+    private mixed $onQuery = null;
 
     abstract function tableName():string;
 
@@ -143,7 +143,9 @@ abstract class AbstractEntity implements \JsonSerializable
                 $t = new static($item);
                 if($this->queryLimit()->isPersistFieldLimit()){
                     $t->queryLimit()->hideFields($hideFields);
-                    $t->queryLimit()->fields(...$this->queryLimit()->getFields());
+                    if(!empty($this->queryLimit()->getFields())){
+                        $t->queryLimit()->fields(...$this->queryLimit()->getFields());
+                    }
                 }
                 $list[] = $t;
             }

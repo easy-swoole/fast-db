@@ -13,6 +13,11 @@ class Query
 
     private ?array $hideFields = null;
 
+    /**
+     * @var bool
+     * 用于把field限制传递到查询后的子对象。实现子对象的toArray同步限制filed，
+     * 可以直接整个list json_encode
+     */
     private bool $persistFieldLimit = false;
 
     public function __construct(
