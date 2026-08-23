@@ -2,8 +2,9 @@
 
 namespace EasySwoole\FastDb\AbstractInterface;
 
-interface ConvertObjectInterface
+use EasySwoole\Spl\AbstractInterface\ConvertBeanInterface;
+
+interface ConvertObjectInterface extends ConvertBeanInterface
 {
-    public static function toObject(mixed $data):object;
-    public function toValue();
+
 }

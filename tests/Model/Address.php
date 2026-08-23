@@ -11,9 +11,9 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests\Model;
 
-use EasySwoole\FastDb\AbstractInterface\ConvertJson;
+use EasySwoole\FastDb\AbstractInterface\ConvertBean;
 
-class Address extends ConvertJson
+class Address extends ConvertBean
 {
     public $city;
     public $province;

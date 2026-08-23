@@ -4,7 +4,7 @@ namespace EasySwoole\FastDb\AbstractInterface;
 
 use EasySwoole\Spl\SplBean;
 
-class ConvertJson extends SplBean implements ConvertObjectInterface
+class ConvertBean extends SplBean implements ConvertObjectInterface
 {
     public static function toObject(mixed $data): object
     {
