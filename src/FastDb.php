@@ -22,8 +22,7 @@ class FastDb
     protected array $pools = [];
     protected array $currentConnection = [];
     protected array $selectConnection = [];
-
-    protected $onQuery = null;
+    protected mixed $onQuery = null;
     protected bool $enableQueryStack = false;
 
     protected array $queryStack = [];

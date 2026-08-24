@@ -17,11 +17,6 @@ class Config extends \EasySwoole\Pool\Config
 
     protected string $name = "default";
 
-    /*
-     * 自swoole 5.1开始强制使用mysqli hook方案
-     */
-    protected bool $useMysqli = true;
-
     protected bool $isForceRollback = false;
 
     /**
