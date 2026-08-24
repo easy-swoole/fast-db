@@ -15,10 +15,13 @@ class ConvertList implements ConvertObjectInterface
     public static function toObject(mixed $data): static
     {
         if(empty($data)){
-            $data = [];
+            return new static([]);
         }
         if(!is_array($data)){
-            $data = json_decode($data,true) ?? [];
+            $data = json_decode($data,true);
+            if(!is_array($data)){
+                $data = [];
+            }
         }
         return new static($data);
     }
