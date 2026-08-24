@@ -6,7 +6,7 @@ use EasySwoole\Spl\SplBean;
 
 class ConvertBean extends SplBean implements ConvertObjectInterface
 {
-    public static function toObject(mixed $data): object
+    public static function toObject(mixed $data): static
     {
         if(is_string($data)){
             $data = json_decode($data,true) ?:[];
