@@ -2,6 +2,7 @@
 
 namespace EasySwoole\FastDb\AbstractInterface;
 
+use EasySwoole\FastDb\Attributes\Hook\Call;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Beans\ListResult;
@@ -56,7 +57,7 @@ abstract class AbstractEntity implements \JsonSerializable
             }
         }
         if($entityRef->getOnInitialize()){
-            $this->callHook($entityRef->getOnInitialize()->callback);
+            $this->callHook($entityRef->getOnInitialize());
         }
     }
 
@@ -91,6 +92,10 @@ abstract class AbstractEntity implements \JsonSerializable
                     }
                 }
             }else{
+                if($property->assignCall){
+                    $p = $property->assignCall->buildPropertyRuntimeParams($val,$this);
+                    $val = call_user_func_array($property->assignCall->callback,$p);
+                }
                 $this->{$key} = $val;
                 if($mergeCompare){
                     $this->compareData[$key] = $val;
@@ -188,6 +193,9 @@ abstract class AbstractEntity implements \JsonSerializable
             }
             if($val instanceof ConvertObjectInterface){
                 $val = $val->toValue();
+            }else if($property->toValue){
+                $p = $property->toValue->buildPropertyRuntimeParams($val,$this);
+                $val = call_user_func_array($property->toValue->callback,$p);
             }else if($filterNull && $val === null){
                 continue;
             }
@@ -331,9 +339,9 @@ abstract class AbstractEntity implements \JsonSerializable
     {
         $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
         if($entityRef->getOnDelete()){
-            $ret = $this->callHook($entityRef->getOnDelete()->callback);
+            $ret = $this->callHook($entityRef->getOnDelete());
             if($ret === false){
-                return  false;
+                return false;
             }
         }
         $pk = $this->primaryKeyCheck('delete');
@@ -402,7 +410,7 @@ abstract class AbstractEntity implements \JsonSerializable
     {
         $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
         if($entityRef->getOnUpdate()){
-            $ret = $this->callHook($entityRef->getOnUpdate()->callback);
+            $ret = $this->callHook($entityRef->getOnUpdate());
             if($ret === false){
                 return  false;
             }
@@ -490,7 +498,7 @@ abstract class AbstractEntity implements \JsonSerializable
     {
         $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
         if($entityRef->getOnInsert()){
-            $ret = $this->callHook($entityRef->getOnInsert()->callback);
+            $ret = $this->callHook($entityRef->getOnInsert());
             if($ret === false){
                 return false;
             }
@@ -655,17 +663,20 @@ abstract class AbstractEntity implements \JsonSerializable
         return $this->toArray();
     }
 
-    protected function callHook(callable|string $callback):mixed
+    protected function callHook(Call $callback):mixed
     {
-        if(is_callable($callback)){
-            return call_user_func($callback,$this);
-        }else{
-            if(method_exists($this,$callback)){
+        if(is_callable($callback->callback)){
+            $p = $callback->buildEntityHookRuntimeParams($this);
+            return call_user_func_array($callback->callback,$p);
+        }else if(is_string($callback->callback)){
+            if(method_exists($this,$callback->callback)){
+                $callback = $callback->callback;
                 return $this->$callback();
             }else{
-                throw new RuntimeError("{$callback} no a method of class ".static::class);
+                throw new RuntimeError("{$callback->callback} no a method of class ".static::class);
             }
         }
+        return null;
     }
 
     protected function relateOne(Relate|null $relate = null,string|null $tableName = null):null|array|AbstractEntity
