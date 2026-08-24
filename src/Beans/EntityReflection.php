@@ -73,13 +73,13 @@ class EntityReflection
 
     function addProperty(Property $property):void
     {
-        $this->properties[$property->name()] = $property;
+        $this->properties[$property->name] = $property;
         if($property->isPrimaryKey){
             if($this->primaryKey){
                 $msg = "can not duplicate define primary key in class {$this->entityClass}";
                 throw new RuntimeError($msg);
             }else{
-                $this->primaryKey = $property->name();
+                $this->primaryKey = $property->name;
             }
         }
     }

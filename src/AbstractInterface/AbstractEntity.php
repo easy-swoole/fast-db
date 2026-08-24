@@ -42,17 +42,17 @@ abstract class AbstractEntity implements \JsonSerializable
                 if((!$property->allowNull) || ($property->defaultValue !== null)){
                     /** @var ConvertObjectInterface $object */
                     $object = call_user_func([$property->convertObject,'toObject'],$property->defaultValue);
-                    $this->{$property->name()} = $object;
-                    $this->compareData[$property->name()] = $object->toValue();
+                    $this->{$property->name} = $object;
+                    $this->compareData[$property->name] = $object->toValue();
                 }else{
-                    $this->{$property->name()} = null;
-                    $this->compareData[$property->name()] = $property->defaultValue;
+                    $this->{$property->name} = null;
+                    $this->compareData[$property->name] = $property->defaultValue;
                 }
             }else{
                 if(($property->defaultValue !== null) || $property->allowNull){
-                    $this->{$property->name()} = $property->defaultValue;
+                    $this->{$property->name} = $property->defaultValue;
                 }
-                $this->compareData[$property->name()] = $property->defaultValue;
+                $this->compareData[$property->name] = $property->defaultValue;
             }
         }
         if($entityRef->getOnInitialize()){
@@ -183,16 +183,16 @@ abstract class AbstractEntity implements \JsonSerializable
         /** @var Property $property */
         foreach ($entityRef->allProperties() as $property){
             $val = null;
-            if(isset($this->{$property->name()})){
-                $val = $this->{$property->name()};
+            if(isset($this->{$property->name})){
+                $val = $this->{$property->name};
             }
             if($val instanceof ConvertObjectInterface){
                 $val = $val->toValue();
             }else if($filterNull && $val === null){
                 continue;
             }
-            if (!in_array($property->name(), $hideFields)){
-                $temp[$property->name()] = $val;
+            if (!in_array($property->name, $hideFields)){
+                $temp[$property->name] = $val;
             }
         }
 

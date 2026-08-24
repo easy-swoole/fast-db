@@ -8,12 +8,13 @@ use EasySwoole\FastDb\Exception\RuntimeError;
 #[\Attribute(\Attribute::TARGET_PROPERTY)]
 class Property
 {
-    private readonly string $name;
+    public readonly string $name;
+    public bool $allowNull = false;
+
     public function __construct(
-        public bool $isPrimaryKey = false,
-        public bool $allowNull = false,
+        public readonly bool $isPrimaryKey = false,
         public mixed $defaultValue = null,
-        public ?string $convertObject = null
+        public readonly ?string $convertObject = null
     ){
         if($this->convertObject){
             $ref = new \ReflectionClass($this->convertObject);
@@ -23,11 +24,6 @@ class Property
             }
         }
 
-    }
-
-    public function name():string
-    {
-        return $this->name;
     }
 
     public function __setName(string $name):void
