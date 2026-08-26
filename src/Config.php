@@ -11,7 +11,7 @@ class Config extends \EasySwoole\Pool\Config
     protected string $password;
     protected string $database;
     protected int $port = 3306;
-    protected int $timeout = 5;
+    protected int $maxConnectTim = 5;
     protected string $charset = 'utf8mb4';
     protected int $autoPing = 5;
 
@@ -118,17 +118,17 @@ class Config extends \EasySwoole\Pool\Config
     /**
      * @return int
      */
-    public function getTimeout(): int
+    public function getMaxConnectTim(): int
     {
-        return $this->timeout;
+        return $this->maxConnectTim;
     }
 
     /**
-     * @param int $timeout
+     * @param int $maxConnectTim
      */
-    public function setTimeout(int $timeout): void
+    public function setMaxConnectTim(int $maxConnectTim): void
     {
-        $this->timeout = $timeout;
+        $this->maxConnectTim = $maxConnectTim;
     }
 
     /**

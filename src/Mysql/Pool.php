@@ -2,7 +2,6 @@
 
 namespace EasySwoole\FastDb\Mysql;
 
-use EasySwoole\FastDb\Exception\Exception;
 use EasySwoole\Mysqli\Config;
 use EasySwoole\Pool\AbstractPool;
 
@@ -10,19 +9,13 @@ class Pool extends AbstractPool
 {
     protected function createObject()
     {
-        $config = new Config($this->getConfig()->toArray());
+        /** @var \EasySwoole\FastDb\Config $poolConfig */
+        $poolConfig = $this->getConfig();
+        $config = new Config($$poolConfig->toArray());
         $con = new Connection($config);
-        $con->isForceRollback = $this->getConfig()->isIsForceRollback();
-
-        if(!$con->connect()){
-            $info = $con->mysqlClient()->connect_error;
-            /** @var \EasySwoole\FastDb\Config $config */
-            $config = $this->getConfig();
-            throw new Exception("connection [{$config->getName()}@{$config->getHost()}]  connect error: ".$info);
-        }else{
-            //用于AutoPing
-            return $con;
-        }
+        $con->isForceRollback = $poolConfig->isIsForceRollback();
+        $con->connect();
+        return $con;
     }
 
     /**
@@ -54,11 +47,8 @@ class Pool extends AbstractPool
          */
         if($config->getAutoPing() > 0 && (time() - $item->lastPingTime > $config->getAutoPing())){
             try{
-                //执行一个sql触发活跃信息
-                $item->rawQuery('select 1');
-                $item->lastPingTime = time();
-                return true;
-            }catch (\Throwable $throwable){
+                return $item->ping();
+            }catch (\Throwable){
                 //异常说明该链接出错了，return false 进行回收
                 return false;
             }

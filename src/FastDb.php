@@ -131,6 +131,8 @@ class FastDb
      */
     function invoke(callable $call)
     {
+        $client = null;
+        $selectDb = null;
         try{
             $client = $this->getClient(false);
             $selectDb = $client->connectionName;

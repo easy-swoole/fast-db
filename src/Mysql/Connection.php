@@ -4,7 +4,6 @@ namespace EasySwoole\FastDb\Mysql;
 
 use EasySwoole\Mysqli\Client;
 use EasySwoole\Pool\ObjectInterface;
-use Swoole\Coroutine\MySQL;
 
 class Connection extends Client implements ObjectInterface
 {
@@ -12,10 +11,9 @@ class Connection extends Client implements ObjectInterface
     public bool $isInTransaction = false;
 
     public bool $isForceRollback = false;
-
     public int $lastPingTime = 0;
 
-    function gc()
+    function gc(): void
     {
         if($this->isInTransaction || $this->isForceRollback){
             try {
@@ -28,7 +26,7 @@ class Connection extends Client implements ObjectInterface
         $this->close();
     }
 
-    function objectRestore()
+    function objectRestore(): void
     {
         if($this->isInTransaction || $this->isForceRollback){
             try {
