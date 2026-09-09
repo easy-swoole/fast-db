@@ -4,14 +4,15 @@ namespace EasySwoole\FastDb\Mysql;
 
 use EasySwoole\Mysqli\Config;
 use EasySwoole\Pool\AbstractPool;
+use EasySwoole\Pool\ObjectInterface;
 
 class Pool extends AbstractPool
 {
-    protected function createObject()
+    protected function createObject(): ObjectInterface
     {
         /** @var \EasySwoole\FastDb\Config $poolConfig */
         $poolConfig = $this->getConfig();
-        $config = new Config($$poolConfig->toArray());
+        $config = new Config($poolConfig->toArray());
         $con = new Connection($config);
         $con->isForceRollback = $poolConfig->isIsForceRollback();
         $con->connect();
@@ -25,35 +26,29 @@ class Pool extends AbstractPool
      */
     public function keepMin(?int $num = null): int
     {
-        $old = $this->status()['created'];
-        try{
-            return parent::keepMin($num);
-        }catch (\Throwable $throwable){
-            /** @var \EasySwoole\FastDb\Config $config */
-            $config = $this->getConfig();
-            trigger_error("connection {$config->getName()} ".$throwable->getMessage());
-            return $this->status()['created'] - $old;
+        $currentAdd = 0;
+        if($num == null){
+            $num = $this->getConfig()->getMinObjectNum();
         }
-    }
+        if ($this->createdNum <= $num) {
+            $left = $num - $this->createdNum;
+            while ($left >= 1) {
+                try {
+                    if (!$this->initObject()) {
+                        break;
+                    }
+                }catch (\Throwable $throwable){
+                    // 非关键位置没必要抛出异常导致进程意外结束
+                    /** @var \EasySwoole\FastDb\Config $config */
+                    $config = $this->getConfig();
+                    trigger_error("connection {$config->getName()} createObject() error,".$throwable->getMessage());
+                    break;
+                }
 
-
-    protected function itemIntervalCheck($item): bool
-    {
-        /** @var Connection $item */
-        /** @var \EasySwoole\FastDb\Config $config */
-        $config = $this->getConfig();
-        /**
-         *  auto ping是为了保证在 idleMaxTime周期内的可用性 （如果超出了周期还没使用，则代表现在进程空闲，可以先回收）
-         */
-        if($config->getAutoPing() > 0 && (time() - $item->lastPingTime > $config->getAutoPing())){
-            try{
-                return $item->ping();
-            }catch (\Throwable){
-                //异常说明该链接出错了，return false 进行回收
-                return false;
+                $left--;
+                $currentAdd++;
             }
-        }else{
-            return true;
         }
+        return $currentAdd;
     }
 }

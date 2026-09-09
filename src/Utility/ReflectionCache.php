@@ -69,11 +69,6 @@ class ReflectionCache
         return $entityReflection;
     }
 
-    function cacheRelate(string $class,$method,Relate $relate)
-    {
-
-    }
-
     protected function parseClassTag(string $targetTag,\ReflectionClass $ref)
     {
         $temp = $ref->getAttributes($targetTag);

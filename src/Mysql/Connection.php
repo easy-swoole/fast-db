@@ -9,9 +9,7 @@ class Connection extends Client implements ObjectInterface
 {
     public string $connectionName;
     public bool $isInTransaction = false;
-
     public bool $isForceRollback = false;
-    public int $lastPingTime = 0;
 
     function gc(): void
     {
@@ -37,7 +35,17 @@ class Connection extends Client implements ObjectInterface
         }
     }
 
-    function beforeUse(): ?bool
+    function beforeUse(): bool
+    {
+        try{
+            $this->mysqlClient()->query('select 1');
+            return true;
+        }catch (\Throwable $throwable){
+            return false;
+        }
+    }
+
+    function intervalCheck(): bool
     {
         try{
             $this->mysqlClient()->query('select 1');
