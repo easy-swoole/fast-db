@@ -660,6 +660,35 @@ $user->update(); // nullable 属性可清空到 SQL NULL。
 
 `ConvertList::toObject()` 接收数组或 JSON 字符串，空值/不能解码为数组的值转成空列表。`append(null)` 不追加。`remove()` 会保留原数组键，删除后 JSON 编码可能呈现对象形式；需要列表 JSON 时可先使用 `array_values()` 整理数据并重新赋值。
 
+### ConvertDateTime
+
+`ConvertDateTime` 继承 PHP `DateTime` 并实现 `ConvertObjectInterface`，用于 MySQL `DATETIME` / `DATETIME(fsp)` 字段。
+
+```php
+use EasySwoole\FastDb\AbstractInterface\ConvertDateTime;
+use EasySwoole\FastDb\Attributes\Property;
+
+#[Property(convertObject: ConvertDateTime::class)]
+public ?ConvertDateTime $createdAt;
+```
+
+```php
+$user->setData(['createdAt' => '2026-10-07 12:34:56']);
+$user->createdAt?->format('Y-m-d');
+$user->createdAt?->modify('+1 day');
+$user->update(); // 写入 2026-10-08 12:34:56。
+
+$user->setData(['createdAt' => new DateTimeImmutable('2026-10-09 12:00:00')]);
+$user->update();
+
+$user->setData(['createdAt' => null]);
+$user->update(); // nullable 字段清空为 SQL NULL。
+```
+
+模型需要声明对应属性并增加数据库字段。`toObject()` 接收日期时间字符串、`DateTimeInterface`、整数 Unix 时间戳；直接传 null 表示当前时间。实体 nullable 属性的 null 由实体保留为 null，不调用转换器。已有日期对象会复制，保留其时区和微秒，不共享可变对象。
+
+`toValue()` 和实体序列化输出 `Y-m-d H:i:s`；微秒非零时输出 `Y-m-d H:i:s.u`，数据库字段应设置相应精度以保留小数秒。MySQL `DATETIME` 不存储时区，转换器保留当前时区下的日期时间，不自动转为 UTC；读取数据库字符串使用 PHP 默认时区，应用应统一时区配置。空字符串、不支持的输入类型和标准 MySQL 格式中的无效日期（含零日期）会被拒绝；其他字符串采用 PHP `DateTime` 的解析规则。
+
 ### ConvertBean
 
 ```php
