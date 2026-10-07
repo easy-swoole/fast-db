@@ -303,6 +303,7 @@ class FastDb
             $queryException = $throwable;
             throw  $throwable;
         } finally {
+            $return->setEndTime(microtime(true));
             $return->setConnection($client);
             $return->setQueryBuilder(clone $queryBuilder);
             $this->logStack($return);
@@ -337,6 +338,7 @@ class FastDb
             $queryException = $throwable;
             throw $throwable;
         } finally {
+            $return->setEndTime(microtime(true));
             $return->setConnection($client);
             $return->setRawSql($sql);
             $this->logStack($return);
