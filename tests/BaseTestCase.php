@@ -23,8 +23,22 @@ class BaseTestCase extends TestCase
     {
         parent::setUp();
 
+        FastDb::getInstance()->selectConnection('default');
+
         // check table exists
         $this->createTestTable();
+    }
+
+    protected function tearDown(): void
+    {
+        try {
+            FastDb::getInstance()->recycleContext();
+            FastDb::getInstance()->reset();
+            FastDb::getInstance()->selectConnection('default');
+            \Swoole\Timer::clearAll();
+        } finally {
+            parent::tearDown();
+        }
     }
 
     private function createTestTable()

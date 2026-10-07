@@ -26,8 +26,7 @@ final class NullableConvertTest extends TestCase
 
     public function testClearedValueIsWrittenAsSqlNull(): void
     {
-        $connection = $this->getMockBuilder(Connection::class)
-            ->disableOriginalConstructor()->onlyMethods(['getLastAffectRows'])->getMock();
+        $connection = $this->createStub(Connection::class);
         $connection->method('getLastAffectRows')->willReturn(1);
         $result = new QueryResult(microtime(true));
         $result->setConnection($connection);

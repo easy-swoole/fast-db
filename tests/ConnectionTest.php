@@ -17,7 +17,7 @@ final class ConnectionTest extends TestCase
             ->disableOriginalConstructor()
             ->onlyMethods(['mysqlClient'])
             ->getMock();
-        $connection->method('mysqlClient')->willReturn($mysql);
+        $connection->expects($this->atLeastOnce())->method('mysqlClient')->willReturn($mysql);
         return $connection;
     }
 

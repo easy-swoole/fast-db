@@ -1,319 +1,150 @@
 <?php
+
 declare(strict_types=1);
-/**
- * This file is part of EasySwoole.
- *
- * @link     https://www.easyswoole.com
- * @document https://www.easyswoole.com
- * @contact  https://www.easyswoole.com/Preface/contact.html
- * @license  https://github.com/easy-swoole/easyswoole/blob/3.x/LICENSE
- */
 
 namespace EasySwoole\FastDb\Commands;
 
-use EasySwoole\Command\Color;
-use EasySwoole\Command\CommandManager;
-use EasySwoole\FastDb\Config;
+use EasySwoole\Command\Bean\Caller;
+use EasySwoole\Command\Bean\ExecStatusEnum;
+use EasySwoole\Command\Bean\Result;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\Mysqli\QueryBuilder;
 use Swoole\Coroutine;
-use Swoole\Timer;
 
 class GenModelAction implements ActionInterface
 {
-    private function runAction()
+    public function run(Caller $caller, Result $result): void
     {
-        $commandManager = CommandManager::getInstance();
-        $table = $commandManager->getOpt('table');
-        if (!$table) {
-            return Color::danger("The option param 'table' missed!");
-        }
-
-        $connectionName = $commandManager->getOpt('db-connection');
-        if (!$connectionName) {
-            $connectionName = 'default';
-        }
-
-        $path = $commandManager->getOpt('path');
-        if (!$path) {
-            $path = 'App/Model';
-        }
-
-        $columns = $this->formatColumns($this->getColumnTypeListing($connectionName, $table));
-        $project = new Project();
-        $class = $this->studly($table);
-        $class = $project->getNamespace($path) . $class;
-        $filepath = getcwd() . DIRECTORY_SEPARATOR . $project->path($class);
-        if (!file_exists($filepath)) {
-            $this->mkdir($filepath);
-        }
-
-        file_put_contents($filepath, $this->buildClass($table, $class, $connectionName, $columns));
-        echo Color::success("Model {$class} was created.") . "\n";
-        Timer::clearAll();
-        return null;
-    }
-
-    public function run(): ?string
-    {
+        $execute = function () use ($caller, $result): void {
+            try {
+                $this->runAction($caller, $result);
+                $result->status = ExecStatusEnum::OK;
+            } catch (\Throwable $exception) {
+                $result->status = ExecStatusEnum::COMMAND_ACTION_EXEC_FAIL;
+                $result->msg = $exception->getMessage();
+            }
+        };
         if (Coroutine::getCid() > 0) {
-            $this->runAction();
+            $execute();
         } else {
-            Coroutine\run(function () {
-                $this->runAction();
+            Coroutine\run(function () use ($execute): void {
+                try {
+                    $execute();
+                } finally {
+                    FastDb::getInstance()->recycleContext();
+                    FastDb::getInstance()->reset();
+                }
             });
         }
-
-        return null;
     }
 
-    /**
-     * Format column's key to lower case.
-     */
-    private function formatColumns(array $columns): array
+    private function runAction(Caller $caller, Result $result): void
     {
-        return array_map(function ($item) {
-            return array_change_key_case($item, CASE_LOWER);
-        }, $columns);
+        $options = $caller->commandLine;
+        $table = $options->getOption('table');
+        if (!is_string($table) || $table === '') {
+            throw new RuntimeError("The option param 'table' missed!");
+        }
+        $connectionName = $options->getOption('db-connection') ?? 'default';
+        $path = $options->getOption('path') ?? 'App/Model';
+        if (!is_string($connectionName) || $connectionName === '' || !is_string($path) || $path === '') {
+            throw new RuntimeError('Database connection and model path must be non-empty strings');
+        }
+        $withComments = $options->hasOption('with-comments') &&
+            !in_array($options->getOption('with-comments'), [false, 'false', '0', 0], true);
+        $columns = $this->getColumnTypeListing($connectionName, $table);
+        if ($columns === []) {
+            throw new RuntimeError("Table {$table} does not exist or has no columns");
+        }
+        $project = new Project();
+        $shortName = str_replace(' ', '', ucwords(str_replace(['-', '_'], ' ', $table)));
+        $this->checkIdentifier($shortName);
+        $class = $project->getNamespace($path) . $shortName;
+        $filepath = getcwd() . DIRECTORY_SEPARATOR . $project->path($class);
+        $source = $this->buildClass($table, $class, $connectionName, $columns, $withComments);
+        $this->mkdir($filepath);
+        if (file_put_contents($filepath, $source) === false) {
+            throw new RuntimeError("Failed to write model {$filepath}");
+        }
+        $result->result = ['class' => $class, 'path' => $filepath];
+        $result->msg = "Model {$class} was created.";
     }
 
-    /**
-     * Get the column type listing for a given table.
-     *
-     * @param string $connectionName
-     * @param string $table
-     *
-     * @return mixed
-     * @throws \EasySwoole\FastDb\Exception\RuntimeError
-     * @throws \EasySwoole\Mysqli\Exception\Exception
-     * @throws \EasySwoole\Pool\Exception\Exception
-     * @throws \Throwable
-     */
-    private function getColumnTypeListing(string $connectionName, string $table)
+    private function getColumnTypeListing(string $connectionName, string $table): array
     {
-        $connection = FastDb::getInstance()->selectConnection($connectionName);
-
-        /** @var Config $fastDbConfig */
-        $fastDbConfig = $connection->getConfig($connectionName);
-        if (!$fastDbConfig) {
+        $db = FastDb::getInstance();
+        $config = $db->getConfig($connectionName);
+        if (!$config) {
             throw new RuntimeError("connection {$connectionName} not register yet");
         }
-
-        $sql = 'select `column_key` as `column_key`, `column_name` as `column_name`, `data_type` as `data_type`, `is_nullable` as `is_nullable`, `column_comment` as `column_comment`, `extra` as `extra`, `column_type` as `column_type` from information_schema.columns where `table_schema` = ? and `table_name` = ? order by ORDINAL_POSITION';
-        $builder = new QueryBuilder();
-        $builder->raw($sql, [$fastDbConfig->getDatabase(), $table]);
-        return FastDb::getInstance()->query($builder)->getResult();
-    }
-
-    private function studly(string $value, string $gap = ''): string
-    {
-        $value = ucwords(str_replace(['-', '_'], ' ', $value));
-
-        return str_replace(' ', $gap, $value);
+        $previousConnection = $db->selectConnection();
+        $db->selectConnection($connectionName);
+        try {
+            $builder = new QueryBuilder();
+            $builder->raw('SELECT COLUMN_KEY AS column_key, COLUMN_NAME AS column_name, DATA_TYPE AS data_type, IS_NULLABLE AS is_nullable, COLUMN_COMMENT AS column_comment FROM information_schema.columns WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION', [$config->getDatabase(), $table]);
+            return array_map(fn(array $column): array => array_change_key_case($column, CASE_LOWER), $db->query($builder)->getResult());
+        } finally {
+            $db->selectConnection($previousConnection);
+        }
     }
 
     protected function mkdir(string $path): void
     {
         $dir = dirname($path);
-        if (!is_dir($dir)) {
-            @mkdir($dir, 0755, true);
+        if (!is_dir($dir) && !mkdir($dir, 0755, true) && !is_dir($dir)) {
+            throw new RuntimeError("Failed to create model directory {$dir}");
         }
     }
 
-    /**
-     * Build the class with the given name.
-     */
-    protected function buildClass(string $table, string $name, string $connectionName, $columns): string
+    protected function buildClass(string $table, string $name, string $connectionName, array $columns, bool $withComments = false): string
     {
-        $stub = file_get_contents(__DIR__ . '/stubs/Entity.stub');
-
-        $primaryKeyName = '';
-        $primaryKeyType = 'int';
+        $primaryKeys = array_filter($columns, fn(array $column): bool => $column['column_key'] === 'PRI');
+        if (count($primaryKeys) > 1) {
+            throw new RuntimeError('Composite primary keys are not supported by AbstractEntity');
+        }
+        $properties = [];
+        $descriptions = ['/**'];
         foreach ($columns as $column) {
-            if ($column['column_key'] == 'PRI') {
-                $primaryKeyName = $column['column_name'];
-                $primaryKeyType = $column['data_type'];
-                break;
-            }
-        }
-
-        return $this
-            ->replaceNamespace($stub, $name)
-            ->replacePropertyDescAndField($stub, $columns, $primaryKeyName)
-            ->replacePrimaryKey($stub, $primaryKeyName, $primaryKeyType)
-            ->replaceField($stub, $columns)
-            ->replaceConnection($stub, $connectionName)
-            ->replaceClass($stub, $name)
-            ->replaceTable($stub, $table);
-    }
-
-    /**
-     * Replace the namespace for the given stub.
-     */
-    protected function replaceNamespace(string &$stub, string $name): self
-    {
-        $stub = str_replace(
-            ['%NAMESPACE%'],
-            [$this->getNamespace($name)],
-            $stub
-        );
-
-        return $this;
-    }
-
-    protected function formatDatabaseType(string $type): ?string
-    {
-        return match ($type) {
-            'tinyint', 'smallint', 'mediumint', 'int', 'bigint' => 'integer',
-            'bool', 'boolean' => 'boolean',
-            default => null,
-        };
-    }
-
-    protected function enum_exists(string $enum, bool $autoload = true): bool
-    {
-        return $autoload && class_exists($enum) && false;
-    }
-
-    private function formatPropertyType(string $type): ?string
-    {
-        $cast = $this->formatDatabaseType($type) ?? 'string';
-
-        if ($this->enum_exists($cast)) {
-            return '\\' . $cast;
-        }
-
-        return match ($cast) {
-            'integer' => 'int',
-            'date', 'datetime' => 'string',
-            'json' => 'array',
-            default => $cast,
-        };
-    }
-
-    protected function replacePropertyDescAndField(string &$stub, array $columns, string $primaryKeyName): self
-    {
-        $withComments = CommandManager::getInstance()->issetOpt('with-comments');
-
-        $propertyDescArr = ["/**"];
-        $fieldArr = [];
-        foreach ($columns as $column) {
+            $field = $column['column_name'];
+            $this->checkIdentifier($field);
             $type = $this->formatPropertyType($column['data_type']);
-            $name = $column['column_name'];
-            $isNullable = $column['is_nullable'] == 'YES';
-            $nullType = $isNullable ? '|null' : '';
-            $desc = " * @property {$type}{$nullType} \${$name}";
-            if ($withComments) {
-                $desc .= " {$column['column_comment']}";
-            }
-            $propertyDescArr[] = $desc;
-
-            if ($name !== $primaryKeyName) {
-                $fieldNullType = $isNullable ? '?' : '';
-                $fieldStrArr = [
-                    "#[Property]",
-                    "public {$fieldNullType}{$type} \${$name};"
-                ];
-                $fieldArr[] = join("\n    ", $fieldStrArr);
-            }
+            $nullable = $column['is_nullable'] === 'YES';
+            $comment = $withComments ? ' ' . str_replace(['*/', "\r", "\n"], ['* /', ' ', ' '], $column['column_comment']) : '';
+            $descriptions[] = ' * @property ' . $type . ($nullable ? '|null' : '') . ' $' . $field . $comment;
+            $attribute = $column['column_key'] === 'PRI' ? '#[Property(isPrimaryKey: true)]' : '#[Property]';
+            $properties[] = $attribute . "\n    public " . ($nullable ? '?' : '') . $type . ' $' . $field . ';';
         }
-        $propertyDescArr[] = " */";
-        $propertyDesc = join("\n", $propertyDescArr);
-        $field = join("\n    ", $fieldArr);
-
-        $stub = str_replace(
-            ['%PROPERTY_DESC%'],
-            [$propertyDesc],
+        $descriptions[] = ' */';
+        $parts = explode('\\', $name);
+        $class = array_pop($parts);
+        $namespace = implode('\\', $parts);
+        $stub = file_get_contents(__DIR__ . '/stubs/Entity.stub');
+        if ($stub === false) {
+            throw new RuntimeError('Failed to read entity template');
+        }
+        return str_replace(
+            ['%NAMESPACE%', '%CLASS%', '%PROPERTY_DESC%', '%FIELD%', '%TABLE_NAME%'],
+            [$namespace, $class, implode("\n", $descriptions), implode("\n\n    ", $properties), var_export($table, true)],
             $stub
         );
-
-        $stub = str_replace(
-            ['%FIELD%'],
-            [$field],
-            $stub
-        );
-
-        return $this;
     }
 
-    protected function replacePrimaryKey(string &$stub, string $name, string $type): self
+    private function formatPropertyType(string $type): string
     {
-        $stub = str_replace(
-            ['%PRIMARY_KEY_ANNOTATION%'],
-            ['#[Property(isPrimaryKey: true)]'],
-            $stub
-        );
-
-        $primaryKeyStr = "public {$type} \${$name};";
-        $stub = str_replace(
-            ['%PRIMARY_KEY%'],
-            [$primaryKeyStr],
-            $stub
-        );
-
-        return $this;
+        return match (strtolower($type)) {
+            'tinyint', 'smallint', 'mediumint', 'int', 'bigint' => 'int',
+            'bool', 'boolean' => 'bool',
+            'float', 'double', 'real' => 'float',
+            // Keep decimal precision and raw JSON strings, matching database values.
+            default => 'string',
+        };
     }
 
-    protected function replaceField(string &$stub, array $columns): self
+    private function checkIdentifier(string $identifier): void
     {
-        $stub = str_replace(
-            ['%FIELD%'],
-            ['123'],
-            $stub
-        );
-
-        return $this;
-    }
-
-    /**
-     * Get the full namespace for a given class, without the class name.
-     */
-    protected function getNamespace(string $name): string
-    {
-        return trim(implode('\\', array_slice(explode('\\', $name), 0, -1)), '\\');
-    }
-
-    protected function replaceConnection(string &$stub, string $connection): self
-    {
-        $stub = str_replace(
-            ['%CONNECTION%'],
-            [$connection],
-            $stub
-        );
-
-        return $this;
-    }
-
-    protected function replaceUses(string &$stub, string $uses): self
-    {
-        $uses = $uses ? "use {$uses};" : '';
-        $stub = str_replace(
-            ['%USES%'],
-            [$uses],
-            $stub
-        );
-
-        return $this;
-    }
-
-    /**
-     * Replace the class name for the given stub.
-     */
-    protected function replaceClass(string &$stub, string $name): self
-    {
-        $class = str_replace($this->getNamespace($name) . '\\', '', $name);
-
-        $stub = str_replace('%CLASS%', $class, $stub);
-
-        return $this;
-    }
-
-    /**
-     * Replace the table name for the given stub.
-     */
-    protected function replaceTable(string $stub, string $table): string
-    {
-        return str_replace('%TABLE_NAME%', $table, $stub);
+        if (!preg_match('/^[a-zA-Z_\x80-\xff][a-zA-Z0-9_\x80-\xff]*$/D', $identifier)) {
+            throw new RuntimeError("Cannot generate PHP identifier for {$identifier}");
+        }
     }
 }

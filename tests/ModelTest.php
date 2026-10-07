@@ -55,12 +55,17 @@ final class ModelTest extends BaseTestCase
         return $student;
     }
 
-    public function testTableName()
+    public function testTableName(): void
     {
         $this->assertSame($this->tableName, (new StudentModel())->tableName());
     }
 
-    public function testInsert(): AbstractEntity
+    public function testInsert(): void
+    {
+        $this->createStudentFixture();
+    }
+
+    private function createStudentFixture(): StudentModel
     {
         // truncate
         $this->truncateTable($this->tableName);
@@ -78,7 +83,7 @@ final class ModelTest extends BaseTestCase
         return $model;
     }
 
-    public function testInsert1()
+    public function testInsert1(): void
     {
         $this->truncateTable($this->tableName);
         $model = new StudentModel();
@@ -206,7 +211,7 @@ final class ModelTest extends BaseTestCase
 
     public function testUpdate(): void
     {
-        $model = $this->testInsert();
+        $model = $this->createStudentFixture();
 
         // Update an existing record
         // eg.1
@@ -247,7 +252,7 @@ final class ModelTest extends BaseTestCase
     //    public function testUpdateWithLimit()
     //    {
     //        $id = 1;
-    //        $model = $this->testInsert();
+    //        $model = $this->createStudentFixture();
     //        $result = $model->updateWithLimit([
     //            'name' => 'easyswoole1_update',
     //        ], ['id' => $id]);
@@ -270,7 +275,7 @@ final class ModelTest extends BaseTestCase
     public function testFastUpdate(): void
     {
         $id = 1;
-        $this->testInsert();
+        $this->createStudentFixture();
 
         // 1. with data in array format as update conditions
         $arrayUpdateWhere = ['id' => $id];
@@ -295,7 +300,7 @@ final class ModelTest extends BaseTestCase
         $this->assertSame($update['name'], $student->name);
 
         // 3. with primary key id
-        $this->testInsert();
+        $this->createStudentFixture();
         $primaryKeyId = 1;
         $update       = ['name' => 'EasySwoole777'];
         $result       = StudentModel::fastUpdate($primaryKeyId, $update);
@@ -306,7 +311,7 @@ final class ModelTest extends BaseTestCase
         $this->assertSame($update['name'], $student->name);
 
         // 4. with the given table name
-        $this->testInsert();
+        $this->createStudentFixture();
         $primaryKeyIdStr = '1';
         $result          = StudentModel::fastDelete($primaryKeyIdStr, 'student');
         $this->assertIsInt($result);
@@ -321,7 +326,7 @@ final class ModelTest extends BaseTestCase
         // eg.1 Delete an existing record
         $student = $this->find(['id' => 1]);
         if (is_null($student)) {
-            $student = $this->testInsert();
+            $student = $this->createStudentFixture();
         }
         $this->assertNotNull($student);
         $this->assertInstanceOf(StudentModel::class, $student);
@@ -334,7 +339,7 @@ final class ModelTest extends BaseTestCase
         $student = $this->find(['id' => 1]);
         $this->assertNull($student);
 
-        $this->testInsert();
+        $this->createStudentFixture();
         $model  = StudentModel::findRecord(1);
         $result = $model->delete();
         $this->assertTrue($result);
@@ -343,7 +348,7 @@ final class ModelTest extends BaseTestCase
 
         // eg.1.2
         // first insert
-        $model = $this->testInsert();
+        $model = $this->createStudentFixture();
         // then delete
         $result = $model->delete();
         $this->assertTrue($result);
@@ -364,7 +369,7 @@ final class ModelTest extends BaseTestCase
         $id = 1;
 
         // 1. with array
-        $this->testInsert();
+        $this->createStudentFixture();
         $arrayWhere = ['id' => $id];
         $result     = StudentModel::fastDelete($arrayWhere);
         $this->assertIsInt($result);
@@ -374,7 +379,7 @@ final class ModelTest extends BaseTestCase
         $this->assertNull($student);
 
         // 2. with callable
-        $this->testInsert();
+        $this->createStudentFixture();
         $callableWhere = function (QueryBuilder $queryBuilder) use ($id) {
             $queryBuilder->where('id', $id);
         };
@@ -386,7 +391,7 @@ final class ModelTest extends BaseTestCase
         $this->assertNull($student);
 
         // 3. with primary key id
-        $this->testInsert();
+        $this->createStudentFixture();
         $primaryKeyId = 1;
         $result       = StudentModel::fastDelete($primaryKeyId);
         $this->assertIsInt($result);
@@ -396,7 +401,7 @@ final class ModelTest extends BaseTestCase
         $this->assertNull($student);
 
         // 4. with the given table name
-        $this->testInsert();
+        $this->createStudentFixture();
         $primaryKeyIdStr = '1';
         $result          = StudentModel::fastDelete($primaryKeyIdStr, 'student');
         $this->assertIsInt($result);
@@ -405,7 +410,7 @@ final class ModelTest extends BaseTestCase
         $student = $this->find(['id' => 1]);
         $this->assertNull($student);
 
-        $this->testInsert();
+        $this->createStudentFixture();
         $primaryKeyIdStr = '1,2';
         $result          = StudentModel::fastDelete($primaryKeyIdStr, 'student');
         $this->assertIsInt($result);
@@ -421,9 +426,9 @@ final class ModelTest extends BaseTestCase
         $this->assertSame(0, $result);
     }
 
-    public function testFindRecord()
+    public function testFindRecord(): void
     {
-        $this->testInsert();
+        $this->createStudentFixture();
         // 1. with primary key as query conditions
         $student = StudentModel::findRecord(1);
         $this->assertInstanceOf(StudentModel::class, $student);
@@ -452,7 +457,7 @@ final class ModelTest extends BaseTestCase
 
     //    public function testFind()
     //    {
-    //        $this->testInsert();
+    //        $this->createStudentFixture();
     //        $studentModel = new StudentModel();
     //        $studentModel->queryLimit()->where('name', 'EasySwoole1');
     //        $result = $studentModel->find();
@@ -467,9 +472,9 @@ final class ModelTest extends BaseTestCase
     //        $this->assertNull($result);
     //    }
 
-    public function testFindAll()
+    public function testFindAll(): void
     {
-        $this->testInsert();
+        $this->createStudentFixture();
         // (new StudentModel())->insertAll([['id' => 2, 'name' => 'EasySwoole2']], false);
         (new StudentModel())->setData(['id' => 2, 'name' => 'EasySwoole2'])->insert();
         // 1. with primary key str as query conditions
@@ -507,7 +512,7 @@ final class ModelTest extends BaseTestCase
         $this->assertEmpty($list);
     }
 
-    public function testAll()
+    public function testAll(): void
     {
         $this->truncateTable($this->tableName);
 
@@ -523,7 +528,7 @@ final class ModelTest extends BaseTestCase
         $this->assertEmpty($listResult->toArray());
 
         // ready data
-        $this->testInsert();
+        $this->createStudentFixture();
         $model       = new StudentModel();
         $model->id   = 2;
         $model->name = 'EasySwoole2';
@@ -551,16 +556,16 @@ final class ModelTest extends BaseTestCase
         }
     }
 
-    public function testToArray()
+    public function testToArray(): void
     {
-        $model = $this->testInsert();
+        $model = $this->createStudentFixture();
         $array = $model->toArray();
         $this->assertIsArray($array);
         $this->assertSame(1, $array['id']);
         $this->assertSame('EasySwoole1', $array['name']);
     }
 
-    public function testConvertField()
+    public function testConvertField(): void
     {
         $studentInfoModel = new StudentInfoModel();
         $this->truncateTable($studentInfoModel->tableName());
@@ -602,7 +607,7 @@ final class ModelTest extends BaseTestCase
         }
     }
 
-    public function testChunk()
+    public function testChunk(): void
     {
         $this->mockUserData();
 
@@ -622,7 +627,7 @@ final class ModelTest extends BaseTestCase
         $this->truncateTable($user->tableName());
     }
 
-    public function testPage()
+    public function testPage(): void
     {
         $this->mockUserData(25);
 
@@ -645,7 +650,7 @@ final class ModelTest extends BaseTestCase
         $this->truncateTable($user->tableName());
     }
 
-    public function testCount()
+    public function testCount(): void
     {
         $total = 20;
         $this->mockUserData($total);
@@ -668,7 +673,7 @@ final class ModelTest extends BaseTestCase
         $this->truncateTable($user->tableName());
     }
 
-    public function testMax()
+    public function testMax(): void
     {
         $total = 20;
         $this->mockUserData($total);
@@ -690,7 +695,7 @@ final class ModelTest extends BaseTestCase
         $this->truncateTable($user->tableName());
     }
 
-    public function testMin()
+    public function testMin(): void
     {
         $total = 20;
         $this->mockUserData($total);
@@ -712,7 +717,7 @@ final class ModelTest extends BaseTestCase
         $this->truncateTable($user->tableName());
     }
 
-    public function testAvg()
+    public function testAvg(): void
     {
         $total = 20;
         $this->mockUserData($total);
@@ -734,7 +739,7 @@ final class ModelTest extends BaseTestCase
         $this->truncateTable($user->tableName());
     }
 
-    public function testSum()
+    public function testSum(): void
     {
         $total = 20;
         $this->mockUserData($total);
@@ -756,7 +761,7 @@ final class ModelTest extends BaseTestCase
         $this->truncateTable($user->tableName());
     }
 
-    public function testQueryLimit()
+    public function testQueryLimit(): void
     {
         $model      = new StudentModel();
         $queryLimit = $model->queryLimit();
@@ -764,9 +769,9 @@ final class ModelTest extends BaseTestCase
         $this->assertInstanceOf(Query::class, $queryLimit);
     }
 
-    public function testJsonSerialize()
+    public function testJsonSerialize(): void
     {
-        $this->testInsert();
+        $this->createStudentFixture();
         $student = StudentModel::findRecord(['id' => 1]);
         $json    = '{"id":1,"name":"EasySwoole1"}';
         $this->assertSame($json, json_encode($student));

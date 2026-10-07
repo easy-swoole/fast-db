@@ -1,79 +1,120 @@
 <?php
+
 declare(strict_types=1);
-/**
- * This file is part of EasySwoole.
- *
- * @link     https://www.easyswoole.com
- * @document https://www.easyswoole.com
- * @contact  https://www.easyswoole.com/Preface/contact.html
- * @license  https://github.com/easy-swoole/easyswoole/blob/3.x/LICENSE
- */
 
 namespace EasySwoole\FastDb\Tests;
 
-use EasySwoole\Command\CommandManager;
-use EasySwoole\FastDb\Commands\GenModelAction;
+use EasySwoole\Command\Bean\Caller;
+use EasySwoole\Command\Bean\ExecStatusEnum;
+use EasySwoole\Command\Manager;
+use EasySwoole\Command\Utility;
+use EasySwoole\FastDb\Commands\ModelCommand;
 use EasySwoole\FastDb\Config;
 use EasySwoole\FastDb\FastDb;
-use EasySwoole\FastDb\Mysql\QueryResult;
-use EasySwoole\Mysqli\QueryBuilder;
-use EasySwoole\Spl\SplBean;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 final class GenModelActionTest extends BaseTestCase
 {
-    protected $tableName = 'easyswoole_user';
-
     protected function setUp(): void
     {
         parent::setUp();
-        $configObj = new Config(MYSQL_CONFIG);
-        FastDb::getInstance()->addDb($configObj);
-        FastDb::getInstance()->setOnQuery(function (QueryResult $queryResult) {
-//            if ($queryResult->getQueryBuilder()) {
-//                echo $queryResult->getQueryBuilder()->getLastQuery() . "\n";
-//            } else {
-//                echo $queryResult->getRawSql() . "\n";
-//            }
-        });
-
-        $this->createTestTable();
+        FastDb::getInstance()->addDb(new Config(MYSQL_CONFIG));
     }
 
-    private function createTestTable()
-    {
-        $sql = <<<Sql
-CREATE TABLE IF NOT EXISTS `{$this->tableName}`
-(
-    `id`      int unsigned NOT NULL AUTO_INCREMENT COMMENT 'increment id',
-    `name`    varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT 'name',
-    `status`  tinyint unsigned DEFAULT '0' COMMENT 'status',
-    `score`   int unsigned DEFAULT '0' COMMENT 'score',
-    `sex`     tinyint unsigned DEFAULT '0' COMMENT 'sex',
-    `address` json                                                          DEFAULT NULL COMMENT 'address',
-    `email`   varchar(150) COLLATE utf8mb4_general_ci                       DEFAULT NULL COMMENT 'email',
-    PRIMARY KEY (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
-Sql;
-        $builder = new QueryBuilder();
-        $builder->raw($sql);
-        FastDb::getInstance()->query($builder)->getResult();
-    }
-
-    public function testGenModel()
+    #[DataProvider('commentOptions')]
+    public function testGenModelThroughCommandManager(array $commentOptions, bool $expectedComments): void
     {
         $file = __DIR__ . '/Model/EasyswooleUser.php';
-        @unlink($file);
+        $this->assertFileDoesNotExist($file);
+        try {
+            $result = $this->generate(['--table=easyswoole_user', '--path=tests/Model', ...$commentOptions]);
+            $this->assertSame(ExecStatusEnum::OK, $result->status, $result->msg ?? '');
+            $this->assertFileExists($file);
+            $this->assertSame($file, $result->result['path']);
+            $source = file_get_contents($file);
+            $this->assertStringContainsString('public int $id;', $source);
+            if ($expectedComments) {
+                $this->assertStringContainsString('increment id', $source);
+            } else {
+                $this->assertStringNotContainsString('increment id', $source);
+            }
+        } finally {
+            if (is_file($file)) {
+                unlink($file);
+            }
+        }
+    }
 
-        $commandManager = CommandManager::getInstance();
-        $opts = [
-            'table'         => 'easyswoole_user',
-            'path'          => 'tests/Model',
-            'with-comments' => '',
-        ];
-        $commandManager->setOpts($opts);
-        (new GenModelAction())->run();
+    public static function commentOptions(): array
+    {
+        return [[[], false], [['--with-comments'], true], [['--with-comments=false'], false]];
+    }
 
-        $this->assertFileExists($file);
-        @unlink($file);
+    public function testMissingTableDoesNotGenerateFile(): void
+    {
+        $result = $this->generate(['--table=codex_missing_model_table_20261007', '--path=tests/Model']);
+        $this->assertSame(ExecStatusEnum::COMMAND_ACTION_EXEC_FAIL, $result->status);
+        $this->assertStringContainsString('does not exist', $result->msg);
+        $this->assertFileDoesNotExist(__DIR__ . '/Model/CodexMissingModelTable20261007.php');
+    }
+
+    public function testNamedConnectionIsRestoredAndTimersRemainActive(): void
+    {
+        $db = FastDb::getInstance()->addDb(new Config(MYSQL_CONFIG), 'generator');
+        $timer = \Swoole\Timer::tick(60000, static function (): void {});
+        $file = __DIR__ . '/Model/EasyswooleUser.php';
+        $this->assertFileDoesNotExist($file);
+        try {
+            $result = $this->generate(['--table=easyswoole_user', '--path=tests/Model', '--db-connection=generator']);
+            $this->assertSame(ExecStatusEnum::OK, $result->status, $result->msg ?? '');
+            $this->assertSame('default', $db->selectConnection());
+            $this->assertTrue(\Swoole\Timer::exists($timer));
+        } finally {
+            \Swoole\Timer::clear($timer);
+            if (is_file($file)) {
+                unlink($file);
+            }
+        }
+    }
+
+    #[DataProvider('primaryKeySchemas')]
+    public function testGeneratedPrimaryKeyTypesFromDatabase(string $suffix, string $sqlType, mixed $value): void
+    {
+        $table = 'codex_generator_' . $suffix . '_20261007';
+        $class = 'CodexGenerator' . ucfirst($suffix) . '20261007';
+        $file = __DIR__ . '/Model/' . $class . '.php';
+        $db = FastDb::getInstance();
+        $this->assertFileDoesNotExist($file);
+        $created = false;
+        try {
+            $db->rawQuery("CREATE TABLE `{$table}` (id {$sqlType} PRIMARY KEY)");
+            $created = true;
+            $result = $this->generate(['--table=' . $table, '--path=tests/Model']);
+            $this->assertSame(ExecStatusEnum::OK, $result->status, $result->msg ?? '');
+            require $file;
+            $entityClass = 'EasySwoole\\FastDb\\Tests\\Model\\' . $class;
+            $entity = new $entityClass(['id' => $value]);
+            $this->assertSame($value, $entity->id);
+            $this->assertSame($table, $entity->tableName());
+        } finally {
+            if (is_file($file)) {
+                unlink($file);
+            }
+            if ($created) {
+                $db->rawQuery("DROP TABLE `{$table}`");
+            }
+        }
+    }
+
+    public static function primaryKeySchemas(): array
+    {
+        return [['bigint', 'BIGINT', 42], ['varchar', 'VARCHAR(80)', 'uuid-1']];
+    }
+
+    private function generate(array $options): \EasySwoole\Command\Bean\Result
+    {
+        $manager = new Manager();
+        $manager->addCommand(new ModelCommand());
+        return $manager->exec(new Caller('model', 'gen', Utility::parseArgv($options)));
     }
 }

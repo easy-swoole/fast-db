@@ -8,17 +8,17 @@ use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\Mysqli\QueryBuilder;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class QueryTimingTest extends TestCase
 {
-    /** @dataProvider queryModes */
+    #[DataProvider('queryModes')]
     public function testDurationIncludesExecutionAndExcludesLogging(bool $raw, bool $fails): void
     {
         $failure = new \RuntimeException('SQL failure');
         $method = $raw ? 'rawQuery' : 'query';
-        $client = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()
-            ->onlyMethods([$method])->getMock();
+        $client = $this->createStub(Connection::class);
         $client->method($method)->willReturnCallback(function () use ($fails, $failure) {
             usleep(20000);
             if ($fails) {

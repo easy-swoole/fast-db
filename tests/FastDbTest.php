@@ -30,10 +30,10 @@ final class FastDbTest extends BaseTestCase
         'autoPing'          => 5,
         'name'              => self::ERROR_NAME,
         'useMysqli'         => USE_MYSQLI,
-        'intervalCheckTime' => 10 * 1000,
+        'intervalCheckTime' => 0,
         'maxIdleTime'       => 15,
         'maxObjectNum'      => 20,
-        'minObjectNum'      => 5,
+        'minObjectNum'      => 0,
         'getObjectTimeout'  => 3.0,
         'loadAverageTime'   => 0.001,
     ];
@@ -60,13 +60,13 @@ final class FastDbTest extends BaseTestCase
         return $fastDb;
     }
 
-    public function testAddDb()
+    public function testAddDb(): void
     {
         $fastDb = $this->getFastDb();
         $this->assertInstanceOf(FastDb::class, $fastDb);
     }
 
-    public function testTestDb()
+    public function testTestDb(): void
     {
         $fastDb = $this->getFastDb();
         $testResult = $fastDb->testDb();
@@ -80,30 +80,12 @@ final class FastDbTest extends BaseTestCase
             $this->assertSame("connection {$connectionName} no register yet", $throwable->getMessage());
         }
 
-        try {
-            $this->getFastDb(self::ERROR_NAME)->testDb(self::ERROR_NAME);
-        } catch (\Throwable $throwable) {
-            if (USE_MYSQLI) {
-                $this->assertInstanceOf(\mysqli_sql_exception::class, $throwable);
-                $err = $throwable->getMessage();
-                if (str_contains($err, 'using password: YES')) {
-                    $this->assertSame("Access denied for user 'error'@'localhost' (using password: YES)", $err);
-                } else {
-                    $this->assertSame("Connection refused", $err);
-                }
-            } else {
-                $this->assertInstanceOf(RuntimeError::class, $throwable);
-                $err = $throwable->getMessage();
-                if (str_contains($err, 'using password: YES')) {
-                    $this->assertSame("SQLSTATE[28000] [1045] Access denied for user 'error'@'localhost' (using password: YES)", $err);
-                } else {
-                    $this->assertSame("SQLSTATE[HY000] [2002] Connection refused", $err);
-                }
-            }
-        }
+        $this->expectException(\EasySwoole\Mysqli\Exception\Exception::class);
+        $this->expectExceptionMessage('connect to 127.0.0.1:3306 error');
+        $this->getFastDb(self::ERROR_NAME)->testDb(self::ERROR_NAME);
     }
 
-    public function testSelectConnection()
+    public function testSelectConnection(): void
     {
         $name = 'foo';
         $config = new Config(MYSQL_CONFIG);
@@ -115,7 +97,7 @@ final class FastDbTest extends BaseTestCase
         $fastDb->reset();
     }
 
-    public function testInvoke()
+    public function testInvoke(): void
     {
         $fastDb = $this->getFastDb();
         $builder = new QueryBuilder();
@@ -160,7 +142,7 @@ final class FastDbTest extends BaseTestCase
         $fastDb->query($builder);
     }
 
-    public function testBegin()
+    public function testBegin(): void
     {
         $fastDb = $this->getFastDb();
 
@@ -220,31 +202,12 @@ final class FastDbTest extends BaseTestCase
 
         // error pool
         $errorFastDb = $this->getFastDb(self::ERROR_NAME)->selectConnection(self::ERROR_NAME);
-        try {
-            $errorFastDb->begin();
-            $errorFastDb->commit();
-        } catch (\Throwable $throwable) {
-            $this->assertInstanceOf(RuntimeError::class, $throwable);
-            if (USE_MYSQLI) {
-                $err = $throwable->getMessage();
-                if (str_contains($err, '(using password: YES)')) {
-                    $this->assertSame("connection error error case initObject fail after 3 times case Access denied for user 'error'@'localhost' (using password: YES)", $err);
-                } else {
-                    $this->assertSame("connection error error case initObject fail after 3 times case Connection refused", $err);
-                }
-            } else {
-                $err = $throwable->getMessage();
-                if (str_contains($err, '(using password: YES)')) {
-                    $this->assertSame("connection error error case initObject fail after 3 times case connection [error@127.0.0.1]  connect error: SQLSTATE[28000] [1045] Access denied for user 'error'@'localhost' (using password: YES)", $err);
-                } else {
-                    $this->assertSame("connection error error case initObject fail after 3 times case connection [error@127.0.0.1]  connect error: SQLSTATE[HY000] [2002] Connection refused", $err);
-                }
-            }
-            $errorFastDb->rollback();
-        }
+        $this->expectException(RuntimeError::class);
+        $this->expectExceptionMessage('connection error error case connect to 127.0.0.1:3306 error');
+        $errorFastDb->begin();
     }
 
-    public function testCommit()
+    public function testCommit(): void
     {
         $fastDb = $this->getFastDb();
 
@@ -279,7 +242,7 @@ final class FastDbTest extends BaseTestCase
         $this->assertSame(true, $result);
     }
 
-    public function testRollback()
+    public function testRollback(): void
     {
         $fastDb = $this->getFastDb();
 
@@ -304,7 +267,7 @@ final class FastDbTest extends BaseTestCase
         $this->assertSame(true, $result);
     }
 
-    public function testQuery()
+    public function testQuery(): void
     {
         $fastDb = $this->getFastDb();
 
@@ -328,14 +291,14 @@ final class FastDbTest extends BaseTestCase
         $this->assertIsArray($res);
     }
 
-    public function testRawQuery()
+    public function testRawQuery(): void
     {
         $sql = "SELECT 1 as res;";
         $result = $this->getFastDb()->rawQuery($sql)->getResultOne();
         $this->assertSame('1', $result['res']);
     }
 
-    public function testCurrentConnection()
+    public function testCurrentConnection(): void
     {
         $fastDb = $this->getFastDb();
         $fastDb->rawQuery("show tables");
@@ -349,7 +312,7 @@ final class FastDbTest extends BaseTestCase
         $fastDb->reset();
     }
 
-    public function testIsInTransaction()
+    public function testIsInTransaction(): void
     {
         $fastDb = $this->getFastDb();
         $fastDb->invoke(function (Connection $connection) use ($fastDb) {
@@ -364,7 +327,7 @@ final class FastDbTest extends BaseTestCase
         });
     }
 
-    public function testGetConfig()
+    public function testGetConfig(): void
     {
         $configObj = $this->getFastDb()->getConfig('default');
         $this->assertInstanceOf(Config::class, $configObj);

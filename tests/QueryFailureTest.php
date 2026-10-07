@@ -9,6 +9,7 @@ use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\FastDb\Tests\Model\User;
 use EasySwoole\Mysqli\QueryBuilder;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class QueryFailureTest extends TestCase
@@ -20,13 +21,12 @@ final class QueryFailureTest extends TestCase
         $this->assertNull($result->getResultOne());
     }
 
-    /** @dataProvider failedQueries */
+    #[DataProvider('failedQueries')]
     public function testFailureCallbacksDoNotReplaceQueryException(bool $raw, bool $callbackThrows): void
     {
         $failure = new \RuntimeException('original SQL failure');
         $method = $raw ? 'rawQuery' : 'query';
-        $client = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()
-            ->onlyMethods([$method])->getMock();
+        $client = $this->createStub(Connection::class);
         $client->method($method)->willThrowException($failure);
         $db = new FastDb();
         (new \ReflectionProperty(FastDb::class, 'currentConnection'))
@@ -63,7 +63,7 @@ final class QueryFailureTest extends TestCase
     public function testEntityCallbackAlsoPreservesOriginalFailure(): void
     {
         $failure = new \RuntimeException('original SQL failure');
-        $db = $this->getMockBuilder(FastDb::class)->onlyMethods(['query'])->getMock();
+        $db = $this->createStub(FastDb::class);
         $db->method('query')->willThrowException($failure);
         $instance = new \ReflectionProperty(FastDb::class, 'instance');
         $original = $instance->getValue();
@@ -91,8 +91,7 @@ final class QueryFailureTest extends TestCase
 
     public function testSuccessfulQueryStillPropagatesCallbackFailure(): void
     {
-        $client = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()
-            ->onlyMethods(['rawQuery'])->getMock();
+        $client = $this->createStub(Connection::class);
         $client->method('rawQuery')->willReturn([]);
         $db = new FastDb();
         (new \ReflectionProperty(FastDb::class, 'currentConnection'))

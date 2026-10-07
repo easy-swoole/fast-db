@@ -10,12 +10,10 @@ use EasySwoole\FastDb\Attributes\Property;
 %PROPERTY_DESC%
 class %CLASS% extends AbstractEntity
 {
-    %PRIMARY_KEY_ANNOTATION%
-    %PRIMARY_KEY%
     %FIELD%
 
     public function tableName(): string
     {
-        return '%TABLE_NAME%';
+        return %TABLE_NAME%;
     }
 }

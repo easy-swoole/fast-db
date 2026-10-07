@@ -8,11 +8,12 @@ use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\FastDb\Tests\Model\User;
 use EasySwoole\Mysqli\QueryBuilder;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class FindAllTest extends TestCase
 {
-    /** @dataProvider primaryKeyQueries */
+    #[DataProvider('primaryKeyQueries')]
     public function testPrimaryKeyQuery(?string $primaryKeys, string $expectedCondition): void
     {
         $result = new QueryResult(microtime(true));

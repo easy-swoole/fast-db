@@ -1,62 +1,37 @@
 <?php
+
 declare(strict_types=1);
-/**
- * This file is part of EasySwoole.
- *
- * @link     https://www.easyswoole.com
- * @document https://www.easyswoole.com
- * @contact  https://www.easyswoole.com/Preface/contact.html
- * @license  https://github.com/easy-swoole/easyswoole/blob/3.x/LICENSE
- */
 
 namespace EasySwoole\FastDb\Commands;
 
-use EasySwoole\Command\AbstractInterface\CommandHelpInterface;
-use EasySwoole\Command\CommandManager;
-use EasySwoole\EasySwoole\Command\CommandInterface;
+use EasySwoole\Command\AbstractInterface\AbstractCommand;
+use EasySwoole\Command\Bean\Action;
+use EasySwoole\Command\Bean\Caller;
+use EasySwoole\Command\Bean\Option;
+use EasySwoole\Command\Bean\Result;
 
-/**
- * This file is part of EasySwoole.
- *
- * @link     https://www.easyswoole.com
- * @document https://www.easyswoole.com
- * @contact  https://www.easyswoole.com/Preface/contact.html
- * @license  https://github.com/easy-swoole/easyswoole/blob/3.x/LICENSE
- */
-class ModelCommand implements CommandInterface
+class ModelCommand extends AbstractCommand
 {
-    public function commandName(): string
+    public function name(): string
     {
         return 'model';
     }
 
-    public function exec(): ?string
-    {
-        $action = CommandManager::getInstance()->getArg(0);
-        if ($action) {
-            return $this->$action();
-        }
-
-        return CommandManager::getInstance()->displayCommandHelp($this->commandName());
-    }
-
-    public function help(CommandHelpInterface $commandHelp): CommandHelpInterface
-    {
-        $commandHelp->addAction('gen', 'Create a new model class.');
-        $commandHelp->addActionOpt('-table', 'The name of the table to which the model wants to be linked. eg. -table=easyswoole_user.');
-        $commandHelp->addActionOpt('-db-connection', 'Which connection pool you want the Model use. [default: "default"]. eg. -db-connection=default.');
-        $commandHelp->addActionOpt('-path', 'The path that you want the Model file to be generated. eg: -path=App/Model.');
-        $commandHelp->addActionOpt('-with-comments', 'Whether generate the property comments for model. eg: -with-comments=false.');
-        return $commandHelp;
-    }
-
-    public function desc(): string
+    public function description(): string
     {
         return 'Operate model classes';
     }
 
-    private function gen()
+    protected function init(): void
     {
-        return (new GenModelAction())->run();
+        $action = new Action('gen', 'Create a new model class.');
+        $action->addOption(new Option('table', 'Table name, e.g. --table=easyswoole_user'));
+        $action->addOption(new Option('db-connection', 'Database connection name [default: default]'));
+        $action->addOption(new Option('path', 'Model directory [default: App/Model]'));
+        $action->addOption(new Option('with-comments', 'Include column comments; --with-comments=false disables them'));
+        $action->setCallback(function (Caller $caller, Result $result): void {
+            (new GenModelAction())->run($caller, $result);
+        });
+        $this->registerAction($action);
     }
 }

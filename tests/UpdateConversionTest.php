@@ -17,8 +17,7 @@ final class UpdateConversionTest extends TestCase
 {
     public function testJsonConversionAndComparisonBaseline(): void
     {
-        $connection = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()
-            ->onlyMethods(['getLastAffectRows'])->getMock();
+        $connection = $this->createStub(Connection::class);
         $connection->method('getLastAffectRows')->willReturn(1);
         $result = new QueryResult(microtime(true));
         $result->setConnection($connection);
@@ -50,8 +49,7 @@ final class UpdateConversionTest extends TestCase
 
     public function testCallbackReceivesCurrentEntityAndNull(): void
     {
-        $connection = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()
-            ->onlyMethods(['getLastAffectRows'])->getMock();
+        $connection = $this->createStub(Connection::class);
         $connection->method('getLastAffectRows')->willReturn(1);
         $result = new QueryResult(microtime(true));
         $result->setConnection($connection);

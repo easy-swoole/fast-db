@@ -30,8 +30,7 @@ final class UpdateBaselineTest extends TestCase
 
     private function mockUpdates(int $count, array $affectedRows = [1]): void
     {
-        $connection = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()
-            ->onlyMethods(['getLastAffectRows'])->getMock();
+        $connection = $this->createStub(Connection::class);
         $connection->method('getLastAffectRows')->willReturnOnConsecutiveCalls(...$affectedRows);
         $result = new QueryResult(microtime(true));
         $result->setConnection($connection);

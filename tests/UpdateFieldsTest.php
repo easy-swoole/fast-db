@@ -9,15 +9,15 @@ use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\FastDb\Tests\Model\User;
 use EasySwoole\Mysqli\QueryBuilder;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class UpdateFieldsTest extends TestCase
 {
-    /** @dataProvider fieldSelections */
+    #[DataProvider('fieldSelections')]
     public function testUpdateIncludesOnlySelectedChangedFields(?array $fields, array $expectedFields): void
     {
-        $connection = $this->getMockBuilder(Connection::class)
-            ->disableOriginalConstructor()->onlyMethods(['getLastAffectRows'])->getMock();
+        $connection = $this->createStub(Connection::class);
         $connection->method('getLastAffectRows')->willReturn(1);
         $result = new QueryResult(microtime(true));
         $result->setConnection($connection);

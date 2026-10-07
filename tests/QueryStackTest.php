@@ -12,8 +12,7 @@ final class QueryStackTest extends TestCase
 {
     private function database(): FastDb
     {
-        $client = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()
-            ->onlyMethods(['rawQuery'])->getMock();
+        $client = $this->createStub(Connection::class);
         $client->method('rawQuery')->willReturn([]);
         $db = (new FastDb())->isEnableQueryStack(true);
         (new \ReflectionProperty(FastDb::class, 'currentConnection'))
