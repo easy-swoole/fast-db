@@ -8,8 +8,6 @@ class ArrayList  implements \Iterator , \JsonSerializable, \Countable , \ArrayAc
 {
     private array $data = [];
 
-    private int $iteratorKey = 0;
-
     function __construct(array $data)
     {
         $this->data = $data;
@@ -17,27 +15,27 @@ class ArrayList  implements \Iterator , \JsonSerializable, \Countable , \ArrayAc
 
     public function current(): mixed
     {
-        return $this->data[$this->iteratorKey];
+        return current($this->data);
     }
 
     public function next(): void
     {
-        $this->iteratorKey++;
+        next($this->data);
     }
 
     public function key(): mixed
     {
-        return $this->iteratorKey;
+        return key($this->data);
     }
 
     public function valid(): bool
     {
-        return isset($this->data[$this->iteratorKey]);
+        return key($this->data) !== null;
     }
 
     public function rewind(): void
     {
-        $this->iteratorKey = 0;
+        reset($this->data);
     }
 
     function list():array
@@ -78,7 +76,11 @@ class ArrayList  implements \Iterator , \JsonSerializable, \Countable , \ArrayAc
 
     public function offsetSet(mixed $offset, mixed $value): void
     {
-        $this->data[$offset] = $value;
+        if($offset === null){
+            $this->data[] = $value;
+        }else{
+            $this->data[$offset] = $value;
+        }
     }
 
     public function offsetUnset(mixed $offset): void
