@@ -428,6 +428,8 @@ abstract class AbstractEntity implements \JsonSerializable
             }
         }
         $data = [];
+        $compareValues = [];
+        $properties = $entityRef->allProperties();
         foreach ($this->compareData as $key => $compareDatum){
             $pVal = null;
             if(isset($this->{$key})){
@@ -437,6 +439,13 @@ abstract class AbstractEntity implements \JsonSerializable
                 $pVal = $pVal->toValue();
             }
             if($pVal !== $compareDatum){
+                // Compare assigned values, but send converted values to the database.
+                $compareValues[$key] = $pVal;
+                $property = $properties[$key];
+                if(!(($this->{$key} ?? null) instanceof ConvertObjectInterface) && $property->toValue){
+                    $params = $property->toValue->buildPropertyRuntimeParams($pVal,$this);
+                    $pVal = call_user_func_array($property->toValue->callback,$params);
+                }
                 $data[$key] = $pVal;
             }
         }
@@ -460,7 +469,7 @@ abstract class AbstractEntity implements \JsonSerializable
         if($success){
             // Only accept fields actually written; excluded changes remain pending.
             foreach ($data as $key => $value){
-                $this->compareData[$key] = $value;
+                $this->compareData[$key] = $compareValues[$key];
             }
         }
         return $success;
