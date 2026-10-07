@@ -444,9 +444,7 @@ abstract class AbstractEntity implements \JsonSerializable
         if(!empty($this->queryLimit()->getFields())){
             $fields = $this->queryLimit()->getFields()['fields'];
             if(!empty($fields)){
-                foreach ($fields as $field){
-                    unset($data[$field]);
-                }
+                $data = array_intersect_key($data, array_flip($fields));
             }
         }
         if(empty($data)){
@@ -458,7 +456,14 @@ abstract class AbstractEntity implements \JsonSerializable
         $query->update($this->tableName(),$data);
         $ret = static::callQuery($query,$this->onQuery);
         $this->reset();
-        return $ret->getConnection()->getLastAffectRows() > 0;
+        $success = $ret->getConnection()->getLastAffectRows() > 0;
+        if($success){
+            // Only accept fields actually written; excluded changes remain pending.
+            foreach ($data as $key => $value){
+                $this->compareData[$key] = $value;
+            }
+        }
+        return $success;
     }
 
     public static function fastUpdate(
