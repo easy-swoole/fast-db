@@ -21,9 +21,9 @@ class Page
     }
 
     /**
-     * @return int
+     * @return int|null
      */
-    public function getPage(): int
+    public function getPage(): ?int
     {
         return $this->page;
     }
