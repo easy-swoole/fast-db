@@ -629,15 +629,15 @@ abstract class AbstractEntity implements \JsonSerializable
                 throw new RuntimeError($msg);
             }
 
-            if (is_string($queryLimit)) {
-                if (strpos($queryLimit, ',') !== false) {
-                    $pkIds = explode(',', $queryLimit);
-                    foreach ($pkIds as &$pkId) {
-                        $pkId = intval($pkId);
-                    }
-                    unset($pkId);
-                    $query->where($pk, $pkIds, 'IN');
+            if (strpos($queryLimit, ',') !== false) {
+                $pkIds = explode(',', $queryLimit);
+                foreach ($pkIds as &$pkId) {
+                    $pkId = intval($pkId);
                 }
+                unset($pkId);
+                $query->where($pk, $pkIds, 'IN');
+            } else {
+                $query->where($pk, $queryLimit);
             }
         }
         if($selectForUpdate){
