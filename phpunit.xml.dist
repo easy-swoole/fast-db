@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/13.4/phpunit.xsd"
+         bootstrap="tests/bootstrap.php"
+         cacheDirectory=".phpunit.cache"
+         failOnWarning="true"
+         failOnRisky="true"
+         failOnPhpunitDeprecation="true"
+         failOnPhpunitNotice="true">
+    <testsuites>
+        <testsuite name="unit">
+            <directory>tests</directory>
+            <exclude>tests/FastDbTest.php</exclude>
+            <exclude>tests/TransactionTest.php</exclude>
+            <exclude>tests/ModelTest.php</exclude>
+            <exclude>tests/GenModelActionTest.php</exclude>
+        </testsuite>
+        <testsuite name="integration">
+            <file>tests/FastDbTest.php</file>
+            <file>tests/TransactionTest.php</file>
+            <file>tests/ModelTest.php</file>
+            <file>tests/GenModelActionTest.php</file>
+        </testsuite>
+    </testsuites>
+</phpunit>

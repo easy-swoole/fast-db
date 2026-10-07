@@ -467,6 +467,13 @@ abstract class AbstractEntity implements \JsonSerializable
         $this->reset();
         $success = $ret->getConnection()->getLastAffectRows() > 0;
         if($success){
+            $ret->getConnection()->rememberTransactionBaseline(
+                $this,
+                $this->compareData,
+                static function (self $entity, array $baseline): void {
+                    $entity->compareData = $baseline;
+                }
+            );
             // Only accept fields actually written; excluded changes remain pending.
             foreach ($data as $key => $value){
                 $this->compareData[$key] = $compareValues[$key];
