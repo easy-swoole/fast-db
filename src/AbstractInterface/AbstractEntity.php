@@ -835,6 +835,7 @@ abstract class AbstractEntity implements \JsonSerializable
     private static function callQuery(QueryBuilder|string $query,?callable $onQuery = null):QueryResult
     {
         $startTime = microtime(true);
+        $queryException = null;
         try {
             if($query instanceof QueryBuilder){
                 $ret = FastDb::getInstance()->query($query);
@@ -842,14 +843,25 @@ abstract class AbstractEntity implements \JsonSerializable
                 $ret = FastDb::getInstance()->rawQuery($query);
             }
         }catch (\Throwable $exception){
+            $queryException = $exception;
             throw $exception;
         }finally{
             if(is_callable($onQuery)){
                 if(empty($ret)){
                     $ret = new QueryResult($startTime);
-                    $ret->setQueryBuilder($query);
+                    if($query instanceof QueryBuilder){
+                        $ret->setQueryBuilder($query);
+                    }else{
+                        $ret->setRawSql($query);
+                    }
                 }
-                call_user_func($onQuery,$ret);
+                try {
+                    call_user_func($onQuery,$ret);
+                }catch (\Throwable $callbackException){
+                    if($queryException === null){
+                        throw $callbackException;
+                    }
+                }
             }
         }
         return $ret;

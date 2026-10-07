@@ -288,6 +288,7 @@ class FastDb
         $client = $this->getClient();
         $t = microtime(true);
         $return = new QueryResult($t);
+        $queryException = null;
         try{
             if(is_callable($queryBuilder)){
                 $call = $queryBuilder;
@@ -299,13 +300,20 @@ class FastDb
             }
             $return->setResult($ret);
         }catch (\Throwable $throwable){
+            $queryException = $throwable;
             throw  $throwable;
         } finally {
             $return->setConnection($client);
             $return->setQueryBuilder(clone $queryBuilder);
             $this->logStack($return);
             if(is_callable($this->onQuery)){
-                call_user_func($this->onQuery,$return);
+                try {
+                    call_user_func($this->onQuery,$return);
+                }catch (\Throwable $callbackException){
+                    if($queryException === null){
+                        throw $callbackException;
+                    }
+                }
             }
         }
         return $return;
@@ -321,17 +329,25 @@ class FastDb
         $client = $this->getClient();
         $t = microtime(true);
         $return = new QueryResult($t);
+        $queryException = null;
         try {
             $ret = $client->rawQuery($sql);
             $return->setResult($ret);
         }catch (\Throwable $throwable){
+            $queryException = $throwable;
             throw $throwable;
         } finally {
             $return->setConnection($client);
             $return->setRawSql($sql);
             $this->logStack($return);
             if(is_callable($this->onQuery)){
-                call_user_func($this->onQuery,$return);
+                try {
+                    call_user_func($this->onQuery,$return);
+                }catch (\Throwable $callbackException){
+                    if($queryException === null){
+                        throw $callbackException;
+                    }
+                }
             }
         }
         return $return;

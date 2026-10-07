@@ -8,7 +8,7 @@ class QueryResult
 {
     protected float $endTime;
     protected float $startTime;
-    protected mixed $result;
+    protected mixed $result = null;
     protected Connection $connection;
 
     protected ?QueryBuilder $queryBuilder = null;
