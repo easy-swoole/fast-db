@@ -2,6 +2,7 @@
 
 namespace EasySwoole\FastDb\Mysql;
 
+use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\Mysqli\Client;
 use EasySwoole\Pool\ObjectInterface;
 
@@ -27,11 +28,11 @@ class Connection extends Client implements ObjectInterface
     function objectRestore(): void
     {
         if($this->isInTransaction || $this->isForceRollback){
-            try {
-                $this->mysqlClient()->rollback();
-            }catch (\Throwable $throwable){
-                trigger_error($throwable->getMessage());
+            // Let the pool discard the connection if rollback fails.
+            if($this->mysqlClient()->rollback() !== true){
+                throw new RuntimeError('Failed to rollback connection during restore');
             }
+            $this->isInTransaction = false;
         }
     }
 
