@@ -219,7 +219,14 @@ abstract class AbstractEntity implements \JsonSerializable
             }
         }
 
+        // Clear SQL conditions without consuming serialization field limits.
+        $fieldLimits = $this->queryLimit()->getFields();
+        $persistFieldLimit = $this->queryLimit()->isPersistFieldLimit();
         $this->reset();
+        $this->queryLimit()->hideFields($hideFields)->persistFieldLimit($persistFieldLimit);
+        if($fieldLimits !== null){
+            $this->queryLimit()->fields(...$fieldLimits);
+        }
         return $temp;
     }
 
