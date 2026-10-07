@@ -42,7 +42,7 @@ class FastDb
             }
             $data = $this->queryStack[$cid];
             if($index < 0){
-                $index = (count($data) + $index) - 1;
+                $index = count($data) + $index;
             }
             if(isset($data[$index])){
                 return $data[$index];
