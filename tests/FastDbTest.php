@@ -29,7 +29,6 @@ final class FastDbTest extends BaseTestCase
         'charset'           => 'utf8mb4',
         'autoPing'          => 5,
         'name'              => self::ERROR_NAME,
-        'useMysqli'         => USE_MYSQLI,
         'intervalCheckTime' => 0,
         'maxIdleTime'       => 15,
         'maxObjectNum'      => 20,
@@ -43,7 +42,8 @@ final class FastDbTest extends BaseTestCase
     {
         $fastDb = new FastDb();
         if ($name === self::ERROR_NAME) {
-            $config = new Config(self::ERROR_CONFIG);
+            $errorConfig = array_replace(MYSQL_CONFIG, ['password' => MYSQL_CONFIG['password'] . '_invalid', 'name' => self::ERROR_NAME]);
+            $config = new Config($errorConfig);
         } else {
             $config = new Config(MYSQL_CONFIG);
         }
@@ -80,9 +80,14 @@ final class FastDbTest extends BaseTestCase
             $this->assertSame("connection {$connectionName} no register yet", $throwable->getMessage());
         }
 
-        $this->expectException(\EasySwoole\Mysqli\Exception\Exception::class);
-        $this->expectExceptionMessage('connect to 127.0.0.1:3306 error');
-        $this->getFastDb(self::ERROR_NAME)->testDb(self::ERROR_NAME);
+        try {
+            $this->getFastDb(self::ERROR_NAME)->testDb(self::ERROR_NAME);
+            $this->fail('Expected authentication failure');
+        } catch (RuntimeError $error) {
+            $this->assertSame(1045, $error->getCode());
+            $this->assertInstanceOf(\EasySwoole\Mysqli\Exception\Exception::class, $error->getPrevious());
+            $this->assertStringContainsString('Access denied', $error->getMessage());
+        }
     }
 
     public function testSelectConnection(): void
@@ -203,7 +208,7 @@ final class FastDbTest extends BaseTestCase
         // error pool
         $errorFastDb = $this->getFastDb(self::ERROR_NAME)->selectConnection(self::ERROR_NAME);
         $this->expectException(RuntimeError::class);
-        $this->expectExceptionMessage('connection error error case connect to 127.0.0.1:3306 error');
+        $this->expectExceptionMessage('Access denied');
         $errorFastDb->begin();
     }
 
@@ -295,7 +300,7 @@ final class FastDbTest extends BaseTestCase
     {
         $sql = "SELECT 1 as res;";
         $result = $this->getFastDb()->rawQuery($sql)->getResultOne();
-        $this->assertSame('1', $result['res']);
+        $this->assertSame(1, $result['res']);
     }
 
     public function testCurrentConnection(): void

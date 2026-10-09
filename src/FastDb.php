@@ -10,9 +10,13 @@ use EasySwoole\FastDb\Mysql\Pool;
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\Mysqli\Client;
 use EasySwoole\Mysqli\QueryBuilder;
+use EasySwoole\Mysqli\Transaction\TransactionStartFlags;
+use EasySwoole\Mysqli\Transaction\TransactionCompletionFlags;
 use EasySwoole\Pool\Exception\Exception;
+use EasySwoole\Pool\Exception\PoolEmpty;
 use Swoole\Coroutine;
 use Swoole\Coroutine\Scheduler;
+use EasySwoole\Mysqli\Config as MysqliConfig;
 
 class FastDb
 {
@@ -70,35 +74,30 @@ class FastDb
         /** @var Config $config */
         $config = $this->configs[$connectionName];
 
-        $success = false;
-        $error = '';
-        $client = new Client(new \EasySwoole\Mysqli\Config($config->toArray()));
-        if(Coroutine::getCid() > 0){
-            $ret = $client->connect($config->toArray());
-            if($ret){
-                $success = true;
-                $client->close();
-            }else{
-                $error = $client->mysqlClient()->connect_error;
-            }
-        }else{
-            $scheduler = new Scheduler();
-            $scheduler->add(function ()use($client,&$success,&$error){
-                $ret = $client->connect();
-                if($ret){
-                    $success = true;
-                    $client->close();
-                }else{
-                    $error = $client->mysqlClient()->connect_error;
+        $error = null;
+        $client = new Client(new MysqliConfig($config->toArray()));
+        $connect = static function () use ($client, &$error): void {
+            try {
+                if (!$client->connect()) {
+                    throw new RuntimeError('Database connection failed');
                 }
-            });;
+            } catch (\Throwable $failure) {
+                $error = $failure;
+            } finally {
+                $client->close();
+            }
+        };
+        if (Coroutine::getCid() >= 0) {
+            $connect();
+        } else {
+            $scheduler = new Scheduler();
+            $scheduler->add($connect);
             $scheduler->start();
         }
-        if($success){
-            return true;
-        }else{
-            throw new RuntimeError($error);
+        if ($error !== null) {
+            throw new RuntimeError($error->getMessage(), (int) $error->getCode(), $error);
         }
+        return true;
     }
 
     function setOnQuery(callable $call):static
@@ -177,7 +176,7 @@ class FastDb
      * @throws RuntimeError
      * @throws Exception
      */
-    function begin(?Connection $client = null,float|int $timeout = 3.0): bool
+    function begin(?Connection $client = null, TransactionStartFlags $flags = TransactionStartFlags::None, ?float $timeout = null): bool
     {
         if(!$client){
             $client = $this->getClient();
@@ -187,11 +186,7 @@ class FastDb
         }
 
         $t = microtime(true);
-        if(is_int($timeout)){
-            $ret = $client->mysqlClient()->begin_transaction($timeout);
-        }else{
-            $ret = $client->mysqlClient()->begin_transaction();
-        }
+        $ret = $client->beginTransaction($flags, $timeout);
 
         if($ret === true){
             $client->isInTransaction = true;
@@ -200,7 +195,7 @@ class FastDb
         $return->setEndTime(microtime(true));
         $return->setResult($ret);
         $return->setConnection($client);
-        $return->setRawSql("start transaction");
+        $return->setRawSql($flags->toSql());
         $this->logStack($return);
         if(is_callable($this->onQuery)){
             call_user_func($this->onQuery,$return);
@@ -211,7 +206,7 @@ class FastDb
         return false;
     }
 
-    function commit(?Connection $client = null,float|int $timeout = 3.0):bool
+    function commit(?Connection $client = null, TransactionCompletionFlags $flags = TransactionCompletionFlags::NoChainNoRelease, ?float $timeout = null):bool
     {
         if(!$client){
             $client = $this->currentConnection();
@@ -225,19 +220,15 @@ class FastDb
         }
 
         $t = microtime(true);
-        //MYSQLI_TRANS_COR_标记
-        if(is_int($timeout)){
-            $ret = $client->mysqlClient()->commit($timeout);
-        }else{
-            $ret = $client->mysqlClient()->commit();
-        }
+        $ret = $client->commitTransaction($flags, $timeout);
         if($ret === true){
             $client->finishTransaction(true);
+            $client->isInTransaction = in_array($flags, [TransactionCompletionFlags::Chain, TransactionCompletionFlags::ChainNoRelease], true);
         }
         $return = new QueryResult($t);
         $return->setEndTime(microtime(true));
         $return->setResult($ret);
-        $return->setRawSql("commit");
+        $return->setRawSql('COMMIT' . $flags->toSqlSuffix());
         $return->setConnection($client);
         $this->logStack($return);
         if(is_callable($this->onQuery)){
@@ -250,7 +241,7 @@ class FastDb
         return false;
     }
 
-    function rollback(?Connection $client = null,float|int $timeout = 3.0):bool
+    function rollback(?Connection $client = null, TransactionCompletionFlags $flags = TransactionCompletionFlags::NoChainNoRelease, ?float $timeout = null):bool
     {
         if(!$client){
             $client = $this->currentConnection();
@@ -264,19 +255,15 @@ class FastDb
         }
 
         $t = microtime(true);
-        //MYSQLI_TRANS_COR_标记
-        if(is_int($timeout)){
-            $ret = $client->mysqlClient()->rollback($timeout);
-        }else{
-            $ret = $client->mysqlClient()->rollback();
-        }
+        $ret = $client->rollbackTransaction($flags, $timeout);
         if($ret === true){
             $client->finishTransaction(false);
+            $client->isInTransaction = in_array($flags, [TransactionCompletionFlags::Chain, TransactionCompletionFlags::ChainNoRelease], true);
         }
         $return = new QueryResult($t);
         $return->setEndTime(microtime(true));
         $return->setResult($ret);
-        $return->setRawSql("rollback");
+        $return->setRawSql('ROLLBACK' . $flags->toSqlSuffix());
         $return->setConnection($client);
         $this->logStack($return);
         if(is_callable($this->onQuery)){
@@ -337,14 +324,14 @@ class FastDb
      * @throws RuntimeError
      * @throws Exception
      */
-    function rawQuery(string $sql):QueryResult
+    function rawQuery(string $sql, ?float $timeout = null):QueryResult
     {
         $client = $this->getClient();
         $t = microtime(true);
         $return = new QueryResult($t);
         $queryException = null;
         try {
-            $ret = $client->rawQuery($sql);
+            $ret = $client->rawQuery($sql, $timeout);
             $return->setResult($ret);
         }catch (\Throwable $throwable){
             $queryException = $throwable;
@@ -407,7 +394,10 @@ class FastDb
                 $obj = $pool->getObj();
             }
         }catch (\Throwable $throwable){
-            throw new RuntimeError("connection {$name} error case ".$throwable->getMessage());
+            $message = $throwable instanceof PoolEmpty
+                ? 'pool empty'
+                : $throwable->getMessage();
+            throw new RuntimeError("connection {$name} error case ".$message, (int) $throwable->getCode(), $throwable);
         }
 
         if($obj == null){

@@ -6,14 +6,16 @@ namespace EasySwoole\FastDb;
 class Config extends \EasySwoole\Pool\Config
 {
 
-    protected string $host;
-    protected string $user;
-    protected string $password;
-    protected string $database;
+    protected string $host = '127.0.0.1';
+    protected string $user = '';
+    protected string $password = '';
+    protected string $database = '';
     protected int $port = 3306;
-    protected int $maxConnectTim = 5;
     protected string $charset = 'utf8mb4';
     protected int $autoPing = 5;
+    protected float $timeout = 3.0;
+    protected float $maxConnectTime = 5.0;
+    protected bool $compress = false;
 
     protected string $name = "default";
 
@@ -116,22 +118,6 @@ class Config extends \EasySwoole\Pool\Config
     }
 
     /**
-     * @return int
-     */
-    public function getMaxConnectTim(): int
-    {
-        return $this->maxConnectTim;
-    }
-
-    /**
-     * @param int $maxConnectTim
-     */
-    public function setMaxConnectTim(int $maxConnectTim): void
-    {
-        $this->maxConnectTim = $maxConnectTim;
-    }
-
-    /**
      * @return string
      */
     public function getCharset(): string
@@ -162,6 +148,13 @@ class Config extends \EasySwoole\Pool\Config
     {
         $this->autoPing = $autoPing;
     }
+
+    public function getTimeout(): float { return $this->timeout; }
+    public function setTimeout(float $timeout): void { $this->timeout = $timeout; }
+    public function getMaxConnectTime(): float { return $this->maxConnectTime; }
+    public function setMaxConnectTime(float $timeout): void { $this->maxConnectTime = $timeout; }
+    public function isCompress(): bool { return $this->compress; }
+    public function setCompress(bool $compress): void { $this->compress = $compress; }
 
     public function isIsForceRollback(): bool
     {

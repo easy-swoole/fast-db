@@ -2,12 +2,13 @@
 
 FastDb 是面向 Swoole 协程环境的 MySQL 数据访问库，组合连接池、SQL 构建器和基于 PHP Attributes 的实体映射。可以在 EasySwoole 框架内使用，也可以独立使用。
 
-本文以当前 `src/` 和 `composer.json` 为准。实体 API 位于 `AbstractEntity`，数据库与连接管理位于 `FastDb`，SQL 构建能力由 `easyswoole/mysqli` 提供。
+本文面向 `3.x` 分支，依赖 `easyswoole/mysqli` ^5.0，以当前 `src/` 和 `composer.json` 为准。实体 API 位于 `AbstractEntity`，数据库与连接管理位于 `FastDb`，SQL 构建能力由 `easyswoole/mysqli` 提供。
 
 ## 目录
 
 - [特性与运行要求](#特性与运行要求)
 - [安装与快速开始](#安装与快速开始)
+- [3.x 迁移说明](#3x-迁移说明)
 - [数据库和连接池配置](#数据库和连接池配置)
 - [实体与属性映射](#实体与属性映射)
 - [查询](#查询)
@@ -47,19 +48,19 @@ FastDb 是面向 Swoole 协程环境的 MySQL 数据访问库，组合连接池�
 
 | 场景 | 要求 |
 | --- | --- |
-| 运行库 | PHP ≥ 8.1、Swoole ≥ 5.1、mysqli 扩展 |
+| 运行库 | PHP ≥ 8.1、Swoole ≥ 5.1；其余扩展由 Composer 按依赖检查 |
 | 数据库 | MySQL；示例表使用 InnoDB、utf8mb4 与 JSON 字段 |
-| 开发测试 | PHP ≥ 8.4.1、PHPUnit ^13.4，以及 Composer 安装的开发依赖 |
+| 开发测试 | PHP ≥ 8.4.1、PHPUnit ^13.4、原生 mysqli 扩展，以及 Composer 安装的开发依赖 |
 | 命令系统 | `easyswoole/command` ^2.0 |
 
-当前驱动通过 mysqli 访问 MySQL。库依赖 Swoole 的协程上下文和连接池；需要数据库访问可协程调度时，在应用入口启用相应 Swoole runtime hooks。
+数据库访问由 `easyswoole/mysqli` 5.x 的 Swoole 协程 Socket 协议客户端完成，生产环境不需要原生 mysqli 扩展，也不需要为数据库访问启用 runtime hooks。数据库操作应在 Swoole 协程内执行；`testDb()` 可在协程外调用，内部会创建协程调度器。原生 mysqli 仅用于开发测试中的独立观察连接。
 
 ## 安装与快速开始
 
-安装到应用：
+安装当前 3.x 开发分支到应用：
 
 ```bash
-composer require easyswoole/fast-db
+composer require easyswoole/fast-db:3.x-dev
 ```
 
 克隆本项目进行开发：
@@ -138,8 +139,6 @@ use App\Model\User;
 use EasySwoole\FastDb\Config;
 use EasySwoole\FastDb\FastDb;
 
-Swoole\Runtime::enableCoroutine(SWOOLE_HOOK_ALL);
-
 $db = FastDb::getInstance();
 $db->addDb(new Config([
     'host' => getenv('DB_HOST') ?: '127.0.0.1',
@@ -148,6 +147,9 @@ $db->addDb(new Config([
     'password' => (string) getenv('DB_PASSWORD'),
     'database' => getenv('DB_DATABASE') ?: 'app_db',
     'charset' => 'utf8mb4',
+    'timeout' => 3.0,
+    'maxConnectTime' => 5.0,
+    'compress' => false,
     'minObjectNum' => 0,
     'maxObjectNum' => 16,
 ]));
@@ -187,26 +189,41 @@ use EasySwoole\Mysqli\QueryBuilder;
 ```
 
 
+## 3.x 迁移说明
+
+- 使用 `easyswoole/mysqli` ^5.0，生产安装不再要求 `ext-mysqli`；开发测试仍需要该扩展。
+- 删除配置中的 `useMysqli`，统一使用协程协议客户端。
+- 将 `maxConnectTim` 改为 `maxConnectTime`，setter 改用 `setMaxConnectTime()`；旧字段不再映射到连接超时。
+- `begin()`、`commit()`、`rollback()` 参数顺序统一为 `(client, flags, timeout)`。flags 必须使用对应枚举，不能传整数或按位组合值。
+- `query()`、`rawQuery()` 和事务方法支持单次超时，`null` 使用配置的 `timeout`。
+- 原始查询中的整数列按驱动类型解析为 PHP 整数；不要依赖旧版数字字符串返回值。超过 `PHP_INT_MAX` 的无符号整数保留为十进制字符串。
+
 ## 数据库和连接池配置
 
 `EasySwoole\FastDb\Config` 继承 `EasySwoole\Pool\Config`，支持通过构造数组和对应 setter 设置参数。
 
 ### 数据库参数
 
-| 参数 | 默认值 | 说明 |
-| --- | --- | --- |
-| `host` | 无 | 数据库地址，必填 |
-| `port` | `3306` | 数据库端口 |
-| `user` | 无 | 登录用户，必填 |
-| `password` | 无 | 密码；无密码也应显式传空字符串 |
-| `database` | 无 | 数据库名，必填 |
-| `charset` | `utf8mb4` | 连接字符集 |
-| `name` | `default` | 连接池名称 |
-| `isForceRollback` | `false` | 每次归还连接都尝试回滚；该配置不会因一次回收被清除 |
-| `maxConnectTim` | `5` | 当前 FastDb 配置中的字段名；注意末尾缺少 `e` |
-| `autoPing` | `5` | 当前配置保留的字段；连接有效性检查由 `beforeUse()` / `intervalCheck()` 执行 |
+| 参数 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `host` | string | `127.0.0.1` | 数据库地址 |
+| `port` | int | `3306` | 数据库端口 |
+| `user` | string | 空字符串 | 登录用户，按实际账号配置 |
+| `password` | string | 空字符串 | 登录密码 |
+| `database` | string | 空字符串 | 数据库名，按业务配置 |
+| `charset` | string | `utf8mb4` | 连接字符集 |
+| `timeout` | float | `3.0` | 默认单次查询、开始事务、提交或回滚的超时，秒 |
+| `maxConnectTime` | float | `5.0` | 完整连接过程的超时上限，秒 |
+| `compress` | bool | `false` | 请求 MySQL 协议压缩，需服务端支持 |
+| `name` | string | `default` | 连接池名称 |
+| `isForceRollback` | bool | `false` | 每次归还连接都尝试回滚；该配置不会因一次回收被清除 |
+| `autoPing` | int | `5` | 保留字段，不控制当前驱动的自动 ping 周期；连接检查由 `beforeUse()` / `intervalCheck()` 执行 |
 
-`maxConnectTim` 与 mysqli 依赖的 `maxConnectTime` 名称不一致，当前透传不能保证修改实际连接超时；不要将该项作为已生效的超时控制。当前 `Config` 没有 `timeout`、`useMysqli`、`maxIdleTime`、`loadAverageTime` 配置属性；连接池负载阈值应使用 `waitLoadAverageTime`。
+配置类型直接由属性声明处理，例如整数 `timeout => 3` 会保存为 float。`timeout` 和 `maxConnectTime` 在实际操作时必须大于零；类型声明本身不校验正数。使用真正的布尔值设置 `compress`。
+
+`getObjectTimeout` 限制连接池等待，`maxConnectTime` 限制建连过程，方法参数 `$timeout` 限制该次 SQL 操作。FastDb 在获取连接后才执行查询，单次 SQL 超时不包含此前的连接池等待和池内新建连接耗时；它也不是整个业务事务的累计时间限制。
+
+`Config` 不支持 `maxIdleTime`、`loadAverageTime`，连接池负载阈值使用 `waitLoadAverageTime`。数据库配置 setter 返回 void，应逐条调用。
 
 ### 连接池参数
 
@@ -234,6 +251,9 @@ $config = new Config([
     'database' => 'app_db',
 ]);
 $config->setName('default');
+$config->setTimeout(3.0);
+$config->setMaxConnectTime(5.0);
+$config->setCompress(false);
 $config->setMinObjectNum(0);
 $config->setMaxObjectNum(32);
 $config->setGetObjectTimeout(2.0);
@@ -897,12 +917,78 @@ try {
 
 | 方法 | 行为 |
 | --- | --- |
-| `begin($client = null, $timeout = 3.0)` | 默认获取当前连接并开始事务；事务状态已为 true 时直接返回 true |
-| `commit($client = null, $timeout = 3.0)` | 默认提交当前连接；没有连接/没有事务时返回 true |
-| `rollback($client = null, $timeout = 3.0)` | 默认回滚当前连接；没有连接/没有事务时返回 true |
+| `begin($client = null, $flags = TransactionStartFlags::None, $timeout = null)` | 默认获取当前连接并开始事务；事务状态已为 true 时直接返回 true |
+| `commit($client = null, $flags = TransactionCompletionFlags::NoChainNoRelease, $timeout = null)` | 默认提交当前连接；没有连接/没有事务时返回 true |
+| `rollback($client = null, $flags = TransactionCompletionFlags::NoChainNoRelease, $timeout = null)` | 默认回滚当前连接；没有连接/没有事务时返回 true |
 | `isInTransaction($connection = null)` | 读取当前或指定连接的事务状态 |
 
-这不是 savepoint 嵌套事务：多次 `begin()` 不会增加嵌套层级。显式传 `Connection` 可操作指定连接。当前实现中 `$timeout` 为整数时传给 mysqli 的事务方法作为 flags；浮点值不传入驱动，不应把该参数当成已实现的事务超时。
+### 指定连接、flags 和超时
+
+导入对应枚举：
+
+```php
+use EasySwoole\Mysqli\Transaction\TransactionStartFlags;
+use EasySwoole\Mysqli\Transaction\TransactionCompletionFlags;
+```
+
+| 参数 | 类型 | 含义 |
+| --- | --- | --- |
+| `$client` | `?Connection` | 指定操作连接；null 使用当前选中连接，begin 会按需获取连接 |
+| `$flags` | 对应事务枚举 | begin 使用 `TransactionStartFlags`；commit/rollback 使用 `TransactionCompletionFlags` |
+| `$timeout` | `?float` | 单次事务 SQL 的超时秒数，必须大于零；null 使用配置 timeout |
+
+```php
+$db->invoke(function (Connection $client) use ($db): void {
+    $db->begin($client, TransactionStartFlags::ReadWrite, 1.0);
+    try {
+        // 使用该连接执行本次业务 SQL。
+        $db->rawQuery('UPDATE users SET score = score + 1 WHERE id = 1', 0.5);
+    } catch (Throwable $error) {
+        $db->rollback($client, TransactionCompletionFlags::NoChainNoRelease, 1.0);
+        throw $error;
+    }
+    $db->commit($client, TransactionCompletionFlags::NoChainNoRelease, 0.5);
+});
+
+// 命名参数：在当前连接上以默认结束模式提交，最长等待 0.5 秒。
+$db->commit(timeout: 0.5);
+```
+
+flags 不接受整数、枚举的 `value` 或错误的枚举类型；这些输入会在执行前抛出 `TypeError`。多次 begin 不增加嵌套层级，也不会建立 savepoint。
+
+### 开始事务的枚举
+
+以下 SQL 由 `TransactionStartFlags::toSql()` 生成：
+
+| 枚举值 | SQL |
+| --- | --- |
+| `None` | `START TRANSACTION` |
+| `ConsistentSnapshot` | `START TRANSACTION WITH CONSISTENT SNAPSHOT` |
+| `ReadWrite` | `START TRANSACTION READ WRITE` |
+| `ConsistentSnapshotReadWrite` | `START TRANSACTION WITH CONSISTENT SNAPSHOT, READ WRITE` |
+| `ReadOnly` | `START TRANSACTION READ ONLY` |
+| `ConsistentSnapshotReadOnly` | `START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY` |
+
+一致性快照行为取决于服务端隔离级别。ReadOnly 禁止修改非临时表。
+
+### 提交和回滚的枚举
+
+下表后缀由 `TransactionCompletionFlags::toSqlSuffix()` 生成，接在 `COMMIT` 或 `ROLLBACK` 后：
+
+| 枚举值 | SQL 后缀 | 行为 |
+| --- | --- | --- |
+| `None` | 无 | 使用服务端 completion_type 默认行为 |
+| `Chain` | `AND CHAIN` | 结束当前事务并开始新事务 |
+| `NoChain` | `AND NO CHAIN` | 不开始新事务；连接释放行为取决于服务端默认值 |
+| `Release` | `RELEASE` | 结束事务并关闭连接 |
+| `NoRelease` | `NO RELEASE` | 保留连接；是否开始新事务取决于服务端默认值 |
+| `NoChainRelease` | `AND NO CHAIN RELEASE` | 不开始新事务，关闭连接 |
+| `ChainNoRelease` | `AND CHAIN NO RELEASE` | 开始新事务并保留连接 |
+| `NoChainNoRelease` | `AND NO CHAIN NO RELEASE` | 不开始新事务，保留连接；FastDb 默认值 |
+
+使用默认 `NoChainNoRelease` 可明确结束事务并保留池内连接。显式 Chain / ChainNoRelease 成功后，FastDb 保持事务标记为 true；Release / NoChainRelease 成功后关闭连接。FastDb 对 None / NoRelease 不读取服务端 completion_type 来推断链式事务状态，应用需要链式事务时应显式传 ChainNoRelease。
+
+超时抛出 `EasySwoole\Mysqli\Exception\TimeoutException`，驱动会关闭失步连接。提交超时可能发生在服务端已提交、客户端尚未收到响应时，结果需要结合业务记录核实，不能直接重试提交。事务日志和查询栈中的 SQL 包含 flags 对应的完整语句，例如 `START TRANSACTION READ ONLY`、`COMMIT AND NO CHAIN NO RELEASE`。
 
 `queryLimit()->selectForUpdate()` 或 `all(true)` 也可生成锁定查询。锁应配合事务使用，并保持查询、更新、提交在同一协程和同一连接名内。
 
@@ -971,7 +1057,7 @@ use EasySwoole\FastDb\Mysql\QueryResult;
 ```php
 $query = new QueryBuilder();
 $query->raw('SELECT id, name FROM users WHERE status = ? AND score >= ?', [1, 10]);
-$result = FastDb::getInstance()->query($query);
+$result = FastDb::getInstance()->query($query, timeout: 1.0);
 $rows = $result->getResult();
 $first = $result->getResultOne(); // 第一行或 null。
 ```
@@ -989,17 +1075,17 @@ $result = FastDb::getInstance()->query(function (QueryBuilder $query): void {
 ### 原始 SQL
 
 ```php
-$result = FastDb::getInstance()->rawQuery('SELECT CURRENT_TIMESTAMP AS now');
+$result = FastDb::getInstance()->rawQuery('SELECT CURRENT_TIMESTAMP AS now', timeout: 1.0);
 $row = $result->getResultOne();
 ```
 
-`rawQuery(string $sql)` 不支持单独的绑定参数。动态数据使用 `QueryBuilder::raw($sql, $params)`，不要拼接输入数据。
+`rawQuery(string $sql, ?float $timeout = null)` 不支持单独的绑定参数。动态数据使用 `QueryBuilder::raw($sql, $params)`，不要拼接输入数据。
 
 ### QueryResult
 
 | 方法 | 返回内容 |
 | --- | --- |
-| `getResult()` | 驱动结果；查询失败回调中为 null |
+| `getResult()` | SELECT 等返回行数组，写入/DDL 通常返回 bool；查询失败回调中为 null |
 | `getResultOne()` | 数组结果的第一行，否则 null |
 | `getConnection()` | 本次实际使用的连接；实体失败回调的替代结果可能未设置连接 |
 | `getQueryBuilder()` | 构建器查询的副本；原始 SQL 查询时 null |
@@ -1013,7 +1099,7 @@ $affected = $result->getConnection()->getLastAffectRows();
 $insertId = $result->getConnection()->getLastInsertId();
 ```
 
-这些连接级数值会随着后续 SQL 改变，应在本次调用后立即读取。`query()` 签名虽然带可选 `$timeout`，当前 mysqli Client 没有对应逐次查询超时实现。
+影响行数和自增 ID 类型为 `int|string|null`，超大无符号值保留为字符串，未查询或查询失败时为 null。这些连接级数值会随着后续 SQL 改变，应在本次调用后立即读取。`query()` 和 `rawQuery()` 的可选 `$timeout` 已传递给 mysqli 5.x，控制本次查询超时。
 
 ## 查询日志与查询栈
 
@@ -1029,9 +1115,9 @@ $db->setOnQuery(function (QueryResult $result): void {
 });
 ```
 
-开始时间在获得连接之后记录，因此不包含连接池等待。`query()` / `rawQuery()` 结束时间在执行结束或失败后、调用日志回调之前记录，不包含日志回调耗时。事务成功执行的 begin/commit/rollback 也会进入日志回调。
+开始时间在获得连接之后记录，因此不包含连接池等待。`query()` / `rawQuery()` 结束时间在执行结束或失败后、调用日志回调之前记录，不包含日志回调耗时。实际执行完成并返回的 begin/commit/rollback 也会进入日志回调；事务方法抛异常或直接返回（未执行 SQL）时不触发该事务日志。事务 rawSql 与 flags 生成的执行 SQL 一致。
 
-SQL 抛异常时仍调用查询回调，`getResult()` / `getResultOne()` 可以安全读取为 null。查询已失败时，回调另抛异常不会覆盖原始查询异常；查询成功时，回调异常正常抛出。`QueryResult` 没有保存原异常的独立字段，需要在调用层捕获异常。
+`query()` / `rawQuery()` 抛异常时仍调用查询回调，`getResult()` / `getResultOne()` 可以安全读取为 null。查询已失败时，回调另抛异常不会覆盖原始查询异常；查询成功时，回调异常正常抛出。`QueryResult` 没有保存原异常的独立字段，需要在调用层捕获异常。
 
 底层 `getLastQuery()` 是用于调试的占位符替换文本，可能与实际绑定执行的细节不同；尤其 null 的展示不能代替实际 SQL 判断。优先记录 `getLastPrepareQuery()` 和 `getLastBindParams()`。
 
@@ -1192,7 +1278,7 @@ if ($result->status === ExecStatusEnum::OK) {
 | `limit(int $num, bool $withTotalCount = false)` | 数量限制 |
 | `fields(?array $fields = null, bool $returnAsArray = false)` | 字段白名单与返回模式 |
 | `returnAsArray()` | 开启原始数组模式 |
-| `hideFields(array|string $fields)` | 隐藏字段 |
+| `hideFields(array\|string $fields)` | 隐藏字段 |
 | `persistFieldLimit(bool $enabled = true)` | all() 子实体输出限制传播 |
 | `getFields()` / `getHideFields()` / `isPersistFieldLimit()` | 读取限制 |
 | `func(callable $func)` | 操作底层构建器 |
@@ -1211,9 +1297,11 @@ if ($result->status === ExecStatusEnum::OK) {
 | `getConfig(string $name = 'default')` | Config 或 false |
 | `selectConnection(?string $name = null)` | 设置连接名时返回管理器；省略时返回名字 |
 | `testDb(string $name = 'default')` | 检查连接，成功 true，失败异常 |
-| `query(QueryBuilder|callable $query, ?float $timeout = null)` | 构建器查询；QueryResult |
-| `rawQuery(string $sql)` | 原始 SQL；QueryResult |
-| `begin()` / `commit()` / `rollback()` | 事务；bool |
+| `query(QueryBuilder\|callable $query, ?float $timeout = null)` | 构建器查询；QueryResult |
+| `rawQuery(string $sql, ?float $timeout = null)` | 原始 SQL；QueryResult |
+| `begin(?Connection $client = null, TransactionStartFlags $flags = TransactionStartFlags::None, ?float $timeout = null)` | 开始事务；bool |
+| `commit(?Connection $client = null, TransactionCompletionFlags $flags = TransactionCompletionFlags::NoChainNoRelease, ?float $timeout = null)` | 提交事务；bool |
+| `rollback(?Connection $client = null, TransactionCompletionFlags $flags = TransactionCompletionFlags::NoChainNoRelease, ?float $timeout = null)` | 回滚事务；bool |
 | `isInTransaction(?Connection $connection = null)` | bool |
 | `invoke(callable $call)` | 执行并归还连接；返回回调值 |
 | `currentConnection()` | 当前 Connection 或 null |
@@ -1248,7 +1336,7 @@ composer test
 还可使用自定义 PHPUnit 选项：
 
 ```bash
-php tests/run.php --filter ModelCommandTest --display-all-issues
+php tests/run.php --filter GenModelActionTest --display-all-issues
 php tests/run.php --list-tests
 php tests/run.php --log-junit ./test-results.xml
 ```

@@ -6,6 +6,8 @@ use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\Mysqli\Client;
 use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\Mysqli\Exception\Exception as QueryException;
+use EasySwoole\Mysqli\Transaction\TransactionCompletionFlags;
+use EasySwoole\Mysqli\Transaction\TransactionStartFlags;
 use EasySwoole\Pool\ObjectInterface;
 
 class Connection extends Client implements ObjectInterface
@@ -40,24 +42,49 @@ class Connection extends Client implements ObjectInterface
         }
     }
 
-    public function query(QueryBuilder $builder)
+    public function query(QueryBuilder $builder, ?float $timeout = null): bool|array
     {
         try {
-            return parent::query($builder);
+            return parent::query($builder, $timeout);
         } catch (\Throwable $error) {
             $this->restoreDeadlockedTransaction($error);
             throw $error;
         }
     }
 
-    public function rawQuery(string $query)
+    public function rawQuery(string $query, ?float $timeout = null)
     {
         try {
-            return parent::rawQuery($query);
+            return parent::rawQuery($query, $timeout);
         } catch (\Throwable $error) {
             $this->restoreDeadlockedTransaction($error);
             throw $error;
         }
+    }
+
+    public function beginTransaction(TransactionStartFlags $flags, ?float $timeout = null): bool
+    {
+        return $this->rawQuery($flags->toSql(), $timeout) === true;
+    }
+
+    public function commitTransaction(TransactionCompletionFlags $flags, ?float $timeout = null): bool
+    {
+        return $this->completeTransaction('COMMIT', $flags, $timeout);
+    }
+
+    public function rollbackTransaction(TransactionCompletionFlags $flags = TransactionCompletionFlags::NoChainNoRelease, ?float $timeout = null): bool
+    {
+        return $this->completeTransaction('ROLLBACK', $flags, $timeout);
+    }
+
+    private function completeTransaction(string $command, TransactionCompletionFlags $flags, ?float $timeout): bool
+    {
+        // mysqli 5.x transaction helpers have no timeout argument; query does.
+        $success = $this->rawQuery($command . $flags->toSqlSuffix(), $timeout) === true;
+        if ($success && $flags->releasesConnection()) {
+            $this->close();
+        }
+        return $success;
     }
 
     private function restoreDeadlockedTransaction(\Throwable $error): void
@@ -69,11 +96,27 @@ class Connection extends Client implements ObjectInterface
         }
     }
 
+    private function restoreDisconnectedTransaction(): bool
+    {
+        $protocol = $this->mysqlClient();
+        if ($protocol !== null && !$protocol->isConnected()) {
+            // A lost session cannot execute ROLLBACK. Closing clears the driver
+            // reference; the pool's beforeUse check will discard this object.
+            $this->close();
+            $this->finishTransaction(false);
+            return true;
+        }
+        return false;
+    }
+
     function gc(): void
     {
+        if ($this->restoreDisconnectedTransaction()) {
+            return;
+        }
         if($this->isInTransaction || $this->isForceRollback){
             try {
-                if($this->mysqlClient()->rollback() === true){
+                if($this->rollbackTransaction() === true){
                     $this->finishTransaction(false);
                 }
             }catch (\Throwable $throwable){
@@ -90,9 +133,12 @@ class Connection extends Client implements ObjectInterface
 
     function objectRestore(): void
     {
+        if ($this->restoreDisconnectedTransaction()) {
+            return;
+        }
         if($this->isInTransaction || $this->isForceRollback){
             // Let the pool discard the connection if rollback fails.
-            if($this->mysqlClient()->rollback() !== true){
+            if($this->rollbackTransaction() !== true){
                 throw new RuntimeError('Failed to rollback connection during restore');
             }
             $this->finishTransaction(false);
