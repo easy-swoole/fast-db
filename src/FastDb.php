@@ -185,25 +185,23 @@ class FastDb
             return true;
         }
 
-        $t = microtime(true);
-        $ret = $client->beginTransaction($flags, $timeout);
-
-        if($ret === true){
-            $client->isInTransaction = true;
+        $return = new QueryResult(microtime(true));
+        try {
+            $ret = $client->beginTransaction($flags, $timeout);
+            if ($ret === true) {
+                $client->isInTransaction = true;
+            }
+            $return->setResult($ret);
+            return $ret === true;
+        } catch (\Throwable $error) {
+            $return->setException($error);
+            throw $error;
+        } finally {
+            $return->setEndTime(microtime(true));
+            $return->setConnection($client);
+            $return->setRawSql($flags->toSql());
+            $this->notifyQuery($return);
         }
-        $return = new QueryResult($t);
-        $return->setEndTime(microtime(true));
-        $return->setResult($ret);
-        $return->setConnection($client);
-        $return->setRawSql($flags->toSql());
-        $this->logStack($return);
-        if(is_callable($this->onQuery)){
-            call_user_func($this->onQuery,$return);
-        }
-        if($ret === true){
-            return true;
-        }
-        return false;
     }
 
     function commit(?Connection $client = null, TransactionCompletionFlags $flags = TransactionCompletionFlags::NoChainNoRelease, ?float $timeout = null):bool
@@ -219,26 +217,24 @@ class FastDb
             return true;
         }
 
-        $t = microtime(true);
-        $ret = $client->commitTransaction($flags, $timeout);
-        if($ret === true){
-            $client->finishTransaction(true);
-            $client->isInTransaction = in_array($flags, [TransactionCompletionFlags::Chain, TransactionCompletionFlags::ChainNoRelease], true);
+        $return = new QueryResult(microtime(true));
+        try {
+            $ret = $client->commitTransaction($flags, $timeout);
+            if ($ret === true) {
+                $client->finishTransaction(true);
+                $client->isInTransaction = in_array($flags, [TransactionCompletionFlags::Chain, TransactionCompletionFlags::ChainNoRelease], true);
+            }
+            $return->setResult($ret);
+            return $ret === true;
+        } catch (\Throwable $error) {
+            $return->setException($error);
+            throw $error;
+        } finally {
+            $return->setEndTime(microtime(true));
+            $return->setConnection($client);
+            $return->setRawSql('COMMIT' . $flags->toSqlSuffix());
+            $this->notifyQuery($return);
         }
-        $return = new QueryResult($t);
-        $return->setEndTime(microtime(true));
-        $return->setResult($ret);
-        $return->setRawSql('COMMIT' . $flags->toSqlSuffix());
-        $return->setConnection($client);
-        $this->logStack($return);
-        if(is_callable($this->onQuery)){
-            call_user_func($this->onQuery,$return);
-        }
-
-        if($ret === true){
-            return true;
-        }
-        return false;
     }
 
     function rollback(?Connection $client = null, TransactionCompletionFlags $flags = TransactionCompletionFlags::NoChainNoRelease, ?float $timeout = null):bool
@@ -254,26 +250,24 @@ class FastDb
             return true;
         }
 
-        $t = microtime(true);
-        $ret = $client->rollbackTransaction($flags, $timeout);
-        if($ret === true){
-            $client->finishTransaction(false);
-            $client->isInTransaction = in_array($flags, [TransactionCompletionFlags::Chain, TransactionCompletionFlags::ChainNoRelease], true);
+        $return = new QueryResult(microtime(true));
+        try {
+            $ret = $client->rollbackTransaction($flags, $timeout);
+            if ($ret === true) {
+                $client->finishTransaction(false);
+                $client->isInTransaction = in_array($flags, [TransactionCompletionFlags::Chain, TransactionCompletionFlags::ChainNoRelease], true);
+            }
+            $return->setResult($ret);
+            return $ret === true;
+        } catch (\Throwable $error) {
+            $return->setException($error);
+            throw $error;
+        } finally {
+            $return->setEndTime(microtime(true));
+            $return->setConnection($client);
+            $return->setRawSql('ROLLBACK' . $flags->toSqlSuffix());
+            $this->notifyQuery($return);
         }
-        $return = new QueryResult($t);
-        $return->setEndTime(microtime(true));
-        $return->setResult($ret);
-        $return->setRawSql('ROLLBACK' . $flags->toSqlSuffix());
-        $return->setConnection($client);
-        $this->logStack($return);
-        if(is_callable($this->onQuery)){
-            call_user_func($this->onQuery,$return);
-        }
-
-        if($ret === true){
-            return true;
-        }
-        return false;
     }
 
     /**
@@ -287,7 +281,6 @@ class FastDb
         $client = $this->getClient();
         $t = microtime(true);
         $return = new QueryResult($t);
-        $queryException = null;
         try{
             if(is_callable($queryBuilder)){
                 $call = $queryBuilder;
@@ -299,22 +292,13 @@ class FastDb
             }
             $return->setResult($ret);
         }catch (\Throwable $throwable){
-            $queryException = $throwable;
+            $return->setException($throwable);
             throw  $throwable;
         } finally {
             $return->setEndTime(microtime(true));
             $return->setConnection($client);
             $return->setQueryBuilder(clone $queryBuilder);
-            $this->logStack($return);
-            if(is_callable($this->onQuery)){
-                try {
-                    call_user_func($this->onQuery,$return);
-                }catch (\Throwable $callbackException){
-                    if($queryException === null){
-                        throw $callbackException;
-                    }
-                }
-            }
+            $this->notifyQuery($return);
         }
         return $return;
     }
@@ -329,27 +313,17 @@ class FastDb
         $client = $this->getClient();
         $t = microtime(true);
         $return = new QueryResult($t);
-        $queryException = null;
         try {
             $ret = $client->rawQuery($sql, $timeout);
             $return->setResult($ret);
         }catch (\Throwable $throwable){
-            $queryException = $throwable;
+            $return->setException($throwable);
             throw $throwable;
         } finally {
             $return->setEndTime(microtime(true));
             $return->setConnection($client);
             $return->setRawSql($sql);
-            $this->logStack($return);
-            if(is_callable($this->onQuery)){
-                try {
-                    call_user_func($this->onQuery,$return);
-                }catch (\Throwable $callbackException){
-                    if($queryException === null){
-                        throw $callbackException;
-                    }
-                }
-            }
+            $this->notifyQuery($return);
         }
         return $return;
     }
@@ -448,6 +422,21 @@ class FastDb
             return $connection->isInTransaction;
         }
         return false;
+    }
+
+    private function notifyQuery(QueryResult $result): void
+    {
+        $this->logStack($result);
+        if (is_callable($this->onQuery)) {
+            $executionException = $result->getException();
+            try {
+                call_user_func($this->onQuery, $result);
+            } catch (\Throwable $callbackException) {
+                if ($executionException === null) {
+                    throw $callbackException;
+                }
+            }
+        }
     }
 
     protected function logStack(QueryResult $result): void

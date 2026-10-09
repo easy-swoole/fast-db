@@ -215,13 +215,18 @@ final class ConnectionTest extends TestCase
                 try {
                     (new FastDb())->$operation($connection, $flags, 0.03);
                     $this->fail('Expected transaction timeout');
-                } catch (\EasySwoole\Mysqli\Exception\TimeoutException $error) {
+                } catch (\EasySwoole\FastDb\Exception\TimeoutException $error) {
                     $elapsed = microtime(true) - $started;
                     $this->assertGreaterThanOrEqual(0.015, $elapsed);
                     $this->assertLessThan(0.5, $elapsed);
                     $this->assertFalse($protocol->isConnected());
                     $this->assertSame($operation !== 'begin', $connection->isInTransaction);
+                    $this->assertInstanceOf(\EasySwoole\Mysqli\Exception\TimeoutException::class, $error->getPrevious());
+                    $this->assertSame($error->getPrevious()->getCode(), $error->getCode());
                     $expected = $operation === 'begin' ? $flags->toSql() : strtoupper($operation) . $flags->toSqlSuffix();
+                    $this->assertSame($expected, $error->getRawSql());
+                    $this->assertNull($error->getQueryBuilder());
+                    $this->assertSame($error->getPrevious()->getMessage(), $error->getMessage());
                     $packet = $peer->recvAll(5 + strlen($expected), 1.0);
                     $this->assertSame("\x03" . $expected, substr($packet, 4));
                 } finally {
@@ -296,6 +301,101 @@ final class ConnectionTest extends TestCase
                 $connection->finishTransaction(true);
             }
         }
+    }
+
+    public function testUnbuiltQueryKeepsOriginalInvalidTimeoutException(): void
+    {
+        $connection = new Connection(new \EasySwoole\Mysqli\Config());
+        $this->expectException(\InvalidArgumentException::class);
+        $connection->query(new \EasySwoole\Mysqli\QueryBuilder(), 0.0);
+    }
+
+    public function testConfiguredTimeoutIsReportedWithoutExplicitOverride(): void
+    {
+        $check = function (): void {
+            [$socket, $peer] = swoole_coroutine_socketpair(AF_UNIX, SOCK_STREAM, 0);
+            $config = new \EasySwoole\Mysqli\Config(['timeout' => 0.03]);
+            $protocol = new \EasySwoole\Mysqli\Protocol\Connection($config);
+            (new \ReflectionProperty($protocol, 'socket'))->setValue($protocol, $socket);
+            (new \ReflectionProperty($protocol, 'connected'))->setValue($protocol, true);
+            $connection = new Connection($config);
+            $connection->connectionName = 'reporting';
+            (new \ReflectionProperty(\EasySwoole\Mysqli\Client::class, 'mysqlClient'))->setValue($connection, $protocol);
+            try {
+                $connection->rawQuery('SELECT 1');
+                $this->fail('Expected timeout');
+            } catch (\EasySwoole\FastDb\Exception\TimeoutException $error) {
+                $this->assertSame('SELECT 1', $error->getRawSql());
+                $this->assertNull($error->getQueryBuilder());
+                $this->assertSame($error->getPrevious()->getMessage(), $error->getMessage());
+                $this->assertSame($error->getPrevious()->getCode(), $error->getCode());
+            } finally { $connection->close(); $peer->close(); }
+        };
+        if (\Swoole\Coroutine::getCid() < 0) { \Swoole\Coroutine\run($check); }
+        else { $check(); }
+    }
+
+    public function testTimeoutIsCaughtByFastDbBaseException(): void
+    {
+        $cause = new \EasySwoole\Mysqli\Exception\TimeoutException('query timed out', 110);
+        $error = new \EasySwoole\FastDb\Exception\TimeoutException($cause->getMessage(), 110, $cause);
+        $error->rawSql = 'SELECT 1';
+        try {
+            throw $error;
+        } catch (\EasySwoole\FastDb\Exception\Exception $caught) {
+            $this->assertSame($error, $caught);
+            $this->assertSame($cause, $caught->getPrevious());
+            $this->assertSame('SELECT 1', $caught->getRawSql());
+            $this->assertSame(110, $caught->getCode());
+        }
+    }
+
+    public function testTimeoutContextUsesObjectPropertyAssignment(): void
+    {
+        $error = new \EasySwoole\FastDb\Exception\TimeoutException('query timed out');
+        $this->assertNull($error->getRawSql());
+        $this->assertNull($error->getQueryBuilder());
+        $builder = new \EasySwoole\Mysqli\QueryBuilder();
+        $builder->raw('SELECT ?', [1]);
+        $error->rawSql = 'SELECT ?';
+        $error->queryBuilder = $builder;
+        $this->assertSame('SELECT ?', $error->getRawSql());
+        $this->assertSame($builder, $error->getQueryBuilder());
+    }
+
+    public static function failedTransactionModes(): array
+    {
+        return [['begin', false], ['begin', true], ['commit', false], ['commit', true], ['rollback', false], ['rollback', true]];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('failedTransactionModes')]
+    public function testFailedTransactionCallbackKeepsOriginalError(string $operation, bool $loggerThrows): void
+    {
+        $failure = new \RuntimeException('transaction execution failed');
+        $connection = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()
+            ->onlyMethods([$operation . 'Transaction'])->getMock();
+        $connection->expects($this->once())->method($operation . 'Transaction')->willThrowException($failure);
+        $connection->isInTransaction = $operation !== 'begin';
+        $db = (new FastDb())->isEnableQueryStack(true);
+        $called = 0;
+        $expected = $operation === 'begin' ? 'START TRANSACTION' : strtoupper($operation) . ' AND NO CHAIN NO RELEASE';
+        $db->setOnQuery(function (\EasySwoole\FastDb\Mysql\QueryResult $result) use ($failure, $connection, $expected, $loggerThrows, &$called): void {
+            $called++;
+            $this->assertSame($failure, $result->getException());
+            $this->assertSame($expected, $result->getRawSql());
+            $this->assertSame($connection, $result->getConnection());
+            $this->assertNull($result->getResult());
+            if ($loggerThrows) { throw new \RuntimeException('logger failed'); }
+        });
+        try {
+            $db->$operation($connection);
+            $this->fail('Expected transaction error');
+        } catch (\RuntimeException $error) {
+            $this->assertSame($failure, $error);
+        }
+        $this->assertSame(1, $called);
+        $this->assertSame($expected, $db->getQueryStack(-1)->rawQuery);
+        $this->assertSame($operation !== 'begin', $connection->isInTransaction);
     }
 
 }

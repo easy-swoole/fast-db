@@ -50,6 +50,7 @@ final class QueryTimingTest extends TestCase
         }
         $wall = microtime(true) - $start;
         $this->assertInstanceOf(QueryResult::class, $logged);
+        $this->assertSame($fails ? $failure : null, $logged->getException());
         $duration = $logged->getEndTime() - $logged->getStartTime();
         $this->assertGreaterThanOrEqual(0.018, $duration);
         $this->assertGreaterThanOrEqual(0.025, $wall - $duration);

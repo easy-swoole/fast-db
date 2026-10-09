@@ -988,7 +988,7 @@ flags 不接受整数、枚举的 `value` 或错误的枚举类型；这些输�
 
 使用默认 `NoChainNoRelease` 可明确结束事务并保留池内连接。显式 Chain / ChainNoRelease 成功后，FastDb 保持事务标记为 true；Release / NoChainRelease 成功后关闭连接。FastDb 对 None / NoRelease 不读取服务端 completion_type 来推断链式事务状态，应用需要链式事务时应显式传 ChainNoRelease。
 
-超时抛出 `EasySwoole\Mysqli\Exception\TimeoutException`，驱动会关闭失步连接。提交超时可能发生在服务端已提交、客户端尚未收到响应时，结果需要结合业务记录核实，不能直接重试提交。事务日志和查询栈中的 SQL 包含 flags 对应的完整语句，例如 `START TRANSACTION READ ONLY`、`COMMIT AND NO CHAIN NO RELEASE`。
+FastDb 查询和事务执行超时抛出 `EasySwoole\FastDb\Exception\TimeoutException`，驱动会关闭失步连接。提交超时可能发生在服务端已提交、客户端尚未收到响应时，结果需要结合业务记录核实，不能直接重试提交。事务日志和查询栈中的 SQL 包含 flags 对应的完整语句，例如 `START TRANSACTION READ ONLY`、`COMMIT AND NO CHAIN NO RELEASE`。
 
 `queryLimit()->selectForUpdate()` 或 `all(true)` 也可生成锁定查询。锁应配合事务使用，并保持查询、更新、提交在同一协程和同一连接名内。
 
@@ -1087,6 +1087,7 @@ $row = $result->getResultOne();
 | --- | --- |
 | `getResult()` | SELECT 等返回行数组，写入/DDL 通常返回 bool；查询失败回调中为 null |
 | `getResultOne()` | 数组结果的第一行，否则 null |
+| `getException(): ?Throwable` | 执行失败时的异常对象；成功或未设置时为 null |
 | `getConnection()` | 本次实际使用的连接；实体失败回调的替代结果可能未设置连接 |
 | `getQueryBuilder()` | 构建器查询的副本；原始 SQL 查询时 null |
 | `getRawSql()` | 原始 SQL 文本；构建器查询时通常 null |
@@ -1101,6 +1102,40 @@ $insertId = $result->getConnection()->getLastInsertId();
 
 影响行数和自增 ID 类型为 `int|string|null`，超大无符号值保留为字符串，未查询或查询失败时为 null。这些连接级数值会随着后续 SQL 改变，应在本次调用后立即读取。`query()` 和 `rawQuery()` 的可选 `$timeout` 已传递给 mysqli 5.x，控制本次查询超时。
 
+### 超时异常定位
+
+`FastDb::query()`、`rawQuery()` 及 `begin()` / `commit()` / `rollback()` 的执行超时抛出 `EasySwoole\FastDb\Exception\TimeoutException`。SQL 信息在创建异常后赋值给 public 属性 `rawSql` 和 `queryBuilder`，也可通过 getter 读取；构造函数仅接收标准的 message、code、previous。message 保持底层错误消息，不拼接 SQL 或参数。
+
+| 方法 | 返回内容 |
+| --- | --- |
+| `getRawSql(): ?string` | 对应 SQL；预处理查询保留占位符，事务 SQL 包含 flags |
+| `getQueryBuilder(): ?QueryBuilder` | 构建器查询的独立快照，可读取 SQL 和绑定参数；原始 SQL / 事务操作为 null |
+| `getPrevious()` | 原始 mysqli 超时异常；错误码和 message 保持一致 |
+
+```php
+use EasySwoole\FastDb\Exception\TimeoutException;
+
+$query = new QueryBuilder();
+$query->raw('SELECT SLEEP(?)', [1]);
+try {
+    $db->query($query, timeout: 0.05);
+} catch (TimeoutException $error) {
+    $sql = $error->getRawSql(); // SELECT SLEEP(?)
+    $builder = $error->getQueryBuilder();
+    $params = $builder?->getLastBindParams() ?? []; // [1]
+    $message = $error->getMessage(); // 原始超时消息。
+    $cause = $error->getPrevious();
+    // 将 message、sql、params 按需交给日志系统。
+    throw $error;
+}
+```
+
+原始查询及事务超时可直接使用 `getRawSql()` 定位，例如 `COMMIT AND NO CHAIN NO RELEASE`。构建器在异常创建时复制，之后重用原构建器不会改变异常中保存的 SQL 和参数。
+
+FastDb 的超时异常继承 `EasySwoole\FastDb\Exception\Exception`。调用方可捕获 `EasySwoole\FastDb\Exception\TimeoutException`，或 FastDb 通用 `Exception`；它不继承 mysqli 异常，原始 mysqli 超时实例保存在 `getPrevious()` 中。
+
+这里覆盖 FastDb Connection 的 query/rawQuery 执行路径；获取连接前的连接池等待或建连失败、直接使用依赖 Client/prepare 的异常遵循各自入口。记录绑定参数时应按业务需要保护敏感数据。提交超时的结果需要核实，不能据此直接认定回滚。
+
 ## 查询日志与查询栈
 
 ### 全局回调
@@ -1110,14 +1145,17 @@ $db->setOnQuery(function (QueryResult $result): void {
     $durationMs = ($result->getEndTime() - $result->getStartTime()) * 1000;
     $builder = $result->getQueryBuilder();
     $sql = $result->getRawSql() ?? $builder?->getLastPrepareQuery();
-    $params = $builder?->getLastBindParams();
-    // 写入自己的日志系统：$sql、$params、$durationMs。
+    $params = $builder?->getLastBindParams() ?? [];
+    $exception = $result->getException();
+    $errorMessage = $exception?->getMessage();
+    $errorCode = $exception?->getCode();
+    // 写入自己的日志系统：sql、params、durationMs、errorMessage、errorCode。
 });
 ```
 
-开始时间在获得连接之后记录，因此不包含连接池等待。`query()` / `rawQuery()` 结束时间在执行结束或失败后、调用日志回调之前记录，不包含日志回调耗时。实际执行完成并返回的 begin/commit/rollback 也会进入日志回调；事务方法抛异常或直接返回（未执行 SQL）时不触发该事务日志。事务 rawSql 与 flags 生成的执行 SQL 一致。
+开始时间在获得连接之后记录，因此不包含连接池等待。`query()` / `rawQuery()` 结束时间在执行结束或失败后、调用日志回调之前记录，不包含日志回调耗时。begin/commit/rollback 实际执行后，无论成功、SQL 错误或超时，都进入日志回调和查询栈；直接返回且未执行 SQL 时不触发。事务 rawSql 与 flags 生成的执行 SQL 一致。获取连接前失败不会进入这些执行回调。
 
-`query()` / `rawQuery()` 抛异常时仍调用查询回调，`getResult()` / `getResultOne()` 可以安全读取为 null。查询已失败时，回调另抛异常不会覆盖原始查询异常；查询成功时，回调异常正常抛出。`QueryResult` 没有保存原异常的独立字段，需要在调用层捕获异常。
+`query()` / `rawQuery()` 和事务执行抛异常时，回调中的 `getException()` 返回该次执行抛出的同一异常对象，`getResult()` / `getResultOne()` 为 null。成功执行时 getException() 为 null。执行已失败时，日志回调另抛异常不会覆盖原始执行异常；执行成功时，回调异常正常抛出，不能据此认定数据库操作失败。执行异常在回调后继续向调用方抛出。
 
 底层 `getLastQuery()` 是用于调试的占位符替换文本，可能与实际绑定执行的细节不同；尤其 null 的展示不能代替实际 SQL 判断。优先记录 `getLastPrepareQuery()` 和 `getLastBindParams()`。
 
@@ -1136,7 +1174,7 @@ $user = User::findRecord(1, onQuery: function (QueryResult $result): void {
 });
 ```
 
-`findAll()`、`fastUpdate()`、`fastDelete()` 也有 `$onQuery` 参数。全局回调与实体/单次回调可以同时执行。实体查询在获得结果前失败时会创建替代 `QueryResult`，该结果仅确保时间与 SQL 信息、空结果可读，不保证拥有可用连接。
+`findAll()`、`fastUpdate()`、`fastDelete()` 也有 `$onQuery` 参数。全局回调与实体/单次回调可以同时执行。实体查询在获得结果前失败时会创建替代 `QueryResult`，该结果提供时间、SQL 信息、执行异常及空结果，不保证拥有可用连接。
 
 ### 查询栈
 

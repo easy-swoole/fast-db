@@ -9,6 +9,7 @@ class QueryResult
     protected float $endTime;
     protected float $startTime;
     protected mixed $result = null;
+    protected ?\Throwable $exception = null;
     protected Connection $connection;
 
     protected ?QueryBuilder $queryBuilder = null;
@@ -19,6 +20,16 @@ class QueryResult
     {
         $this->startTime = $startTime;
         $this->endTime = microtime(true);
+    }
+
+    public function getException(): ?\Throwable
+    {
+        return $this->exception;
+    }
+
+    public function setException(?\Throwable $exception): void
+    {
+        $this->exception = $exception;
     }
 
     /**

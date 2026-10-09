@@ -6,6 +6,8 @@ use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\Mysqli\Client;
 use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\Mysqli\Exception\Exception as QueryException;
+use EasySwoole\Mysqli\Exception\TimeoutException as DriverTimeoutException;
+use EasySwoole\FastDb\Exception\TimeoutException;
 use EasySwoole\Mysqli\Transaction\TransactionCompletionFlags;
 use EasySwoole\Mysqli\Transaction\TransactionStartFlags;
 use EasySwoole\Pool\ObjectInterface;
@@ -48,7 +50,7 @@ class Connection extends Client implements ObjectInterface
             return parent::query($builder, $timeout);
         } catch (\Throwable $error) {
             $this->restoreDeadlockedTransaction($error);
-            throw $error;
+            throw $this->withTimeoutContext($error, $builder->getLastPrepareQuery(), $builder);
         }
     }
 
@@ -58,8 +60,19 @@ class Connection extends Client implements ObjectInterface
             return parent::rawQuery($query, $timeout);
         } catch (\Throwable $error) {
             $this->restoreDeadlockedTransaction($error);
-            throw $error;
+            throw $this->withTimeoutContext($error, $query);
         }
+    }
+
+    private function withTimeoutContext(\Throwable $error, ?string $sql, ?QueryBuilder $builder = null): \Throwable
+    {
+        if (!$error instanceof DriverTimeoutException) {
+            return $error;
+        }
+        $exception = new TimeoutException($error->getMessage(), (int) $error->getCode(), $error);
+        $exception->rawSql = $sql;
+        $exception->queryBuilder = $builder === null ? null : clone $builder;
+        return $exception;
     }
 
     public function beginTransaction(TransactionStartFlags $flags, ?float $timeout = null): bool

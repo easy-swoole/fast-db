@@ -249,9 +249,21 @@ final class TransactionTest extends TestCase
                     $this->db->query($query, 0.05);
                 }
                 $this->fail('Expected query timeout');
-            } catch (\EasySwoole\Mysqli\Exception\TimeoutException $error) {
+            } catch (\EasySwoole\FastDb\Exception\TimeoutException $error) {
                 $this->assertLessThan(0.5, microtime(true) - $started);
                 $this->assertFalse($client->mysqlClient()->isConnected());
+                $this->assertInstanceOf(\EasySwoole\Mysqli\Exception\TimeoutException::class, $error->getPrevious());
+                $this->assertSame($error->getPrevious()->getCode(), $error->getCode());
+                $this->assertSame($mode === 'raw' ? 'SELECT SLEEP(1)' : 'SELECT SLEEP(?)', $error->getRawSql());
+                $this->assertSame($error->getPrevious()->getMessage(), $error->getMessage());
+                if ($mode === 'raw') {
+                    $this->assertNull($error->getQueryBuilder());
+                } else {
+                    $this->assertNotSame($query, $error->getQueryBuilder());
+                    $this->assertSame([1], $error->getQueryBuilder()->getLastBindParams());
+                    $query->raw('SELECT 2');
+                    $this->assertSame('SELECT SLEEP(?)', $error->getQueryBuilder()->getLastPrepareQuery());
+                }
             }
             $this->assertSame(1, $this->db->rawQuery('SELECT 1 AS value')->getResultOne()['value']);
         }
@@ -267,7 +279,7 @@ final class TransactionTest extends TestCase
         try {
             $this->db->rawQuery('SELECT SLEEP(1)', 0.05);
             $this->fail('Expected timeout');
-        } catch (\EasySwoole\Mysqli\Exception\TimeoutException $error) {
+        } catch (\EasySwoole\FastDb\Exception\TimeoutException $error) {
             $this->assertTrue($client->mysqlClient()->isTransactionLost());
         }
         try {
@@ -322,7 +334,7 @@ final class TransactionTest extends TestCase
             try {
                 $other->rawQuery("UPDATE `{$this->table}` SET value = 2 WHERE id = 1", 0.05);
                 $this->fail('Expected lock wait client timeout');
-            } catch (\EasySwoole\Mysqli\Exception\TimeoutException $error) {
+            } catch (\EasySwoole\FastDb\Exception\TimeoutException $error) {
                 $this->assertLessThan(0.5, microtime(true) - $started);
                 $this->assertTrue($other->currentConnection()->mysqlClient()->isTransactionLost());
             }
@@ -487,6 +499,13 @@ final class TransactionTest extends TestCase
             });
             $db = (new FastDb())->addDb(new Config(array_replace(MYSQL_CONFIG,
                 ['host' => '127.0.0.1', 'port' => $port, 'minObjectNum' => 0])));
+            $loggedFailure = null;
+            $db->isEnableQueryStack(true)->setOnQuery(static function (QueryResult $result) use (&$loggedFailure): void {
+                if ($result->getException() !== null) {
+                    $loggedFailure = $result;
+                    throw new \RuntimeException('timeout logger failed');
+                }
+            });
             try {
                 $db->rawQuery('SELECT 1');
                 if ($operation !== 'begin') {
@@ -497,10 +516,15 @@ final class TransactionTest extends TestCase
                 try {
                     $db->$operation(timeout: 0.05);
                     $this->fail('Expected transaction command timeout');
-                } catch (\EasySwoole\Mysqli\Exception\TimeoutException $error) {
+                } catch (\EasySwoole\FastDb\Exception\TimeoutException $error) {
                     $this->assertGreaterThanOrEqual(0.03, microtime(true) - $started);
                     $this->assertLessThan(0.15, microtime(true) - $started);
                     $this->assertFalse($db->currentConnection()->mysqlClient()->isConnected());
+                    $this->assertSame($operation === 'begin' ? 'START TRANSACTION' : strtoupper($operation) . ' AND NO CHAIN NO RELEASE', $error->getRawSql());
+                    $this->assertSame($error, $loggedFailure->getException());
+                    $this->assertSame($error->getRawSql(), $loggedFailure->getRawSql());
+                    $this->assertNull($loggedFailure->getResult());
+                    $this->assertSame($error->getRawSql(), $db->getQueryStack(-1)->rawQuery);
                 }
                 $db->recycleContext();
                 $this->assertTrue($finished->pop(3.0));

@@ -19,6 +19,7 @@ final class QueryFailureTest extends TestCase
         $result = new QueryResult(microtime(true));
         $this->assertNull($result->getResult());
         $this->assertNull($result->getResultOne());
+        $this->assertNull($result->getException());
     }
 
     #[DataProvider('failedQueries')]
@@ -32,9 +33,10 @@ final class QueryFailureTest extends TestCase
         (new \ReflectionProperty(FastDb::class, 'currentConnection'))
             ->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $client]]);
         $called = false;
-        $db->setOnQuery(function (QueryResult $result) use (&$called, $callbackThrows): void {
+        $db->setOnQuery(function (QueryResult $result) use (&$called, $callbackThrows, $failure): void {
             $called = true;
             $this->assertNull($result->getResult());
+            $this->assertSame($failure, $result->getException());
             $this->assertNull($result->getResultOne());
             if ($callbackThrows) {
                 throw new \RuntimeException('logger failure');
@@ -71,9 +73,10 @@ final class QueryFailureTest extends TestCase
         $called = false;
         try {
             $user = new User();
-            $user->setOnQuery(function (QueryResult $result) use (&$called): void {
+            $user->setOnQuery(function (QueryResult $result) use (&$called, $failure): void {
                 $called = true;
                 $this->assertNull($result->getResult());
+            $this->assertSame($failure, $result->getException());
                 $this->assertInstanceOf(QueryBuilder::class, $result->getQueryBuilder());
                 throw new \RuntimeException('entity logger failure');
             });

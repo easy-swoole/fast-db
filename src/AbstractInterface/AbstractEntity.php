@@ -856,6 +856,7 @@ abstract class AbstractEntity implements \JsonSerializable
             if(is_callable($onQuery)){
                 if(empty($ret)){
                     $ret = new QueryResult($startTime);
+                    $ret->setException($queryException);
                     if($query instanceof QueryBuilder){
                         $ret->setQueryBuilder($query);
                     }else{
