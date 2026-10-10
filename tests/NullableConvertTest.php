@@ -11,10 +11,29 @@ use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\Mysqli\QueryBuilder;
+use EasySwoole\FastDb\Tests\Model\SexEnum;
 use PHPUnit\Framework\TestCase;
 
 final class NullableConvertTest extends TestCase
 {
+    public function testEnumDefaultsPreserveTheirCases(): void
+    {
+        $entity = new EnumDefaultEntity();
+        $this->assertSame(SexEnum::MALE, $entity->sex);
+        $this->assertSame(SexEnum::FEMAILE, $entity->nullableSex);
+        $this->assertSame(['sex' => 1, 'nullableSex' => 2], $entity->toArray());
+        $this->assertTrue($entity->update());
+    }
+
+    public function testConstructorCanOverrideEnumDefaults(): void
+    {
+        $entity = new EnumDefaultEntity(['sex' => 2, 'nullableSex' => null]);
+        $this->assertSame(SexEnum::FEMAILE, $entity->sex);
+        $this->assertNull($entity->nullableSex);
+        $entity->setData(['sex' => SexEnum::MALE]);
+        $this->assertSame(SexEnum::MALE, $entity->sex);
+    }
+
     public function testSetDataClearsNullableConvertedValue(): void
     {
         $entity = new NullableConvertEntity(['id' => 1, 'tags' => '[1]']);
@@ -74,6 +93,20 @@ final class NullableConvertTest extends TestCase
         $entity->setData(['requiredTags' => null]);
         $this->assertInstanceOf(ConvertList::class, $entity->requiredTags);
         $this->assertSame([], $entity->requiredTags->toArray());
+    }
+}
+
+class EnumDefaultEntity extends AbstractEntity
+{
+    #[Property(convertObject: SexEnum::class)]
+    public SexEnum $sex = SexEnum::MALE;
+
+    #[Property(convertObject: SexEnum::class)]
+    public ?SexEnum $nullableSex = SexEnum::FEMAILE;
+
+    public function tableName(): string
+    {
+        return 'enum_default_test';
     }
 }
 
