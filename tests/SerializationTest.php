@@ -5,10 +5,45 @@ declare(strict_types=1);
 namespace EasySwoole\FastDb\Tests;
 
 use EasySwoole\FastDb\Tests\Model\User;
+use EasySwoole\FastDb\FastDb;
+use EasySwoole\FastDb\Mysql\QueryResult;
 use PHPUnit\Framework\TestCase;
 
 final class SerializationTest extends TestCase
 {
+    public function testPaginatedListKeepsHiddenFieldsInJson(): void
+    {
+        $rows = new QueryResult(microtime(true));
+        $rows->setResult([['id' => 1, 'name' => 'secret', 'email' => 'public@example.com']]);
+        $count = new QueryResult(microtime(true));
+        $count->setResult([['count' => 1]]);
+        $db = $this->getMockBuilder(FastDb::class)->onlyMethods(['query', 'rawQuery'])->getMock();
+        $db->expects($this->once())->method('query')->willReturn($rows);
+        $db->expects($this->once())->method('rawQuery')->willReturn($count);
+        $instance = new \ReflectionProperty(FastDb::class, 'instance');
+        $original = $instance->getValue();
+        $instance->setValue(null, $db);
+        try {
+            $user = new User();
+            $user->queryLimit()->hideFields('name')->persistFieldLimit()
+                ->where('status', 0)->page(1, true, 10)->orderBy('id', 'DESC');
+            $result = $user->all();
+            for ($i = 0; $i < 2; $i++) {
+                $data = json_decode(json_encode([
+                    'list' => $result->list(),
+                    'total' => $result->totalCount(),
+                    'page' => 1,
+                    'pageSize' => 10,
+                ], JSON_THROW_ON_ERROR), true, 512, JSON_THROW_ON_ERROR);
+                $this->assertArrayNotHasKey('name', $data['list'][0]);
+                $this->assertSame('public@example.com', $data['list'][0]['email']);
+                $this->assertSame(1, $data['total']);
+            }
+        } finally {
+            $instance->setValue(null, $original);
+        }
+    }
+
     public function testHiddenFieldsRemainHiddenAcrossJsonSerializations(): void
     {
         $user = new User(['id' => 1, 'name' => 'secret', 'email' => 'private@example.com']);
