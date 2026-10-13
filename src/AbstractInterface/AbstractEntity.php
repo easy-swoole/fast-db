@@ -872,6 +872,7 @@ abstract class AbstractEntity implements \JsonSerializable
     /** 统一执行模型查询，并在成功或异常时通知本次查询回调。 */
     private static function callQuery(QueryBuilder|string $query,?callable $onQuery = null):QueryResult
     {
+        $startTick = hrtime(true);
         $startTime = microtime(true);
         $queryException = null;
         try {
@@ -887,7 +888,8 @@ abstract class AbstractEntity implements \JsonSerializable
             if(is_callable($onQuery)){
                 if(empty($ret)){
                     // 执行失败时也构造查询结果，保留原始异常及 SQL/构造器，便于回调定位错误。
-                    $ret = new QueryResult($startTime);
+                    $ret = new QueryResult($startTime, $startTick);
+                    $ret->finishTiming();
                     $ret->setException($queryException);
                     if($query instanceof QueryBuilder){
                         $ret->setQueryBuilder($query);

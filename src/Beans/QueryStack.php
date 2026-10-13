@@ -14,5 +14,8 @@ class QueryStack
 
     public float $startTime;
 
+    /** 单调时钟计算的查询耗时，单位为秒。 */
+    public float $duration = 0.0;
+
     public float $endTime;
 }

@@ -8,6 +8,9 @@ class QueryResult
 {
     protected float $endTime;
     protected float $startTime;
+    // 单调时钟仅用于计算耗时，不能作为日期时间使用。
+    protected int|float $startTick;
+    protected float $duration = 0.0;
     protected mixed $result = null;
     protected ?\Throwable $exception = null;
     protected Connection $connection;
@@ -16,10 +19,25 @@ class QueryResult
 
     protected ?string $rawSql = null;
 
-    function __construct(float $startTime)
+    function __construct(float $startTime, int|float|null $startTick = null)
     {
         $this->startTime = $startTime;
         $this->endTime = microtime(true);
+        $this->startTick = $startTick ?? hrtime(true);
+    }
+
+    /** 结束计时；墙上时间用于日志定位，单调时钟用于测量耗时。 */
+    public function finishTiming(): void
+    {
+        $endTick = hrtime(true);
+        $this->endTime = microtime(true);
+        $this->duration = ($endTick - $this->startTick) / 1_000_000_000;
+    }
+
+    /** 返回最近一次 finishTiming() 记录的耗时，单位为秒。 */
+    public function getDuration(): float
+    {
+        return $this->duration;
     }
 
     public function getException(): ?\Throwable

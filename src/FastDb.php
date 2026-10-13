@@ -197,7 +197,7 @@ class FastDb
             $return->setException($error);
             throw $error;
         } finally {
-            $return->setEndTime(microtime(true));
+            $return->finishTiming();
             $return->setConnection($client);
             $return->setRawSql($flags->toSql());
             $this->notifyQuery($return);
@@ -230,7 +230,7 @@ class FastDb
             $return->setException($error);
             throw $error;
         } finally {
-            $return->setEndTime(microtime(true));
+            $return->finishTiming();
             $return->setConnection($client);
             $return->setRawSql('COMMIT' . $flags->toSqlSuffix());
             $this->notifyQuery($return);
@@ -263,7 +263,7 @@ class FastDb
             $return->setException($error);
             throw $error;
         } finally {
-            $return->setEndTime(microtime(true));
+            $return->finishTiming();
             $return->setConnection($client);
             $return->setRawSql('ROLLBACK' . $flags->toSqlSuffix());
             $this->notifyQuery($return);
@@ -295,7 +295,7 @@ class FastDb
             $return->setException($throwable);
             throw  $throwable;
         } finally {
-            $return->setEndTime(microtime(true));
+            $return->finishTiming();
             $return->setConnection($client);
             $return->setQueryBuilder(clone $queryBuilder);
             $this->notifyQuery($return);
@@ -320,7 +320,7 @@ class FastDb
             $return->setException($throwable);
             throw $throwable;
         } finally {
-            $return->setEndTime(microtime(true));
+            $return->finishTiming();
             $return->setConnection($client);
             $return->setRawSql($sql);
             $this->notifyQuery($return);
@@ -446,6 +446,7 @@ class FastDb
             $stack->connectionName = $this->selectConnection();
             $stack->endTime = $result->getEndTime();
             $stack->startTime = $result->getStartTime();
+            $stack->duration = $result->getDuration();
             $stack->query = $result->getQueryBuilder();
             $stack->rawQuery = $result->getRawSql();
             $cid = Coroutine::getCid();

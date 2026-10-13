@@ -1142,7 +1142,7 @@ FastDb 的超时异常继承 `EasySwoole\FastDb\Exception\Exception`。调用方
 
 ```php
 $db->setOnQuery(function (QueryResult $result): void {
-    $durationMs = ($result->getEndTime() - $result->getStartTime()) * 1000;
+    $durationMs = $result->getDuration() * 1000;
     $builder = $result->getQueryBuilder();
     $sql = $result->getRawSql() ?? $builder?->getLastPrepareQuery();
     $params = $builder?->getLastBindParams() ?? [];
@@ -1191,7 +1191,7 @@ $missing = $db->getQueryStack(100); // null。
 $db->isEnableQueryStack(false); // 停止追加，不立即删除已有记录。
 ```
 
-每项 `QueryStack` 包含 `connectionName`、`query`、`rawQuery`、`startTime`、`endTime`。协程退出/归还上下文时清理。开启后会积累记录，长生命周期协程应控制使用范围。
+每项 `QueryStack` 包含 `connectionName`、`query`、`rawQuery`、`startTime`、`endTime`、`duration`。`duration` 使用 `hrtime()` 计算，单位为秒；开始、结束时间仍为 Unix 时间戳。协程退出/归还上下文时清理。开启后会积累记录，长生命周期协程应控制使用范围。
 
 ## 模型生成器
 
