@@ -1193,6 +1193,100 @@ $db->isEnableQueryStack(false); // 停止追加，不立即删除已有记录。
 
 每项 `QueryStack` 包含 `connectionName`、`query`、`rawQuery`、`startTime`、`endTime`、`duration`。`duration` 使用 `hrtime()` 计算，单位为秒；开始、结束时间仍为 Unix 时间戳。协程退出/归还上下文时清理。开启后会积累记录，长生命周期协程应控制使用范围。
 
+## 记录慢查询日志
+
+通过 `QueryResult::getDuration()` 获取耗时，单位为秒。下面以 **200 毫秒**为慢查询阈值，使用同一个日志方法记录 SQL、绑定参数、执行耗时和异常信息；可将 `error_log()` 替换为项目中的日志组件。
+
+```php
+use EasySwoole\FastDb\Mysql\QueryResult;
+
+final class SlowQueryLogger
+{
+    public static function record(QueryResult $result): void
+    {
+        $durationMs = $result->getDuration() * 1000;
+        if ($durationMs < 200) {
+            return;
+        }
+
+        $builder = $result->getQueryBuilder();
+        $exception = $result->getException();
+        error_log(json_encode([
+            'type' => 'slow_query',
+            'sql' => $result->getRawSql() ?? $builder?->getLastPrepareQuery(),
+            'params' => $builder?->getLastBindParams() ?? [],
+            'durationMs' => $durationMs,
+            'startTime' => $result->getStartTime(),
+            'errorMessage' => $exception?->getMessage(),
+            'errorCode' => $exception?->getCode(),
+        ], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR));
+    }
+}
+```
+
+耗时使用 `hrtime()` 的单调时钟计算，系统时间调整不会影响耗时测量；`startTime` 仍为 Unix 时间戳，便于定位日志发生时间。全局查询耗时从获得连接之后开始，到执行结束或失败时停止，不包含连接池等待及日志回调耗时。失败或超时的执行达到阈值时也会记录。
+
+### 方法一：FastDb 全局 onQuery
+
+在应用初始化时注册，统一追踪通过该 FastDb 实例执行的查询，包括模型查询、直接调用 `query()` / `rawQuery()`，以及实际执行的 begin/commit/rollback。
+
+```php
+use EasySwoole\FastDb\FastDb;
+
+FastDb::getInstance()->setOnQuery([SlowQueryLogger::class, 'record']);
+```
+
+`setOnQuery()` 会替换已有的全局回调。如果项目已经注册查询日志回调，应把慢查询判断加入现有回调，或在其中调用 `SlowQueryLogger::record($result)`。
+
+### 方法二：在基础模型构造方法中设置 onQuery
+
+需要按模型选择追踪范围时，可以定义一个基础模型，在构造方法中调用父类初始化，并注册实体级回调。需要记录慢查询日志的模型继承这个基础模型。
+
+```php
+use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
+use EasySwoole\FastDb\Attributes\Property;
+
+abstract class SlowQueryModel extends AbstractEntity
+{
+    public function __construct(?array $data = null)
+    {
+        parent::__construct($data);
+        $this->setOnQuery([SlowQueryLogger::class, 'record']);
+    }
+}
+
+class ConfigModel extends SlowQueryModel
+{
+    #[Property(isPrimaryKey: true)]
+    public int $configId;
+
+    #[Property]
+    public ?string $configContent;
+
+    public function tableName(): string
+    {
+        return 'config';
+    }
+}
+
+$config = new ConfigModel();
+$config->queryLimit()->where('configId', 1);
+$result = $config->all(); // 本次查询达到阈值时记录慢日志。
+```
+
+此方式覆盖实体实例调用的查询，例如 `all()`、`insert()`、`update()`、`delete()` 和关联查询。子类如果重写构造方法，需要调用 `parent::__construct($data)` 才能保留初始化及日志注册。
+
+静态方法 `findRecord()`、`findAll()`、`fastUpdate()`、`fastDelete()` 使用各自的 `$onQuery` 参数，不会自动使用基础模型构造方法中设置的实体回调。需要追踪这些调用时，显式传入回调：
+
+```php
+$config = ConfigModel::findRecord(
+    1,
+    onQuery: [SlowQueryLogger::class, 'record']
+);
+```
+
+全局回调与实体/单次回调可以同时触发。若两处都调用同一个慢日志方法，同一次执行可能记录两条日志，应按需要选择注册范围。
+
 ## 模型生成器
 
 ### command 2.x 集成
