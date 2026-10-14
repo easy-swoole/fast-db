@@ -17,19 +17,19 @@ use EasySwoole\FastDb\Attributes\Property;
 class StudentScoreModel extends AbstractEntity
 {
     #[Property(isPrimaryKey: true)]
-    public int $scoreId;
+    public int $score_id;
 
     #[Property]
-    public int $studentId;
+    public int $student_id;
 
     #[Property]
-    public int $courseId;
+    public int $course_id;
 
     #[Property]
     public int $score;
 
     #[Property]
-    public ?string $extraMark;
+    public ?string $extra_mark;
 
     function tableName(): string
     {

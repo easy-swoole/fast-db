@@ -46,7 +46,7 @@ class StudentModel extends AbstractEntity
 
     #[Relate(
         targetEntity: StudentScoreModel::class,
-        targetProperty: "studentId"
+        targetProperty: "student_id"
     )]
     function score()
     {

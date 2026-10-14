@@ -9,5 +9,6 @@ class Relate
         public string $targetEntity,
         public string $targetProperty,
         public ?string $selfProperty = null,
+        public bool $cacheResult = false,
     ){}
 }

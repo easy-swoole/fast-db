@@ -25,6 +25,32 @@ abstract class AbstractEntity implements \JsonSerializable
     // 实体级查询回调，与 FastDb 的全局 onQuery 回调独立。
     private mixed $onQuery = null;
 
+    // 缓存仅属于当前实体实例；键包含连接、关联类型、执行 SQL、参数和返回形式。
+    private array $relationCache = [];
+
+    /** 外部数据变化后，可主动清空当前实体的全部关联缓存。 */
+    public function clearRelationCache(): static
+    {
+        $this->relationCache = [];
+        return $this;
+    }
+
+    private function relationCacheKey(Relate $relate, QueryBuilder $query, string $kind, bool $returnAsArray): ?string
+    {
+        if (!$relate->cacheResult) {
+            return null;
+        }
+        return hash('sha256', serialize([
+            FastDb::getInstance()->selectConnection(),
+            $kind,
+            $relate->targetEntity,
+            $returnAsArray,
+            $query->getLastPrepareQuery(),
+            $query->getLastBindParams(),
+            $query->getLastQueryOptions(),
+        ]));
+    }
+
     abstract function tableName():string;
 
     function __construct(array|null $data = null)
@@ -767,9 +793,18 @@ abstract class AbstractEntity implements \JsonSerializable
         // 查询两条即可判断一对一关系是否违反唯一性约束，无需拉取全部匹配记录。
         $query->where($relate->targetProperty,$selfValue)
             ->get($tableName,2,$fields);
+        $cacheKey = $this->relationCacheKey($relate, $query, 'one', $returnAsArray);
+        // array_key_exists 能识别已缓存的 null；命中后仍清理本次查询配置。
+        if ($cacheKey !== null && array_key_exists($cacheKey, $this->relationCache)) {
+            $this->reset();
+            return $this->relationCache[$cacheKey];
+        }
         $ret = static::callQuery($query,$this->onQuery)->getResult();
         $this->reset();
         if(empty($ret)){
+            if ($cacheKey !== null) {
+                $this->relationCache[$cacheKey] = null;
+            }
             return null;
         }
         if(count($ret) > 1){
@@ -777,9 +812,16 @@ abstract class AbstractEntity implements \JsonSerializable
             throw new RuntimeError($msg);
         }
         if($returnAsArray){
+            if ($cacheKey !== null) {
+                $this->relationCache[$cacheKey] = $ret[0];
+            }
             return $ret[0];
         }
-        $temp->setData($ret[0]);
+        // 关联加载的数据也应作为比较基准，避免未修改的字段被整行更新。
+        $temp->setData($ret[0],true);
+        if ($cacheKey !== null) {
+            $this->relationCache[$cacheKey] = $temp;
+        }
         return $temp;
 
     }
@@ -809,6 +851,11 @@ abstract class AbstractEntity implements \JsonSerializable
 
         $query->where($relate->targetProperty,$selfValue)
             ->get($tableName,null,$fields);
+        $cacheKey = $this->relationCacheKey($relate, $query, 'many', $returnAsArray);
+        if ($cacheKey !== null && array_key_exists($cacheKey, $this->relationCache)) {
+            $this->reset();
+            return $this->relationCache[$cacheKey];
+        }
         $ret = static::callQuery($query,$this->onQuery)->getResult();
 
         $final = [];
@@ -828,7 +875,11 @@ abstract class AbstractEntity implements \JsonSerializable
             }
         }
         $this->reset();
-        return new ListResult($final,$total);
+        $result = new ListResult($final,$total);
+        if ($cacheKey !== null) {
+            $this->relationCache[$cacheKey] = $result;
+        }
+        return $result;
     }
 
     private function parseRelate(?Relate $relate = null)
@@ -857,7 +908,7 @@ abstract class AbstractEntity implements \JsonSerializable
             }
         }
         if(!key_exists($relate->targetProperty,$check->allProperties())){
-            $msg = "{$relate->selfProperty} is not a define property in {$relate->targetEntity}";
+            $msg = "{$relate->targetProperty} is not a define property in {$relate->targetEntity}";
             throw new RuntimeError($msg);
         }
         return $relate;

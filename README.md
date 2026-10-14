@@ -849,6 +849,8 @@ class AuditedUser extends User
 
 关联是按需执行的独立查询，不自动 eager loading，也不自动通过 JOIN 加载。
 
+### 定义一对一和一对多关联
+
 例如用户有一条 profile 和多条 order；目标实体要声明 `userId` 属性，数据库中需要对应字段：
 
 ```php
@@ -870,23 +872,143 @@ class RelatedUser extends User
 }
 ```
 
+关联条件为“目标表的 `targetProperty` = 当前实体的 `selfProperty` 值”。上例中，查询用户 `id = 1` 的关联时，会自动附加目标表的 `userId = 1` 条件。属性名称必须与数据库列名一致，FastDb 不会自动转换驼峰和下划线命名。
+
+### 加载关联和分页
+
 ```php
 $user = RelatedUser::findRecord(1);
 if ($user !== null) {
     $profile = $user->profile(); // 目标实体|null。
     $orders = $user->orders(); // ListResult。
 
-    $user->queryLimit()->where('status', 1)->page(1, true, 20);
+    // 查询条件作用于目标订单表，并与自动生成的 userId 条件共同生效。
+    $user->queryLimit()
+        ->where('status', 1)
+        ->orderBy('id', 'DESC')
+        ->page(1, true, 20);
     $activeOrders = $user->orders();
+    $list = $activeOrders->list(); // 订单实体数组。
+    $total = $activeOrders->totalCount(); // 满足条件的总数，不限于当前页。
 
     $user->queryLimit()->returnAsArray();
     $profileRow = $user->profile(); // 原始数组|null。
 }
 ```
 
+一对一未命中时返回 `null`；一对多未命中时返回包含空列表的 `ListResult`。不启用总数计算时，`totalCount()` 返回 `null`。一对一查询若匹配多条记录会抛出 `RuntimeError`，应让数据满足预期的一对一关系。
+
+关联查询正常执行后会清理当前实体的查询配置。下一次关联查询需要重新设置过滤、排序、分页和字段限制。
+
+### 字段选择与隐藏字段
+
+只需要部分列时，在父实体上设置目标查询的字段列表。下面直接返回数组，避免未选择的字段在实体序列化时以默认值或 null 出现：
+
+```php
+$user = RelatedUser::findRecord(1);
+if ($user !== null) {
+    $user->queryLimit()->fields(['id', 'userId', 'status'], true);
+    $rows = $user->orders()->list(); // 每项只有所选列。
+}
+```
+
+当前关联查询不会把父实体上的 `hideFields()`、`persistFieldLimit()` 自动传给关联结果。需要隐藏字段时，应在返回的实体上设置：
+
+```php
+$user = RelatedUser::findRecord(1);
+if ($user !== null) {
+    $profile = $user->profile();
+    if ($profile !== null) {
+        $profile->queryLimit()->hideFields('privateNote');
+    }
+
+    $orders = $user->orders();
+    foreach ($orders->list() as $order) {
+        $order->queryLimit()->hideFields('internalRemark');
+    }
+
+    $json = json_encode([
+        'profile' => $profile,
+        'orders' => $orders->list(),
+    ], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+}
+```
+
+示例中的 `privateNote`、`internalRemark` 代表业务模型中需要隐藏的字段。返回数组时请使用 `fields(..., true)` 明确选择列，或自行移除字段。
+
+### 修改关联实体
+
+关联返回的实体会执行字段转换，并把加载数据作为更新比较基准。未修改时调用 `update()` 不发送 SQL；修改后只更新发生变化的字段：
+
+```php
+$user = RelatedUser::findRecord(1);
+if ($user !== null) {
+    $profile = $user->profile();
+    if ($profile !== null) {
+        $profile->setData(['nickname' => 'Alice'])->update();
+    }
+}
+```
+
+`nickname` 需要在目标模型中声明为 `Property`。需要更新关联实体时，应保留目标实体的主键列；数组结果不能直接调用实体的 `update()`。修改父实体不会自动保存或删除关联数据，应分别操作各个实体。
+
+### 缓存关联查询结果
+
+在 `Relate` 上设置 `cacheResult: true`，可以缓存当前实体实例的关联结果，重复执行相同关联查询时不再发送 SQL。默认值为 `false`。
+
+```php
+#[Relate(targetEntity: Profile::class, targetProperty: 'userId', cacheResult: true)]
+public function profile()
+{
+    return $this->relateOne();
+}
+
+#[Relate(targetEntity: Order::class, targetProperty: 'userId', cacheResult: true)]
+public function orders()
+{
+    return $this->relateMany();
+}
+```
+
+```php
+$user = RelatedUser::findRecord(1);
+if ($user !== null) {
+    $first = $user->orders(); // 首次查询数据库。
+    $second = $user->orders(); // 复用同一个 ListResult。
+
+    $user->clearRelationCache(); // 清空此实体的全部关联缓存。
+    $fresh = $user->orders(); // 重新查询数据库。
+}
+```
+
+缓存按当前连接名称、目标实体、关联类型、生成的 SQL、绑定参数及返回形式区分。改变关联字段值、过滤条件、排序、分页、选择列、目标表或实体/数组返回形式时，会使用不同缓存项。分页总数也随列表缓存；需要重复命中分页查询时，每次设置相同的分页和排序条件。
+
+`null` 和空列表同样会缓存；查询异常及一对一匹配多条的异常不会缓存。命中缓存时仍清理本次查询配置，但不会触发查询日志回调。不同父实体实例不共享缓存。
+
+返回的关联实体和 `ListResult` 复用同一对象，修改对象也会影响后续缓存返回值。缓存不会自动感知其他查询、关联写入、事务提交或回滚导致的数据变化；需要最新数据时调用 `clearRelationCache()`，或保持 `cacheResult: false`。长生命周期实体应按需清理缓存。
+
+### 显式指定关联字段和目标表
+
 `selfProperty` 省略时使用当前实体主键；`targetProperty` 和显式 `selfProperty` 必须是已映射属性。也可以显式传入 `Relate` 对象和目标表名：`relateOne($relate, $tableName)` / `relateMany($relate, $tableName)`，这两个方法是 protected，需要从实体方法调用。
 
-`relateOne()` 查询最多两条用于检测异常，多于一条时抛 `RuntimeError`。查询配置在关联执行后重置。当前 `relateOne()` / `relateMany()` 不具备 `all()` 的完整隐藏字段和输出限制传播行为，需要隐藏目标字段时自行在返回实体上设置限制或使用明确列选择/数组结果。
+```php
+class RelatedUser extends User
+{
+    public function archivedOrders()
+    {
+        return $this->relateMany(
+            new Relate(
+                targetEntity: Order::class,
+                targetProperty: 'userId',
+                selfProperty: 'id'
+            ),
+            tableName: 'archived_orders'
+        );
+    }
+}
+```
+
+覆盖表名只改变查询目标表，不会切换数据库连接；目标表结构需要与目标实体字段匹配。
 
 遍历大量父实体逐一加载关联会产生多次 SQL；需要批量加载时可用底层查询或自行组织 `IN` 查询。
 
