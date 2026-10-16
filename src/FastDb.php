@@ -210,6 +210,7 @@ class FastDb
 
         $this->getTransactionContext($client);
         $return = new QueryResult(microtime(true));
+        $return->setConnectionName($client->connectionName ?? $this->selectConnection());
         try {
             $ret = $client->beginTransaction($flags, $timeout);
             if ($ret === true) {
@@ -245,6 +246,7 @@ class FastDb
 
         $this->getTransactionContext($client);
         $return = new QueryResult(microtime(true));
+        $return->setConnectionName($client->connectionName ?? $this->selectConnection());
         try {
             $ret = $client->commitTransaction($flags, $timeout);
             if ($ret === true) {
@@ -281,6 +283,7 @@ class FastDb
 
         $this->getTransactionContext($client);
         $return = new QueryResult(microtime(true));
+        $return->setConnectionName($client->connectionName ?? $this->selectConnection());
         try {
             $ret = $client->rollbackTransaction($flags, $timeout);
             if ($ret === true) {
@@ -314,6 +317,7 @@ class FastDb
         $this->getTransactionContext($client);
         $t = microtime(true);
         $return = new QueryResult($t);
+        $return->setConnectionName($client->connectionName ?? $this->selectConnection());
         try{
             if(is_callable($queryBuilder)){
                 $call = $queryBuilder;
@@ -349,6 +353,7 @@ class FastDb
         $this->getTransactionContext($client);
         $t = microtime(true);
         $return = new QueryResult($t);
+        $return->setConnectionName($client->connectionName ?? $this->selectConnection());
         try {
             $ret = $client->rawQuery($sql, $timeout);
             $return->setResult($ret);
@@ -522,7 +527,8 @@ class FastDb
     {
         if($this->enableQueryStack){
             $stack = new QueryStack();
-            $stack->connectionName = $this->selectConnection();
+            // 统一使用执行时的连接名，不能用记录日志时可能已改变的选中连接名。
+            $stack->connectionName = $result->getConnectionName();
             $stack->endTime = $result->getEndTime();
             $stack->startTime = $result->getStartTime();
             $stack->duration = $result->getDuration();

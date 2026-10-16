@@ -1215,6 +1215,7 @@ $row = $result->getResultOne();
 | `getResult()` | SELECT 等返回行数组，写入/DDL 通常返回 bool；查询失败回调中为 null |
 | `getResultOne()` | 数组结果的第一行，否则 null |
 | `getException(): ?Throwable` | 执行失败时的异常对象；成功或未设置时为 null |
+| `getConnectionName()` | 本次查询的执行连接名快照（string），供慢日志和异常定位使用；执行前必须设置 |
 | `getAffectedRows()` | 本次成功查询的影响行数快照；未取得结果或查询失败时为 null |
 | `getInsertId()` | 本次成功查询的自增 ID 快照；未取得结果或查询失败时为 null |
 | `getQueryBuilder()` | 构建器查询的副本；原始 SQL 查询时 null |
@@ -1227,6 +1228,8 @@ $row = $result->getResultOne();
 $affected = $result->getAffectedRows();
 $insertId = $result->getInsertId();
 ```
+
+连接名在执行 SQL 前从实际连接记录，查询失败时也保留。查询栈统一读取该快照，不会因为构建器回调或日志回调切换连接而记错数据库。模型查询失败时的实体回调同样保留发起查询时的连接名。
 
 影响行数和自增 ID 类型为 `int|string|null`，超大无符号值保留为字符串，未查询或查询失败时为 null。影响行数与自增 ID 在查询成功后、日志回调执行前记录为快照，不会被后续 SQL 覆盖。QueryResult 不再暴露 Connection。`query()` 和 `rawQuery()` 的可选 `$timeout` 已传递给 mysqli 5.x，控制本次查询超时。
 

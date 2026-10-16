@@ -927,6 +927,9 @@ abstract class AbstractEntity implements \JsonSerializable
     {
         $startTick = hrtime(true);
         $startTime = microtime(true);
+        // 失败时的实体回调也使用发起查询时的连接名，而不是异常回调修改后的选中连接。
+        $db = FastDb::getInstance();
+        $connectionName = $db->currentConnection()?->connectionName ?? $db->selectConnection();
         $queryException = null;
         try {
             if($query instanceof QueryBuilder){
@@ -942,6 +945,7 @@ abstract class AbstractEntity implements \JsonSerializable
                 if(empty($ret)){
                     // 执行失败时也构造查询结果，保留原始异常及 SQL/构造器，便于回调定位错误。
                     $ret = new QueryResult($startTime, $startTick);
+                    $ret->setConnectionName($connectionName);
                     $ret->finishTiming();
                     $ret->setException($queryException);
                     if($query instanceof QueryBuilder){

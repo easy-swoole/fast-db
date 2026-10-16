@@ -14,6 +14,8 @@ class QueryResult
     protected float $duration = 0.0;
     protected mixed $result = null;
     protected ?\Throwable $exception = null;
+    // 执行连接名的快照，不随日志回调或后续操作切换数据库而改变。
+    protected string $connectionName;
     // null 表示未取得元数据，不能与成功执行但影响 0 行混淆。
     // 超过 PHP 整数范围的无符号数保留为十进制字符串，避免精度丢失。
     protected int|string|null $affectedRows = null;
@@ -68,6 +70,16 @@ class QueryResult
     public function setResult(mixed $result): void
     {
         $this->result = $result;
+    }
+
+    public function getConnectionName(): string
+    {
+        return $this->connectionName;
+    }
+
+    public function setConnectionName(string $connectionName): void
+    {
+        $this->connectionName = $connectionName;
     }
 
     /** 返回本次执行的影响行数快照，不受后续查询或日志回调中的 SQL 影响。 */
