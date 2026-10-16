@@ -155,10 +155,21 @@ class FastDb
         }
     }
 
-    function recycleContext():void
+    /**
+     * @throws RuntimeError When transaction checking finds any active transaction.
+     */
+    function recycleContext(bool $checkTransaction = true):void
     {
         $cid = Coroutine::getCid();
         if(isset($this->currentConnection[$cid])){
+            // Preflight the whole context before returning any connection.
+            if($checkTransaction){
+                foreach ($this->currentConnection[$cid] as $selectDb => $client){
+                    if($client->isInTransaction){
+                        throw new RuntimeError("Cannot recycle context: connection {$selectDb} has an active transaction");
+                    }
+                }
+            }
             foreach ($this->currentConnection[$cid] as $selectDb => $client){
                 $pool = $this->pools[$selectDb];
                 try {

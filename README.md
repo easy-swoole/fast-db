@@ -1158,9 +1158,12 @@ $rows = $db->invoke(function (Connection $connection): array {
 
 ```php
 $db->currentConnection(); // 当前选中连接的 Connection|null，不主动创建连接。
-$db->recycleContext(); // 归还当前协程所有连接，并清理查询栈。
+$db->recycleContext(); // 先检查全部连接；存在活动事务则抛异常，且不回收任何连接。
+$db->recycleContext(false); // 跳过事务检查，回收全部连接；未提交事务由连接回收流程清理。
 $db->reset(); // 重置所有已创建连接池，清理连接池定时器。
 ```
+
+`recycleContext()` 的事务检查覆盖当前协程的全部连接名。只要任意连接的事务尚未结束，就抛出 `RuntimeError`，不回收任何连接，也不清理上下文或查询栈。正常情况下先提交或回滚，再调用默认回收。明确需要清理未结束事务时使用 `recycleContext(checkTransaction: false)`；这只是跳过检查，连接回收流程仍会回滚未提交事务，不会把活动事务直接交给下一位使用者。
 
 `reset()` 用于关闭、测试或重新初始化阶段，不是正常请求结束的替代动作；应先归还上下文连接，并避免还有协程使用连接池时调用。
 
@@ -1559,7 +1562,7 @@ if ($result->status === ExecStatusEnum::OK) {
 | `isInTransaction(?Connection $connection = null)` | bool |
 | `invoke(callable $call)` | 执行并归还连接；返回回调值 |
 | `currentConnection()` | 当前 Connection 或 null |
-| `recycleContext()` | 归还当前协程的全部连接 |
+| `recycleContext(bool $checkTransaction = true)` | 默认存在活动事务时整体拒绝回收并抛异常；传 false 跳过检查 |
 | `preConnect()` | 预热各连接池 |
 | `reset()` | 重置全部连接池 |
 | `setOnQuery(callable $call)` | 设置全局回调；返回管理器 |

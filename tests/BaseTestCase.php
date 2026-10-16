@@ -32,7 +32,7 @@ class BaseTestCase extends TestCase
     protected function tearDown(): void
     {
         try {
-            FastDb::getInstance()->recycleContext();
+            FastDb::getInstance()->recycleContext(false);
             FastDb::getInstance()->reset();
             FastDb::getInstance()->selectConnection('default');
             \Swoole\Timer::clearAll();

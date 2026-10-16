@@ -69,7 +69,7 @@ Coroutine\run(function () use (&$exit): void {
                                         $errors[] = get_class($error) . ': ' . $error->getMessage();
                                     }
                                 }
-                            } finally { $db->recycleContext(); $done->push(true); }
+                            } finally { $db->recycleContext(false); $done->push(true); }
                         });
                     }
                     for ($i = 0; $i < $concurrency; $i++) { $gate->push(true); }
@@ -97,7 +97,7 @@ Coroutine\run(function () use (&$exit): void {
                     $stages[] = $stage;
                     echo json_encode($stage, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR), PHP_EOL;
                     if ($errors || !$correct || $poolStatus['createdNum'] > $poolSize || $activeContexts !== 0) { $exit = 1; break 2; }
-                } finally { $db->recycleContext(); $db->reset(); }
+                } finally { $db->recycleContext(false); $db->reset(); }
             }
         }
     } catch (Throwable $error) {

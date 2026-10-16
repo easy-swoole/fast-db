@@ -38,7 +38,7 @@ final class TransactionTest extends TestCase
     {
         try {
             $this->db->setOnQuery(static function (): void {});
-            $this->db->recycleContext();
+            $this->db->recycleContext(false);
             $this->db->reset();
             $this->observer->query("DROP TABLE IF EXISTS `{$this->table}`");
             $this->observer->close();
@@ -55,6 +55,29 @@ final class TransactionTest extends TestCase
     private function value(): int
     {
         return (int) $this->observer->query("SELECT value FROM `{$this->table}` WHERE id = 1")->fetch_assoc()['value'];
+    }
+
+    public function testDefaultRecycleRejectsTransactionWithoutRollingItBack(): void
+    {
+        $this->db->isEnableQueryStack(true);
+        $this->db->begin();
+        $this->write(1);
+        $connection = $this->db->currentConnection();
+        $stack = $this->db->getQueryStack();
+        try {
+            $this->db->recycleContext();
+            $this->fail('Expected active transaction guard');
+        } catch (\EasySwoole\FastDb\Exception\RuntimeError $error) {
+            $this->assertStringContainsString('active transaction', $error->getMessage());
+        }
+        $this->assertSame($connection, $this->db->currentConnection());
+        $this->assertTrue($this->db->isInTransaction());
+        $this->assertSame($stack, $this->db->getQueryStack());
+        $this->assertSame(0, $this->value());
+        $this->assertTrue($this->db->commit());
+        $this->assertSame(1, $this->value());
+        $this->db->recycleContext();
+        $this->assertNull($this->db->currentConnection());
     }
 
     public static function transactionOperations(): array
@@ -160,7 +183,7 @@ final class TransactionTest extends TestCase
             $this->assertFalse($other->isInTransaction());
             $this->assertSame(2, $this->value());
         } finally {
-            $other->recycleContext();
+            $other->recycleContext(false);
             $other->reset();
         }
     }
@@ -182,7 +205,7 @@ final class TransactionTest extends TestCase
             $this->assertTrue($entity->update());
         };
         if($mode === 'invoke'){
-            $this->db->recycleContext();
+            $this->db->recycleContext(false);
             try {
                 $this->db->invoke(static function () use ($updates): void {
                     $updates();
@@ -193,7 +216,11 @@ final class TransactionTest extends TestCase
             }
         } else {
             $updates();
-            $this->db->{$mode}();
+            if($mode === 'recycleContext'){
+                $this->db->recycleContext(false);
+            }else{
+                $this->db->{$mode}();
+            }
         }
         $this->assertSame(0, $this->value());
         $this->assertSame(2, $entity->value);
@@ -288,7 +315,7 @@ final class TransactionTest extends TestCase
         } catch (\EasySwoole\Mysqli\Exception\TransactionLostException $error) {
             $this->assertSame(0, $error->getCode());
         }
-        $this->db->recycleContext();
+        $this->db->recycleContext(false);
         $this->assertFalse($client->isInTransaction);
         $this->assertTrue($this->db->begin());
         $this->write(3); // Waits for the disconnected session to release its row lock.
@@ -338,7 +365,7 @@ final class TransactionTest extends TestCase
                 $this->assertLessThan(0.5, microtime(true) - $started);
                 $this->assertTrue($other->currentConnection()->mysqlClient()->isTransactionLost());
             }
-            $other->recycleContext();
+            $other->recycleContext(false);
             $this->db->rollback();
             // Locks synchronize with server processing the closed session.
             $this->db->begin();
@@ -346,7 +373,7 @@ final class TransactionTest extends TestCase
             $this->db->commit();
             $this->assertSame(0, $this->value());
         } finally {
-            $other->recycleContext();
+            $other->recycleContext(false);
             $other->reset();
         }
     }
@@ -372,7 +399,7 @@ final class TransactionTest extends TestCase
                 } catch (\Throwable $error) {
                     $result = ['code' => $error->getCode(), 'active' => $db->isInTransaction(), 'value' => $value];
                 } finally {
-                    $db->recycleContext();
+                    $db->recycleContext(false);
                     $db->reset();
                     $done->push($result);
                 }
@@ -406,7 +433,7 @@ final class TransactionTest extends TestCase
                 $db->rawQuery('SELECT 1');
                 $ready->push(true);
                 $release->pop(3.0);
-            } finally { $db->recycleContext(); $done->push(true); }
+            } finally { $db->recycleContext(false); $done->push(true); }
         });
         try {
             $this->assertTrue($ready->pop(3.0));
@@ -425,7 +452,7 @@ final class TransactionTest extends TestCase
         }
         try {
             $this->assertSame(1, $db->rawQuery('SELECT 1 AS value')->getResultOne()['value']);
-        } finally { $db->recycleContext(); $db->reset(); }
+        } finally { $db->recycleContext(false); $db->reset(); }
     }
 
     public function testServerLockWaitTimeoutKeepsTransactionAvailableForRollback(): void
@@ -450,7 +477,7 @@ final class TransactionTest extends TestCase
             $this->assertTrue($other->rollback());
             $this->db->rollback();
             $this->assertSame(0, $this->value());
-        } finally { $other->recycleContext(); $other->reset(); }
+        } finally { $other->recycleContext(false); $other->reset(); }
     }
 
     public function testTransactionCommandTimeoutAgainstRealServerThroughDelayedProxy(): void
@@ -526,11 +553,11 @@ final class TransactionTest extends TestCase
                     $this->assertNull($loggedFailure->getResult());
                     $this->assertSame($error->getRawSql(), $db->getQueryStack(-1)->rawQuery);
                 }
-                $db->recycleContext();
+                $db->recycleContext(false);
                 $this->assertTrue($finished->pop(3.0));
                 // Response delay happens after forwarding the command: COMMIT may succeed on the server.
                 $this->assertSame($operation === 'commit' ? 1 : 0, $this->value());
-            } finally { $db->recycleContext(); $db->reset(); }
+            } finally { $db->recycleContext(false); $db->reset(); }
         }
     }
 
