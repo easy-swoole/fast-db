@@ -8,6 +8,7 @@ use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\Pool;
 use EasySwoole\FastDb\Mysql\QueryResult;
+use EasySwoole\FastDb\Mysql\TransactionContext;
 use EasySwoole\Mysqli\Client;
 use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\Mysqli\Transaction\TransactionStartFlags;
@@ -30,6 +31,14 @@ class FastDb
     protected bool $enableQueryStack = false;
 
     protected array $queryStack = [];
+    /**
+     * 以协程 ID 和连接名索引事务上下文；实际连接及借用归属由上下文本身校验。
+     * @var array<int, array<string, TransactionContext>>
+     */
+    protected array $transactionContexts = [];
+    // 每个协程只登记一次退出清理；值表示本实例是否还负责归还自行借出的连接。
+    // 提前回收不能清除此标记，否则反复借还会重复登记 defer。
+    private array $contextCleanupRegistered = [];
 
     function isEnableQueryStack(bool $bool):static
     {
@@ -132,9 +141,10 @@ class FastDb
     {
         $client = null;
         $selectDb = null;
+        // 只有本层新借出的连接才由本层归还，避免嵌套调用提前结束外层事务。
         $ownsConnection = $this->currentConnection() === null;
         try{
-            $client = $this->getClient(false);
+            $client = $this->getClient();
             $selectDb = $client->connectionName;
             return call_user_func($call,$client);
         }catch (\Throwable $throwable){
@@ -150,19 +160,20 @@ class FastDb
                 $cid = Coroutine::getCid();
                 if(($this->currentConnection[$cid][$selectDb] ?? null) === $client){
                     unset($this->currentConnection[$cid][$selectDb]);
+                    unset($this->transactionContexts[$cid][$selectDb]);
                 }
             }
         }
     }
 
     /**
-     * @throws RuntimeError When transaction checking finds any active transaction.
+     * @throws RuntimeError 启用检查且当前协程任一连接仍有活动事务时抛出。
      */
     function recycleContext(bool $checkTransaction = true):void
     {
         $cid = Coroutine::getCid();
         if(isset($this->currentConnection[$cid])){
-            // Preflight the whole context before returning any connection.
+            // 先检查全部连接再开始回收，确保拒绝回收时连接、查询栈均保持原样。
             if($checkTransaction){
                 foreach ($this->currentConnection[$cid] as $selectDb => $client){
                     if($client->isInTransaction){
@@ -179,6 +190,7 @@ class FastDb
                 }
             }
             unset($this->currentConnection[$cid]);
+            unset($this->transactionContexts[$cid]);
             unset($this->queryStack[$cid]);
         }
     }
@@ -196,6 +208,7 @@ class FastDb
             return true;
         }
 
+        $this->getTransactionContext($client);
         $return = new QueryResult(microtime(true));
         try {
             $ret = $client->beginTransaction($flags, $timeout);
@@ -203,13 +216,15 @@ class FastDb
                 $client->isInTransaction = true;
             }
             $return->setResult($ret);
+            // 在日志回调前保存元数据；回调中的其他 SQL 可能覆盖连接的最近执行结果。
+            $return->setAffectedRows($client->getLastAffectRows());
+            $return->setInsertId($client->getLastInsertId());
             return $ret === true;
         } catch (\Throwable $error) {
             $return->setException($error);
             throw $error;
         } finally {
             $return->finishTiming();
-            $return->setConnection($client);
             $return->setRawSql($flags->toSql());
             $this->notifyQuery($return);
         }
@@ -228,6 +243,7 @@ class FastDb
             return true;
         }
 
+        $this->getTransactionContext($client);
         $return = new QueryResult(microtime(true));
         try {
             $ret = $client->commitTransaction($flags, $timeout);
@@ -236,13 +252,15 @@ class FastDb
                 $client->isInTransaction = in_array($flags, [TransactionCompletionFlags::Chain, TransactionCompletionFlags::ChainNoRelease], true);
             }
             $return->setResult($ret);
+            // 在日志回调前保存元数据；回调中的其他 SQL 可能覆盖连接的最近执行结果。
+            $return->setAffectedRows($client->getLastAffectRows());
+            $return->setInsertId($client->getLastInsertId());
             return $ret === true;
         } catch (\Throwable $error) {
             $return->setException($error);
             throw $error;
         } finally {
             $return->finishTiming();
-            $return->setConnection($client);
             $return->setRawSql('COMMIT' . $flags->toSqlSuffix());
             $this->notifyQuery($return);
         }
@@ -261,6 +279,7 @@ class FastDb
             return true;
         }
 
+        $this->getTransactionContext($client);
         $return = new QueryResult(microtime(true));
         try {
             $ret = $client->rollbackTransaction($flags, $timeout);
@@ -269,13 +288,15 @@ class FastDb
                 $client->isInTransaction = in_array($flags, [TransactionCompletionFlags::Chain, TransactionCompletionFlags::ChainNoRelease], true);
             }
             $return->setResult($ret);
+            // 在日志回调前保存元数据；回调中的其他 SQL 可能覆盖连接的最近执行结果。
+            $return->setAffectedRows($client->getLastAffectRows());
+            $return->setInsertId($client->getLastInsertId());
             return $ret === true;
         } catch (\Throwable $error) {
             $return->setException($error);
             throw $error;
         } finally {
             $return->finishTiming();
-            $return->setConnection($client);
             $return->setRawSql('ROLLBACK' . $flags->toSqlSuffix());
             $this->notifyQuery($return);
         }
@@ -290,6 +311,7 @@ class FastDb
     function query(QueryBuilder|callable $queryBuilder,float|null $timeout = null):QueryResult
     {
         $client = $this->getClient();
+        $this->getTransactionContext($client);
         $t = microtime(true);
         $return = new QueryResult($t);
         try{
@@ -302,12 +324,14 @@ class FastDb
                 $ret = $client->query($queryBuilder,$timeout);
             }
             $return->setResult($ret);
+            // 在日志回调前保存元数据；回调中的其他 SQL 可能覆盖连接的最近执行结果。
+            $return->setAffectedRows($client->getLastAffectRows());
+            $return->setInsertId($client->getLastInsertId());
         }catch (\Throwable $throwable){
             $return->setException($throwable);
             throw  $throwable;
         } finally {
             $return->finishTiming();
-            $return->setConnection($client);
             $return->setQueryBuilder(clone $queryBuilder);
             $this->notifyQuery($return);
         }
@@ -322,21 +346,69 @@ class FastDb
     function rawQuery(string $sql, ?float $timeout = null):QueryResult
     {
         $client = $this->getClient();
+        $this->getTransactionContext($client);
         $t = microtime(true);
         $return = new QueryResult($t);
         try {
             $ret = $client->rawQuery($sql, $timeout);
             $return->setResult($ret);
+            // 在日志回调前保存元数据；回调中的其他 SQL 可能覆盖连接的最近执行结果。
+            $return->setAffectedRows($client->getLastAffectRows());
+            $return->setInsertId($client->getLastInsertId());
         }catch (\Throwable $throwable){
             $return->setException($throwable);
             throw $throwable;
         } finally {
             $return->finishTiming();
-            $return->setConnection($client);
             $return->setRawSql($sql);
             $this->notifyQuery($return);
         }
         return $return;
+    }
+
+    /**
+     * 登记当前协程中指定连接的事务上下文；未传连接时使用当前选中连接。
+     * 没有已借出的连接时返回 null，不会为查询上下文而主动建立数据库连接。
+     */
+    public function getTransactionContext(?Connection $connection = null): ?TransactionContext
+    {
+        $connection ??= $this->currentConnection();
+        if ($connection === null) {
+            return null;
+        }
+        // 由连接确认借用归属，不能直接复用同名连接留下的旧登记。
+        $context = $connection->getTransactionContext();
+        $this->registerContextCleanup($context->coroutineId);
+        $this->transactionContexts[$context->coroutineId][$context->connectionName] = $context;
+        return $context;
+    }
+
+    /**
+     * 延迟回调仅捕获协程 ID，通过当前 FastDb 实例读取最新登记，不捕获历史连接和上下文。
+     * 显式回收后仍保留登记标记，避免长生命周期协程反复借还时累积 defer。
+     */
+    private function registerContextCleanup(int $cid, bool $recycleConnections = false): void
+    {
+        if ($cid < 0) {
+            return;
+        }
+        if (isset($this->contextCleanupRegistered[$cid])) {
+            // 仅登记外部连接时不取得回收权；之后自行借出连接时才升级为负责回收。
+            $this->contextCleanupRegistered[$cid] = $this->contextCleanupRegistered[$cid] || $recycleConnections;
+            return;
+        }
+        $this->contextCleanupRegistered[$cid] = $recycleConnections;
+        Coroutine::defer(function () use ($cid): void {
+            try {
+                // 协程已结束，必须清理未完成事务，不能使用默认的拒绝回收检查。
+                if ($this->contextCleanupRegistered[$cid]) {
+                    $this->recycleContext(false);
+                }
+            } finally {
+                unset($this->currentConnection[$cid], $this->transactionContexts[$cid],
+                    $this->queryStack[$cid], $this->contextCleanupRegistered[$cid]);
+            }
+        });
     }
 
     function currentConnection():?Connection
@@ -352,7 +424,7 @@ class FastDb
      * @throws RuntimeError
      * @throws Exception
      */
-    private function getClient(bool $autoRecycle = true):Connection
+    private function getClient():Connection
     {
         $cid = Coroutine::getCid();
         $name = $this->selectConnection();
@@ -360,6 +432,7 @@ class FastDb
             return $this->currentConnection[$cid][$name];
         }
 
+        $this->registerContextCleanup($cid, true);
         if(!isset($this->configs[$name])){
             throw new RuntimeError("connection {$name} not register yet");
         }
@@ -373,11 +446,8 @@ class FastDb
             $pool = $this->pools[$name];
         }
         try{
-            if($autoRecycle){
-                $obj = $pool->defer();
-            }else{
-                $obj = $pool->getObj();
-            }
+            // 统一由 FastDb 的协程级清理归还连接，避免 Pool::defer 重复登记回调。
+            $obj = $pool->getObj();
         }catch (\Throwable $throwable){
             $message = $throwable instanceof PoolEmpty
                 ? 'pool empty'
@@ -391,11 +461,8 @@ class FastDb
         /** @var Connection $obj */
         $obj->connectionName = $name;
         $this->currentConnection[$cid][$name] = $obj;
+        $this->getTransactionContext($obj);
 
-        Coroutine::defer(function ()use($cid,$name){
-            unset($this->currentConnection[$cid][$name]);
-            unset( $this->queryStack[$cid]);
-        });
         return $this->currentConnection[$cid][$name];
     }
 
@@ -439,6 +506,7 @@ class FastDb
     {
         $this->logStack($result);
         if (is_callable($this->onQuery)) {
+            // 查询已经失败时优先保留原异常；成功查询的回调异常仍正常向外传播。
             $executionException = $result->getException();
             try {
                 call_user_func($this->onQuery, $result);

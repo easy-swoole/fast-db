@@ -48,7 +48,7 @@ final class NullableConvertTest extends TestCase
         $connection = $this->createStub(Connection::class);
         $connection->method('getLastAffectRows')->willReturn(1);
         $result = new QueryResult(microtime(true));
-        $result->setConnection($connection);
+        $result->setAffectedRows(1);
         $db = $this->getMockBuilder(FastDb::class)->onlyMethods(['query'])->getMock();
         $db->expects($this->once())->method('query')
             ->with($this->callback(function (QueryBuilder $query): bool {

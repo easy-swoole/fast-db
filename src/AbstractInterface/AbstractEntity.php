@@ -407,7 +407,7 @@ abstract class AbstractEntity implements \JsonSerializable
         $query->delete($this->tableName());
         $ret = static::callQuery($query,$this->onQuery);
         $this->reset();
-        return $ret->getConnection()->getLastAffectRows() >= 1;
+        return $ret->getAffectedRows() >= 1;
     }
 
     /** 直接按条件删除，不执行实体的 OnDelete 钩子。 */
@@ -461,7 +461,7 @@ abstract class AbstractEntity implements \JsonSerializable
 
         $query->delete($tableName);
         $ret = static::callQuery($query,$onQuery);
-        return $ret->getConnection()->getLastAffectRows();
+        return $ret->getAffectedRows();
     }
 
     function update()
@@ -511,13 +511,15 @@ abstract class AbstractEntity implements \JsonSerializable
         $this->queryLimit()->where($pk,$this->{$pk});
         $query = $this->queryLimit()->__getQueryBuilder();
         $query->update($this->tableName(),$data);
+        // 先保存发起更新的事务上下文，避免日志回调切换数据库后把基准登记到其他连接。
+        $transactionContext = FastDb::getInstance()->getTransactionContext();
         $ret = static::callQuery($query,$this->onQuery);
         $this->reset();
-        $success = $ret->getConnection()->getLastAffectRows() > 0;
+        $success = $ret->getAffectedRows() > 0;
         if($success){
             // 事务回滚时恢复更新前的比较基准，让实体仍能识别尚未真正提交的修改。
             // 这里恢复的是基准，不是实体当前属性值。
-            $ret->getConnection()->rememberTransactionBaseline(
+            $transactionContext?->rememberBaseline(
                 $this,
                 $this->compareData,
                 static function (self $entity, array $baseline): void {
@@ -575,7 +577,7 @@ abstract class AbstractEntity implements \JsonSerializable
         }
         $query->update($tableName,$data);
         $ret = static::callQuery($query,$onQuery);
-        return $ret->getConnection()->getLastAffectRows();
+        return $ret->getAffectedRows();
     }
 
     function insert(array|null $updateDuplicateCols = null)
@@ -599,15 +601,15 @@ abstract class AbstractEntity implements \JsonSerializable
         //swoole客户端问题 https://github.com/swoole/swoole-src/issues/5202
         if($ret->getResult()){
             $isSuccess = true;
-        }else if($ret->getConnection()->getLastAffectRows() >= 1){
+        }else if($ret->getAffectedRows() >= 1){
             $isSuccess = true;
         }
-        if($ret->getConnection()->getLastInsertId() >= 1){
+        if($ret->getInsertId() >= 1){
             // 将数据库生成的自增主键回填到实体和本次写入数据。
             $ref = ReflectionCache::getInstance()->parseEntity(static::class);
             if($ref->getPrimaryKey()){
-                $this->{$ref->getPrimaryKey()} = $ret->getConnection()->getLastInsertId();
-                $data[$ref->getPrimaryKey()] =  $ret->getConnection()->getLastInsertId();
+                $this->{$ref->getPrimaryKey()} = $ret->getInsertId();
+                $data[$ref->getPrimaryKey()] =  $ret->getInsertId();
             }
             $isSuccess = true;
         }else if(!empty($updateDuplicateCols)){

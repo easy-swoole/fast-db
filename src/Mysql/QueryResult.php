@@ -4,6 +4,7 @@ namespace EasySwoole\FastDb\Mysql;
 
 use EasySwoole\Mysqli\QueryBuilder;
 
+/** 保存单次执行的结果快照，不持有数据库连接，也不承担事务登记职责。 */
 class QueryResult
 {
     protected float $endTime;
@@ -13,7 +14,10 @@ class QueryResult
     protected float $duration = 0.0;
     protected mixed $result = null;
     protected ?\Throwable $exception = null;
-    protected Connection $connection;
+    // null 表示未取得元数据，不能与成功执行但影响 0 行混淆。
+    // 超过 PHP 整数范围的无符号数保留为十进制字符串，避免精度丢失。
+    protected int|string|null $affectedRows = null;
+    protected int|string|null $insertId = null;
 
     protected ?QueryBuilder $queryBuilder = null;
 
@@ -66,20 +70,26 @@ class QueryResult
         $this->result = $result;
     }
 
-    /**
-     * @return Connection
-     */
-    public function getConnection(): Connection
+    /** 返回本次执行的影响行数快照，不受后续查询或日志回调中的 SQL 影响。 */
+    public function getAffectedRows(): int|string|null
     {
-        return $this->connection;
+        return $this->affectedRows;
     }
 
-    /**
-     * @param Connection $connection
-     */
-    public function setConnection(Connection $connection): void
+    public function setAffectedRows(int|string|null $affectedRows): void
     {
-        $this->connection = $connection;
+        $this->affectedRows = $affectedRows;
+    }
+
+    /** 返回本次执行的自增 ID 快照；无自增 ID 时通常为 0，未取得结果时为 null。 */
+    public function getInsertId(): int|string|null
+    {
+        return $this->insertId;
+    }
+
+    public function setInsertId(int|string|null $insertId): void
+    {
+        $this->insertId = $insertId;
     }
 
     /**

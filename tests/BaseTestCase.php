@@ -53,6 +53,7 @@ class BaseTestCase extends TestCase
             $fastDb->rawQuery($sql);
         }
 
+        $fastDb->recycleContext(false);
         $fastDb->reset();
     }
 

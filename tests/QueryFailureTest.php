@@ -37,6 +37,8 @@ final class QueryFailureTest extends TestCase
             $called = true;
             $this->assertNull($result->getResult());
             $this->assertSame($failure, $result->getException());
+            $this->assertNull($result->getAffectedRows());
+            $this->assertNull($result->getInsertId());
             $this->assertNull($result->getResultOne());
             if ($callbackThrows) {
                 throw new \RuntimeException('logger failure');

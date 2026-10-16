@@ -568,7 +568,7 @@ $result = FastDb::getInstance()->query(function (QueryBuilder $query): void {
         ['name' => 'Bob', 'status' => 1, 'score' => 20],
     ]);
 });
-$affected = $result->getConnection()->getLastAffectRows();
+$affected = $result->getAffectedRows();
 ```
 
 底层批量写入不触发每个实体的钩子或属性转换，应先准备符合数据库格式的数据。
@@ -1118,6 +1118,8 @@ FastDb 查询和事务执行超时抛出 `EasySwoole\FastDb\Exception\TimeoutExc
 
 事务内成功执行 `update()` 后，连接会保存实体在本次事务中首次更新前的字段比较基准。显式回滚或连接回收触发回滚时，会恢复比较基准，保留当前属性值，因此可以再次调用 `update()` 重试保存。提交后清除基准快照。此机制只管理实体 `update()` 的字段比较状态，不撤销属性赋值或其他业务对象状态。
 
+实体更新的事务基准由 `EasySwoole\FastDb\Mysql\TransactionContext`（`src/Mysql/TransactionContext.php`）登记。FastDb 按协程 ID、连接名和实际连接实例区分上下文；提交清除基准，回滚恢复基准，连接回收后不复用旧的登记。`Connection` 不再直接保存实体基准列表。 同一 FastDb 实例在每个协程内只登记一次退出清理；显式回收后不会通过延迟回调继续持有旧连接或旧事务上下文。协程退出时会强制归还仍在使用的连接，并清理未结束事务及上下文登记。
+
 InnoDB 死锁错误（1213）会自动回滚整个事务。连接在收到该错误时会清理事务标记并恢复实体比较基准，之后可调用 `begin()` 开启新事务并重试整个业务操作。错误继续向调用方抛出，不会自动重试。普通 SQL 错误及锁等待超时（1205）不会按死锁处理，仍需显式回滚。死锁识别依赖底层 mysqli 库保留异常错误码；使用已支持该行为的依赖版本。
 
 事务操作成功后先同步事务状态，再执行日志回调。日志回调异常仍向调用方传播；尤其是 `commit()` 的日志回调抛异常时，数据库已经提交，调用方不能据此认定提交失败或直接重试。
@@ -1213,19 +1215,20 @@ $row = $result->getResultOne();
 | `getResult()` | SELECT 等返回行数组，写入/DDL 通常返回 bool；查询失败回调中为 null |
 | `getResultOne()` | 数组结果的第一行，否则 null |
 | `getException(): ?Throwable` | 执行失败时的异常对象；成功或未设置时为 null |
-| `getConnection()` | 本次实际使用的连接；实体失败回调的替代结果可能未设置连接 |
+| `getAffectedRows()` | 本次成功查询的影响行数快照；未取得结果或查询失败时为 null |
+| `getInsertId()` | 本次成功查询的自增 ID 快照；未取得结果或查询失败时为 null |
 | `getQueryBuilder()` | 构建器查询的副本；原始 SQL 查询时 null |
 | `getRawSql()` | 原始 SQL 文本；构建器查询时通常 null |
 | `getStartTime()` / `getEndTime()` | 秒单位的时间戳，可相减计算执行耗时 |
 
-写入结果的影响行数和 insert id 在连接上：
+写入结果的影响行数和 insert id 从 QueryResult 快照读取：
 
 ```php
-$affected = $result->getConnection()->getLastAffectRows();
-$insertId = $result->getConnection()->getLastInsertId();
+$affected = $result->getAffectedRows();
+$insertId = $result->getInsertId();
 ```
 
-影响行数和自增 ID 类型为 `int|string|null`，超大无符号值保留为字符串，未查询或查询失败时为 null。这些连接级数值会随着后续 SQL 改变，应在本次调用后立即读取。`query()` 和 `rawQuery()` 的可选 `$timeout` 已传递给 mysqli 5.x，控制本次查询超时。
+影响行数和自增 ID 类型为 `int|string|null`，超大无符号值保留为字符串，未查询或查询失败时为 null。影响行数与自增 ID 在查询成功后、日志回调执行前记录为快照，不会被后续 SQL 覆盖。QueryResult 不再暴露 Connection。`query()` 和 `rawQuery()` 的可选 `$timeout` 已传递给 mysqli 5.x，控制本次查询超时。
 
 ### 超时异常定位
 

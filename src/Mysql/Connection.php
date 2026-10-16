@@ -3,6 +3,7 @@
 namespace EasySwoole\FastDb\Mysql;
 
 use EasySwoole\FastDb\Exception\RuntimeError;
+use Swoole\Coroutine;
 use EasySwoole\Mysqli\Client;
 use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\Mysqli\Exception\Exception as QueryException;
@@ -18,29 +19,43 @@ class Connection extends Client implements ObjectInterface
     public bool $isInTransaction = false;
     public bool $isForceRollback = false;
 
-    private ?\WeakMap $transactionBaselines = null;
+    private ?TransactionContext $transactionContext = null;
 
-    /** Keep the first baseline for each live entity in this transaction. */
-    public function rememberTransactionBaseline(object $entity, array $baseline, callable $restore): void
+    /** 按当前协程及连接名取得上下文，禁止把未结束事务迁移到其他归属。 */
+    final public function getTransactionContext(): TransactionContext
     {
-        if(!$this->isInTransaction){
-            return;
+        $cid = Coroutine::getCid();
+        $name = $this->connectionName ?? 'default';
+        if ($this->transactionContext === null
+            || $this->transactionContext->coroutineId !== $cid
+            || $this->transactionContext->connectionName !== $name) {
+            if ($this->transactionContext?->isActive()) {
+                throw new RuntimeError('Cannot move an active transaction to another coroutine or connection name');
+            }
+            $this->transactionContext = new TransactionContext($this, $cid, $name);
         }
-        $this->transactionBaselines ??= new \WeakMap();
-        if(!isset($this->transactionBaselines[$entity])){
-            $this->transactionBaselines[$entity] = [$baseline, $restore];
-        }
+        return $this->transactionContext;
     }
 
+    /** 使用上下文实例身份区分连接的不同借用周期，防止旧登记影响新事务。 */
+    final public function ownsTransactionContext(TransactionContext $context): bool
+    {
+        return $this->transactionContext === $context;
+    }
+
+    /** @deprecated 兼容旧调用；实体基准应通过 TransactionContext 登记。 */
+    public function rememberTransactionBaseline(object $entity, array $baseline, callable $restore): void
+    {
+        $this->getTransactionContext()->rememberBaseline($entity, $baseline, $restore);
+    }
+
+    /** 统一通知上下文结束事务，同时保留原有连接事务状态接口。 */
     public function finishTransaction(bool $committed): void
     {
-        $this->isInTransaction = false;
-        $baselines = $this->transactionBaselines;
-        $this->transactionBaselines = null;
-        if(!$committed && $baselines !== null){
-            foreach($baselines as $entity => [$baseline, $restore]){
-                $restore($entity, $baseline);
-            }
+        if ($this->transactionContext !== null) {
+            $this->transactionContext->finish($committed);
+        } else {
+            $this->isInTransaction = false;
         }
     }
 
@@ -64,6 +79,7 @@ class Connection extends Client implements ObjectInterface
         }
     }
 
+    /** 仅包装驱动超时异常，保留原异常链，并复制构建器用于事后定位 SQL。 */
     private function withTimeoutContext(\Throwable $error, ?string $sql, ?QueryBuilder $builder = null): \Throwable
     {
         if (!$error instanceof DriverTimeoutException) {
@@ -92,7 +108,7 @@ class Connection extends Client implements ObjectInterface
 
     private function completeTransaction(string $command, TransactionCompletionFlags $flags, ?float $timeout): bool
     {
-        // mysqli 5.x transaction helpers have no timeout argument; query does.
+        // mysqli 5.x 的事务辅助方法没有超时参数，这里通过原始 SQL 传递本次超时。
         $success = $this->rawQuery($command . $flags->toSqlSuffix(), $timeout) === true;
         if ($success && $flags->releasesConnection()) {
             $this->close();
@@ -102,8 +118,8 @@ class Connection extends Client implements ObjectInterface
 
     private function restoreDeadlockedTransaction(\Throwable $error): void
     {
-        // InnoDB rolls back the entire transaction for ER_LOCK_DEADLOCK.
-        // Other SQL failures (including lock wait timeout) need explicit rollback.
+        // InnoDB 遇到死锁错误 1213 会回滚整个事务，因此同步恢复本地事务基准。
+        // 其他 SQL 错误（包括锁等待超时）不能统一视为整事务回滚。
         if($error instanceof QueryException && (int) $error->getCode() === 1213){
             $this->finishTransaction(false);
         }
@@ -113,10 +129,11 @@ class Connection extends Client implements ObjectInterface
     {
         $protocol = $this->mysqlClient();
         if ($protocol !== null && !$protocol->isConnected()) {
-            // A lost session cannot execute ROLLBACK. Closing clears the driver
-            // reference; the pool's beforeUse check will discard this object.
+            // 会话已断开，不能继续发送 ROLLBACK；关闭后清除驱动引用并恢复本地基准。
+            // 连接池后续通过 beforeUse 检查淘汰此对象，不会继续复用失效会话。
             $this->close();
             $this->finishTransaction(false);
+            $this->transactionContext = null;
             return true;
         }
         return false;
@@ -138,10 +155,11 @@ class Connection extends Client implements ObjectInterface
         }
 
         $this->close();
-        // Closing a discarded connection also aborts any remaining transaction.
+        // 关闭连接后清理尚未结束的本地事务；提交结果是否已落库仍需调用方判断。
         if($this->isInTransaction){
             $this->finishTransaction(false);
         }
+        $this->transactionContext = null;
     }
 
     function objectRestore(): void
@@ -150,12 +168,14 @@ class Connection extends Client implements ObjectInterface
             return;
         }
         if($this->isInTransaction || $this->isForceRollback){
-            // Let the pool discard the connection if rollback fails.
+            // 回滚失败时继续抛出异常，让连接池淘汰连接，不能把未清理的事务交给下一位使用者。
             if($this->rollbackTransaction() !== true){
                 throw new RuntimeError('Failed to rollback connection during restore');
             }
             $this->finishTransaction(false);
         }
+        // 本次借用已经结束，下次借出必须创建新上下文，不能沿用旧事务登记。
+        $this->transactionContext = null;
     }
 
     function beforeUse(): bool

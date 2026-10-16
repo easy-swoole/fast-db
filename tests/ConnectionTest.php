@@ -296,7 +296,7 @@ final class ConnectionTest extends TestCase
                 });
                 $this->assertTrue($db->$operation($connection, $flags, 0.05));
                 $this->assertSame($expected, $observed->getRawSql());
-                $this->assertSame($connection, $observed->getConnection());
+                $this->assertNull($observed->getAffectedRows());
                 $this->assertSame($expected, $db->getQueryStack(-1)->rawQuery);
                 $connection->finishTransaction(true);
             }
@@ -383,7 +383,7 @@ final class ConnectionTest extends TestCase
             $called++;
             $this->assertSame($failure, $result->getException());
             $this->assertSame($expected, $result->getRawSql());
-            $this->assertSame($connection, $result->getConnection());
+            $this->assertNull($result->getAffectedRows());
             $this->assertNull($result->getResult());
             if ($loggerThrows) { throw new \RuntimeException('logger failed'); }
         });

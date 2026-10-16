@@ -30,13 +30,12 @@ final class UpdateBaselineTest extends TestCase
 
     private function mockUpdates(int $count, array $affectedRows = [1]): void
     {
-        $connection = $this->createStub(Connection::class);
-        $connection->method('getLastAffectRows')->willReturnOnConsecutiveCalls(...$affectedRows);
         $result = new QueryResult(microtime(true));
-        $result->setConnection($connection);
+
         $db = $this->getMockBuilder(FastDb::class)->onlyMethods(['query'])->getMock();
         $db->expects($this->exactly($count))->method('query')
-            ->willReturnCallback(function (QueryBuilder $query) use ($result): QueryResult {
+            ->willReturnCallback(function (QueryBuilder $query) use ($result, &$affectedRows): QueryResult {
+                $result->setAffectedRows(count($affectedRows) > 1 ? array_shift($affectedRows) : $affectedRows[0]);
                 $this->queries[] = $query->getLastQuery();
                 return $result;
             });

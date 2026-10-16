@@ -20,7 +20,7 @@ final class UpdateFieldsTest extends TestCase
         $connection = $this->createStub(Connection::class);
         $connection->method('getLastAffectRows')->willReturn(1);
         $result = new QueryResult(microtime(true));
-        $result->setConnection($connection);
+        $result->setAffectedRows(1);
         $db = $this->getMockBuilder(FastDb::class)->onlyMethods(['query'])->getMock();
         if ($expectedFields === []) {
             $db->expects($this->never())->method('query');

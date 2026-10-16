@@ -80,6 +80,95 @@ final class TransactionTest extends TestCase
         $this->assertNull($this->db->currentConnection());
     }
 
+    public function testInsertIdSnapshotSurvivesSqlInGlobalLogCallback(): void
+    {
+        $this->db->rawQuery("ALTER TABLE `{$this->table}` MODIFY id INT NOT NULL AUTO_INCREMENT");
+        $nested = false;
+        $this->db->setOnQuery(function () use (&$nested): void {
+            if (!$nested) {
+                $nested = true;
+                $this->db->rawQuery("INSERT INTO `{$this->table}` (value) VALUES (9)");
+            }
+        });
+        $entity = new TransactionEntity(['value' => 7]);
+        $this->assertTrue($entity->insert());
+        $this->assertSame(2, $entity->id);
+        $this->assertSame(3, (int) $this->db->currentConnection()->getLastInsertId());
+        $this->assertSame(7, (int) $this->observer->query("SELECT value FROM `{$this->table}` WHERE id=2")->fetch_assoc()['value']);
+    }
+
+    public function testUpdateResultAndBaselineStayOnOriginatingConnection(): void
+    {
+        $this->db->addDb(new Config(MYSQL_CONFIG), 'other');
+        $this->db->begin();
+        $context = $this->db->getTransactionContext();
+        $nested = false;
+        $this->db->setOnQuery(function () use (&$nested): void {
+            if (!$nested) {
+                $nested = true;
+                // Overwrite metadata on the original connection, then select another one.
+                $this->db->rawQuery("UPDATE `{$this->table}` SET value=0 WHERE id=-1");
+                $this->db->selectConnection('other');
+                $this->db->rawQuery('SELECT 1');
+            }
+        });
+        $entity = new TransactionEntity(['id' => 1, 'value' => 0]);
+        $entity->value = 7;
+        $this->assertTrue($entity->update());
+        $this->assertSame('other', $this->db->selectConnection());
+        $this->assertNotSame($context, $this->db->getTransactionContext());
+        $this->db->setOnQuery(static function (): void {});
+        $this->db->selectConnection('default');
+        $this->assertSame($context, $this->db->getTransactionContext());
+        $this->db->rollback();
+        $this->assertSame(0, $this->value());
+        $this->assertTrue($entity->update());
+        $this->assertSame(7, $this->value());
+    }
+
+    public function testCoroutineExitReleasesTransactionContextAfterBusinessError(): void
+    {
+        $db = (new FastDb())->addDb(new Config(MYSQL_CONFIG));
+        $entity = (object) ['value' => 7];
+        $weak = null;
+        $message = null;
+        $finished = new \Swoole\Coroutine\Channel(1);
+        try {
+            \Swoole\Coroutine::create(function () use ($db, $entity, &$weak, &$message, $finished): void {
+                // 退出通知最后执行，观察者读到结果时自动回滚已经完成。
+                \Swoole\Coroutine::defer(static fn () => $finished->push(true));
+                try {
+                    $db->begin();
+                    $db->rawQuery("UPDATE `{$this->table}` SET value=7 WHERE id=1");
+                    $context = $db->getTransactionContext();
+                    $weak = \WeakReference::create($context);
+                    $context->rememberBaseline($entity, ['value' => 0], static function ($entity, $baseline): void {
+                        $entity->value = $baseline['value'];
+                    });
+                    throw new \RuntimeException('business failure');
+                } catch (\Throwable $error) {
+                    $message = $error->getMessage();
+                }
+            });
+            $this->assertTrue($finished->pop(5));
+            $this->assertSame('business failure', $message);
+            $this->assertSame(0, $this->value());
+            $this->assertSame(0, $entity->value);
+            $this->assertNull($weak->get());
+            foreach (['currentConnection', 'transactionContexts', 'contextCleanupRegistered'] as $name) {
+                $this->assertSame([], (new \ReflectionProperty(FastDb::class, $name))->getValue($db));
+            }
+            // 同一个连接池再次借用，必须能开启并回滚新事务。
+            $db->begin();
+            $db->rawQuery("UPDATE `{$this->table}` SET value=9 WHERE id=1");
+            $db->rollback();
+            $this->assertSame(0, $this->value());
+        } finally {
+            $db->recycleContext(false);
+            $db->reset();
+        }
+    }
+
     public static function transactionOperations(): array
     {
         return [
