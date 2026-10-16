@@ -169,6 +169,89 @@ final class TransactionTest extends TestCase
         }
     }
 
+    public function testChangedPrimaryKeyCannotUpdateAnotherRow(): void
+    {
+        $this->observer->query("INSERT INTO `{$this->table}` VALUES(2, 5)");
+        $entity = new TransactionEntity(['id' => 1, 'value' => 0]);
+        $entity->id = 2;
+        $entity->value = 9;
+        try { $entity->update(); $this->fail('Expected primary key guard'); }
+        catch (\EasySwoole\FastDb\Exception\RuntimeError $error) {
+            $this->assertStringContainsString('primary key', $error->getMessage());
+        }
+        $this->assertSame(0, $this->value());
+        $this->assertSame(5, (int) $this->observer->query("SELECT value FROM `{$this->table}` WHERE id=2")->fetch_assoc()['value']);
+    }
+
+    public function testRollbackInsideLoggerDoesNotAcceptEntityChanges(): void
+    {
+        $entity = new TransactionEntity(['id' => 1, 'value' => 0]);
+        $this->db->begin(); $entity->value = 7; $once = false;
+        $this->db->setOnQuery(function ($result) use (&$once): void {
+            if (!$once && str_starts_with($result->getQueryBuilder()?->getLastPrepareQuery() ?? '', 'UPDATE')) {
+                $once = true; $this->db->rollback();
+            }
+        });
+        $this->assertFalse($entity->update());
+        $this->assertSame(0, $this->value());
+        $this->db->setOnQuery(static function (): void {});
+        $this->assertTrue($entity->update());
+        $this->assertSame(7, $this->value());
+    }
+
+    public function testPaginationCountSurvivesLoggingQueries(): void
+    {
+        $this->observer->query("INSERT INTO `{$this->table}` VALUES(2,0),(3,0)");
+        $once = false;
+        $this->db->setOnQuery(function ($result) use (&$once): void {
+            if (!$once && in_array('SQL_CALC_FOUND_ROWS', $result->getQueryBuilder()?->getLastQueryOptions() ?? [], true)) {
+                $once = true; $this->db->rawQuery('SELECT 1');
+            }
+        });
+        $entity = new TransactionEntity(); $calls = 0;
+        $entity->setOnQuery(static function () use (&$calls): void { $calls++; });
+        $entity->queryLimit()->page(1, true, 1);
+        $list = $entity->all();
+        $this->assertCount(1, $list);
+        $this->assertSame(3, $list->totalCount());
+        $this->assertSame(2, $calls);
+    }
+
+    public function testRawTransactionIsGuardedAndForceRecycleRollsItBack(): void
+    {
+        $this->db->rawQuery('START TRANSACTION');
+        $this->write(7);
+        $this->assertTrue($this->db->isInTransaction());
+        try { $this->db->recycleContext(); $this->fail('Expected transaction guard'); }
+        catch (\EasySwoole\FastDb\Exception\RuntimeError $error) {
+            $this->assertStringContainsString('active transaction', $error->getMessage());
+        }
+        $this->db->recycleContext(false);
+        $this->db->begin(); $this->db->rollback();
+        $this->assertSame(0, $this->value());
+    }
+
+    public function testCommentedRawRollbackRestoresEntityBaseline(): void
+    {
+        $this->db->begin();
+        $entity = new TransactionEntity(['id' => 1, 'value' => 0]);
+        $entity->value = 7; $this->assertTrue($entity->update());
+        $this->db->rawQuery('/* trace */ ROLLBACK AND CHAIN');
+        $this->assertTrue($this->db->isInTransaction());
+        $this->assertTrue($entity->update());
+        $this->db->commit();
+        $this->assertSame(7, $this->value());
+    }
+
+    public function testInsertIgnoresSerializationHiddenFields(): void
+    {
+        $entity = new TransactionEntity(['id' => 2, 'value' => 7]);
+        $entity->queryLimit()->hideFields(['value']);
+        $this->assertTrue($entity->insert());
+        $this->assertArrayNotHasKey('value', $entity->toArray());
+        $this->assertSame(7, (int) $this->observer->query("SELECT value FROM `{$this->table}` WHERE id=2")->fetch_assoc()['value']);
+    }
+
     public static function transactionOperations(): array
     {
         return [

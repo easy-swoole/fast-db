@@ -3,6 +3,7 @@
 namespace EasySwoole\FastDb;
 
 use EasySwoole\Component\Singleton;
+use EasySwoole\FastDb\Internal\QueryExecutor;
 use EasySwoole\FastDb\Beans\QueryStack;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\Mysql\Connection;
@@ -22,6 +23,8 @@ use EasySwoole\Mysqli\Config as MysqliConfig;
 class FastDb
 {
     use Singleton;
+
+    private ?QueryExecutor $executor = null;
 
     protected array $configs = [];
     protected array $pools = [];
@@ -201,174 +204,83 @@ class FastDb
      */
     function begin(?Connection $client = null, TransactionStartFlags $flags = TransactionStartFlags::None, ?float $timeout = null): bool
     {
-        if(!$client){
-            $client = $this->getClient();
-        }
-        if($client->isInTransaction){
-            return true;
-        }
-
-        $this->getTransactionContext($client);
-        $return = new QueryResult(microtime(true));
-        $return->setConnectionName($client->connectionName ?? $this->selectConnection());
-        try {
+        $client ??= $this->getClient();
+        if ($client->isInTransaction) { return true; }
+        return $this->execute($client, function () use ($client, $flags, $timeout): bool {
             $ret = $client->beginTransaction($flags, $timeout);
-            if ($ret === true) {
-                $client->isInTransaction = true;
-            }
-            $return->setResult($ret);
-            // 在日志回调前保存元数据；回调中的其他 SQL 可能覆盖连接的最近执行结果。
-            $return->setAffectedRows($client->getLastAffectRows());
-            $return->setInsertId($client->getLastInsertId());
-            return $ret === true;
-        } catch (\Throwable $error) {
-            $return->setException($error);
-            throw $error;
-        } finally {
-            $return->finishTiming();
-            $return->setRawSql($flags->toSql());
-            $this->notifyQuery($return);
-        }
+            if ($ret === true) { $client->isInTransaction = true; }
+            return $ret;
+        }, null, $flags->toSql())->getResult() === true;
     }
 
     function commit(?Connection $client = null, TransactionCompletionFlags $flags = TransactionCompletionFlags::NoChainNoRelease, ?float $timeout = null):bool
     {
-        if(!$client){
-            $client = $this->currentConnection();
-        }
-        if(!$client){
-            return true;
-        }
-
-        if(!$client->isInTransaction){
-            return true;
-        }
-
-        $this->getTransactionContext($client);
-        $return = new QueryResult(microtime(true));
-        $return->setConnectionName($client->connectionName ?? $this->selectConnection());
-        try {
+        $client ??= $this->currentConnection();
+        if ($client === null || !$client->isInTransaction) { return true; }
+        $context = $this->getTransactionContext($client);
+        $version = $context->version();
+        return $this->execute($client, function () use ($client, $context, $version, $flags, $timeout): bool {
             $ret = $client->commitTransaction($flags, $timeout);
             if ($ret === true) {
-                $client->finishTransaction(true);
+                if ($context->version() === $version) { $client->finishTransaction(true); }
                 $client->isInTransaction = in_array($flags, [TransactionCompletionFlags::Chain, TransactionCompletionFlags::ChainNoRelease], true);
             }
-            $return->setResult($ret);
-            // 在日志回调前保存元数据；回调中的其他 SQL 可能覆盖连接的最近执行结果。
-            $return->setAffectedRows($client->getLastAffectRows());
-            $return->setInsertId($client->getLastInsertId());
-            return $ret === true;
-        } catch (\Throwable $error) {
-            $return->setException($error);
-            throw $error;
-        } finally {
-            $return->finishTiming();
-            $return->setRawSql('COMMIT' . $flags->toSqlSuffix());
-            $this->notifyQuery($return);
-        }
+            return $ret;
+        }, null, 'COMMIT' . $flags->toSqlSuffix())->getResult() === true;
     }
 
     function rollback(?Connection $client = null, TransactionCompletionFlags $flags = TransactionCompletionFlags::NoChainNoRelease, ?float $timeout = null):bool
     {
-        if(!$client){
-            $client = $this->currentConnection();
-        }
-        if(!$client){
-            return true;
-        }
-
-        if(!$client->isInTransaction){
-            return true;
-        }
-
-        $this->getTransactionContext($client);
-        $return = new QueryResult(microtime(true));
-        $return->setConnectionName($client->connectionName ?? $this->selectConnection());
-        try {
+        $client ??= $this->currentConnection();
+        if ($client === null || !$client->isInTransaction) { return true; }
+        $context = $this->getTransactionContext($client);
+        $version = $context->version();
+        return $this->execute($client, function () use ($client, $context, $version, $flags, $timeout): bool {
             $ret = $client->rollbackTransaction($flags, $timeout);
             if ($ret === true) {
-                $client->finishTransaction(false);
+                if ($context->version() === $version) { $client->finishTransaction(false); }
                 $client->isInTransaction = in_array($flags, [TransactionCompletionFlags::Chain, TransactionCompletionFlags::ChainNoRelease], true);
             }
-            $return->setResult($ret);
-            // 在日志回调前保存元数据；回调中的其他 SQL 可能覆盖连接的最近执行结果。
-            $return->setAffectedRows($client->getLastAffectRows());
-            $return->setInsertId($client->getLastInsertId());
-            return $ret === true;
-        } catch (\Throwable $error) {
-            $return->setException($error);
-            throw $error;
-        } finally {
-            $return->finishTiming();
-            $return->setRawSql('ROLLBACK' . $flags->toSqlSuffix());
-            $this->notifyQuery($return);
-        }
+            return $ret;
+        }, null, 'ROLLBACK' . $flags->toSqlSuffix())->getResult() === true;
     }
 
-    /**
-     * @throws \Throwable
-     * @throws Exception
-     * @throws RuntimeError
-     * @throws \EasySwoole\Mysqli\Exception\Exception
-     */
     function query(QueryBuilder|callable $queryBuilder,float|null $timeout = null):QueryResult
     {
         $client = $this->getClient();
-        $this->getTransactionContext($client);
-        $t = microtime(true);
-        $return = new QueryResult($t);
-        $return->setConnectionName($client->connectionName ?? $this->selectConnection());
-        try{
-            if(is_callable($queryBuilder)){
-                $call = $queryBuilder;
-                $queryBuilder = new QueryBuilder();
-                call_user_func($call,$queryBuilder);
-                $ret = $client->query($queryBuilder,$timeout);
-            }else{
-                $ret = $client->query($queryBuilder,$timeout);
-            }
-            $return->setResult($ret);
-            // 在日志回调前保存元数据；回调中的其他 SQL 可能覆盖连接的最近执行结果。
-            $return->setAffectedRows($client->getLastAffectRows());
-            $return->setInsertId($client->getLastInsertId());
-        }catch (\Throwable $throwable){
-            $return->setException($throwable);
-            throw  $throwable;
-        } finally {
-            $return->finishTiming();
-            $return->setQueryBuilder(clone $queryBuilder);
-            $this->notifyQuery($return);
-        }
-        return $return;
+        $build = is_callable($queryBuilder) ? $queryBuilder : null;
+        $builder = $build === null ? $queryBuilder : new QueryBuilder();
+        return $this->execute($client, static function () use ($client, $builder, $build, $timeout) {
+            if ($build !== null) { $build($builder); }
+            return $client->query($builder, $timeout);
+        }, $builder);
     }
 
-    /**
-     * @throws \EasySwoole\Mysqli\Exception\Exception
-     * @throws RuntimeError
-     * @throws Exception
-     */
     function rawQuery(string $sql, ?float $timeout = null):QueryResult
     {
         $client = $this->getClient();
+        return $this->execute($client, static fn () => $client->rawQuery($sql, $timeout), null, $sql);
+    }
+
+    /** 内部统一执行入口，结果及查询栈的对外接口保持不变。 */
+    private function execute(Connection $client, callable $operation, ?QueryBuilder $builder = null, ?string $sql = null): QueryResult
+    {
         $this->getTransactionContext($client);
-        $t = microtime(true);
-        $return = new QueryResult($t);
-        $return->setConnectionName($client->connectionName ?? $this->selectConnection());
-        try {
-            $ret = $client->rawQuery($sql, $timeout);
-            $return->setResult($ret);
-            // 在日志回调前保存元数据；回调中的其他 SQL 可能覆盖连接的最近执行结果。
-            $return->setAffectedRows($client->getLastAffectRows());
-            $return->setInsertId($client->getLastInsertId());
-        }catch (\Throwable $throwable){
-            $return->setException($throwable);
-            throw $throwable;
-        } finally {
-            $return->finishTiming();
-            $return->setRawSql($sql);
-            $this->notifyQuery($return);
-        }
-        return $return;
+        $this->executor ??= new QueryExecutor();
+        return $this->executor->execute($client, $client->connectionName ?? $this->selectConnection(),
+            $operation, fn (QueryResult $result) => $this->notifyQuery($result), $builder, $sql);
+    }
+
+    /** 分页执行器预先读取的总数，不在 QueryResult 上增加接口。 */
+    public function getTotalCount(QueryResult $result): ?int
+    {
+        return $this->executor?->total($result);
+    }
+
+    /** 内部分页结果，供实体级回调复用，避免再次执行 FOUND_ROWS。 */
+    public function getTotalResult(QueryResult $result): ?QueryResult
+    {
+        return $this->executor?->totalResult($result);
     }
 
     /**

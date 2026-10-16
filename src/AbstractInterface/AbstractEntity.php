@@ -9,6 +9,9 @@ use EasySwoole\FastDb\Beans\ListResult;
 use EasySwoole\FastDb\Beans\Query;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\FastDb;
+use EasySwoole\FastDb\Internal\EntityState;
+use EasySwoole\FastDb\Internal\FieldCodec;
+use EasySwoole\FastDb\Internal\RelationLoader;
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\FastDb\Utility\ReflectionCache;
 use EasySwoole\Mysqli\QueryBuilder;
@@ -17,7 +20,7 @@ abstract class AbstractEntity implements \JsonSerializable
 {
     // 字段的比较基准；转换对象保存 toValue() 的结果，普通字段保存赋值后的值。
     // update() 据此识别变化，也能识别对象内部属性被修改的情况。
-    private array $compareData = [];
+    private EntityState $entityState;
 
     // 当前实体积累的查询条件和字段限制，执行后通常由 reset() 清理。
     private ?Query $queryBuilder = null;
@@ -26,29 +29,13 @@ abstract class AbstractEntity implements \JsonSerializable
     private mixed $onQuery = null;
 
     // 缓存仅属于当前实体实例；键包含连接、关联类型、执行 SQL、参数和返回形式。
-    private array $relationCache = [];
+    private ?RelationLoader $relationLoader = null;
 
     /** 外部数据变化后，可主动清空当前实体的全部关联缓存。 */
     public function clearRelationCache(): static
     {
-        $this->relationCache = [];
+        $this->relationLoader?->clear();
         return $this;
-    }
-
-    private function relationCacheKey(Relate $relate, QueryBuilder $query, string $kind, bool $returnAsArray): ?string
-    {
-        if (!$relate->cacheResult) {
-            return null;
-        }
-        return hash('sha256', serialize([
-            FastDb::getInstance()->selectConnection(),
-            $kind,
-            $relate->targetEntity,
-            $returnAsArray,
-            $query->getLastPrepareQuery(),
-            $query->getLastBindParams(),
-            $query->getLastQueryOptions(),
-        ]));
     }
 
     abstract function tableName():string;
@@ -62,8 +49,17 @@ abstract class AbstractEntity implements \JsonSerializable
         }
     }
 
+    /** 克隆实体时独立保存变更状态和查询选项，不共享可变的内部管理对象。 */
+    public function __clone()
+    {
+        $this->entityState = clone $this->entityState;
+        $this->relationLoader = $this->relationLoader === null ? null : clone $this->relationLoader;
+        $this->queryBuilder = $this->queryBuilder?->forEntity($this);
+    }
+
     private function init()
     {
+        $this->entityState = new EntityState();
         $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
         // 通过缓存的属性元数据初始化字段，并建立默认值的比较基准。
         /** @var Property $property */
@@ -77,16 +73,16 @@ abstract class AbstractEntity implements \JsonSerializable
                         ? $property->defaultValue
                         : call_user_func([$property->convertObject,'toObject'],$property->defaultValue);
                     $this->{$property->name} = $object;
-                    $this->compareData[$property->name] = $object->toValue();
+                    $this->entityState->baseline[$property->name] = $object->toValue();
                 }else{
                     $this->{$property->name} = null;
-                    $this->compareData[$property->name] = $property->defaultValue;
+                    $this->entityState->baseline[$property->name] = $property->defaultValue;
                 }
             }else{
                 if(($property->defaultValue !== null) || $property->allowNull){
                     $this->{$property->name} = $property->defaultValue;
                 }
-                $this->compareData[$property->name] = $property->defaultValue;
+                $this->entityState->baseline[$property->name] = $property->defaultValue;
             }
         }
         if($entityRef->getOnInitialize()){
@@ -108,42 +104,9 @@ abstract class AbstractEntity implements \JsonSerializable
             }
             /** @var Property $property */
             $property = $allProperties[$key];
-            if($property->convertObject){
-                if($val !== null){
-                    // 对象直接使用；数组、字符串等输入由转换类的 toObject() 统一处理。
-                    if($val instanceof $property->convertObject){
-                        $object = $val;
-                    }else{
-                        $object = call_user_func([$property->convertObject,'toObject'],$val);
-                    }
-                    $this->{$key} = $object;
-                    if($mergeCompare){
-                        $this->compareData[$key] = $this->{$key}->toValue();
-                    }
-                }else{
-                    // 可空字段允许清空；非空字段的 null 输入仍需经过转换器。
-                    if($property->allowNull){
-                        $this->{$key} = null;
-                        if($mergeCompare){
-                            $this->compareData[$key] = null;
-                        }
-                    }else{
-                        $object = call_user_func([$property->convertObject,'toObject'],$val);
-                        $this->{$key} = $object;
-                        if($mergeCompare){
-                            $this->compareData[$key] = $this->{$key}->toValue();
-                        }
-                    }
-                }
-            }else{
-                if($property->assignCall){
-                    $p = $property->assignCall->buildPropertyRuntimeParams($val,$this);
-                    $val = call_user_func_array($property->assignCall->callback,$p);
-                }
-                $this->{$key} = $val;
-                if($mergeCompare){
-                    $this->compareData[$key] = $val;
-                }
+            $this->{$key} = FieldCodec::assign($this, $property, $val);
+            if ($mergeCompare) {
+                $this->entityState->baseline[$key] = FieldCodec::compare($this->{$key});
             }
         }
         return $this;
@@ -151,80 +114,100 @@ abstract class AbstractEntity implements \JsonSerializable
 
     function all( bool $selectForUpdate = false ):ListResult
     {
-        $query = $this->queryLimit()->__getQueryBuilder();
+        try {
+            $query = $this->queryLimit()->__getQueryBuilder();
 
-        $fields = null;
-        $returnAsArray = false;
-        if(!empty($this->queryLimit()->getFields())){
-            $fields = $this->queryLimit()->getFields()['fields'];
-            $returnAsArray = $this->queryLimit()->getFields()['returnAsArray'];
-        }
-
-        if($selectForUpdate){
-            $query->selectForUpdate();
-        }
-
-        $query->get($this->tableName(),null,$fields);
-        $ret = static::callQuery($query,$this->onQuery);
-        $total = null;
-        if(in_array('SQL_CALC_FOUND_ROWS',$query->getLastQueryOptions())){
-            // 仅在查询启用总数计算时补查总数，普通列表查询的 total 保持 null。
-            $info = static::callQuery('SELECT FOUND_ROWS() as count',$this->onQuery)->getResult();
-            if(isset($info[0]['count'])){
-                $total = $info[0]['count'];
+            $fields = null;
+            $returnAsArray = false;
+            if(!empty($this->queryLimit()->getFields())){
+                $fields = $this->queryLimit()->getFields()['fields'];
+                $returnAsArray = $this->queryLimit()->getFields()['returnAsArray'];
             }
-        }
-        $list = [];
 
-        $hideFields = $this->queryLimit()->getHideFields() ?:[];
-
-        if($returnAsArray){
-            foreach ($ret->getResult() as $item){
-                foreach ($hideFields as $field){
-                    unset($item[$field]);
-                }
-                $list[] = $item;
+            if($selectForUpdate){
+                $query->selectForUpdate();
             }
-        }else{
-            foreach ($ret->getResult() as $item){
-                foreach ($hideFields as $field){
-                    unset($item[$field]);
-                }
-                // 构造实体时完成字段转换，并将查询结果作为后续更新的比较基准。
-                $t = new static($item);
-                if($this->queryLimit()->isPersistFieldLimit()){
-                    $t->queryLimit()->hideFields($hideFields);
-                    if(!empty($this->queryLimit()->getFields())){
-                        $t->queryLimit()->fields(...$this->queryLimit()->getFields());
+
+            $query->get($this->tableName(),null,$fields);
+            $ret = static::callQuery($query,$this->onQuery);
+            $total = null;
+            if(in_array('SQL_CALC_FOUND_ROWS',$query->getLastQueryOptions())){
+                // 仅在查询启用总数计算时补查总数，普通列表查询的 total 保持 null。
+                $total = $this->readTotal($ret);
+            }
+            $list = [];
+
+            $hideFields = $this->queryLimit()->getHideFields() ?:[];
+
+            if($returnAsArray){
+                foreach ($ret->getResult() as $item){
+                    foreach ($hideFields as $field){
+                        unset($item[$field]);
                     }
+                    $list[] = $item;
                 }
-                $list[] = $t;
+            }else{
+                foreach ($ret->getResult() as $item){
+                    foreach ($hideFields as $field){
+                        unset($item[$field]);
+                    }
+                    // 构造实体时完成字段转换，并将查询结果作为后续更新的比较基准。
+                    $t = new static($item);
+                    if($this->queryLimit()->isPersistFieldLimit()){
+                        $t->queryLimit()->hideFields($hideFields);
+                        if(!empty($this->queryLimit()->getFields())){
+                            $t->queryLimit()->fields(...$this->queryLimit()->getFields());
+                        }
+                    }
+                    $list[] = $t;
+                }
             }
-        }
-        $this->reset();
+            $this->reset();
 
-        return new ListResult($list,$total);
+            return new ListResult($list,$total);
+        } finally {
+            // 成功、失败或提前返回均消费本次查询配置，实体数据及比较基准不受影响。
+            $this->reset();
+        }
+    }
+
+    /** 使用预取的总数快照，同时保留实体级查询回调对总数查询的通知。 */
+    private function readTotal(QueryResult $result): ?int
+    {
+        $count = FastDb::getInstance()->getTotalResult($result);
+        if ($count === null) {
+            $count = static::callQuery('SELECT FOUND_ROWS() as count', $this->onQuery);
+        } elseif (is_callable($this->onQuery)) {
+            ($this->onQuery)($count);
+        }
+        $value = $count->getResultOne()['count'] ?? null;
+        return $value === null ? null : (int) $value;
     }
 
     function chunk(callable $func,int $chunkSize = 10)
     {
-        $page = 1;
-        while (true){
-            $this->queryLimit()->page($page,true,$chunkSize);
-            // all() 会清理查询状态，因此先保存条件供下一页继续使用。
-            $builder = clone $this->queryBuilder;
-            $list = $this->all()->list();
-            foreach ($list as $item){
-                call_user_func($func,$item);
+        try {
+            $page = 1;
+            while (true){
+                $this->queryLimit()->page($page,true,$chunkSize);
+                // all() 会清理查询状态，因此先保存条件供下一页继续使用。
+                $builder = clone $this->queryBuilder;
+                $list = $this->all()->list();
+                foreach ($list as $item){
+                    call_user_func($func,$item);
+                }
+                if(count($list) < $chunkSize){
+                    break;
+                }else{
+                    $page++;
+                    $this->queryBuilder = $builder;
+                }
             }
-            if(count($list) < $chunkSize){
-                break;
-            }else{
-                $page++;
-                $this->queryBuilder = $builder;
-            }
+            $this->reset();
+        } finally {
+            // 成功、失败或提前返回均消费本次查询配置，实体数据及比较基准不受影响。
+            $this->reset();
         }
-        $this->reset();
     }
 
     /** 将实体字段转为输出值，同时应用隐藏字段和字段白名单。 */
@@ -232,26 +215,8 @@ abstract class AbstractEntity implements \JsonSerializable
     {
         $hideFields = $this->queryLimit()->getHideFields() ?:[];
         $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
-        $temp = [];
-        /** @var Property $property */
-        foreach ($entityRef->allProperties() as $property){
-            $val = null;
-            if(isset($this->{$property->name})){
-                $val = $this->{$property->name};
-            }
-            if($val instanceof ConvertObjectInterface){
-                // 转换对象和自定义输出回调各自负责生成可输出、可写入数据库的值。
-                $val = $val->toValue();
-            }else if($property->toValue){
-                $p = $property->toValue->buildPropertyRuntimeParams($val,$this);
-                $val = call_user_func_array($property->toValue->callback,$p);
-            }else if($filterNull && $val === null){
-                continue;
-            }
-            if (!in_array($property->name, $hideFields)){
-                $temp[$property->name] = $val;
-            }
-        }
+        $temp = FieldCodec::values($this, $entityRef->allProperties(), $filterNull);
+        $temp = array_diff_key($temp, array_flip($hideFields));
 
         $fields = $this->queryLimit()->getFields();
         if(!empty($fields['fields'])){
@@ -263,103 +228,106 @@ abstract class AbstractEntity implements \JsonSerializable
             }
         }
 
-        // 清理 SQL 条件，但保留序列化字段限制，使连续调用 toArray()/jsonSerialize() 结果一致。
-        $fieldLimits = $this->queryLimit()->getFields();
-        $persistFieldLimit = $this->queryLimit()->isPersistFieldLimit();
-        $this->reset();
-        $this->queryLimit()->hideFields($hideFields)->persistFieldLimit($persistFieldLimit);
-        if($fieldLimits !== null){
-            $this->queryLimit()->fields(...$fieldLimits);
-        }
+        $this->reset(true);
         return $temp;
     }
 
     public function count(string|null $field = '*', string|null $group = null): int|array
     {
-        $fields = null;
-        if (!empty($this->queryLimit()->getFields())) {
-            $fields = $this->queryLimit()->getFields()['fields'];
-        }
-        $query = $this->queryLimit()->__getQueryBuilder();
-        $hasFiled = false;
-
-        if ($group) {
-            $query->groupBy($group);
-        }
-
-        if (!empty($fields)) {
-            $hasFiled = true;
-            $temp = [];
-            foreach ($fields as $fieldName){
-                $temp[] = "COUNT(`{$fieldName}`) as $fieldName";
+        try {
+            $fields = null;
+            if (!empty($this->queryLimit()->getFields())) {
+                $fields = $this->queryLimit()->getFields()['fields'];
             }
-            $fields = $temp;
-            $query->get($this->tableName(),1, $fields);
-        } else {
-            $query->get($this->tableName(),1, "count({$field}) as count");
-        }
-        $ret = static::callQuery($query,$this->onQuery)->getResult();
-        $this->reset();
-        if (empty($ret)) {
+            $query = $this->queryLimit()->__getQueryBuilder();
+            $hasFiled = false;
+
+            if ($group) {
+                $query->groupBy($group);
+            }
+
+            if (!empty($fields)) {
+                $hasFiled = true;
+                $temp = [];
+                foreach ($fields as $fieldName){
+                    $temp[] = "COUNT(`{$fieldName}`) as $fieldName";
+                }
+                $fields = $temp;
+                $query->get($this->tableName(),1, $fields);
+            } else {
+                $query->get($this->tableName(),1, "count({$field}) as count");
+            }
+            $ret = static::callQuery($query,$this->onQuery)->getResult();
+            $this->reset();
+            if (empty($ret)) {
+                if ($hasFiled) {
+                    return [];
+                }
+                return 0;
+            }
+            $ret = $ret[0];
             if ($hasFiled) {
-                return [];
+                return $ret;
             }
-            return 0;
-        }
-        $ret = $ret[0];
-        if ($hasFiled) {
-            return $ret;
-        }
 
-        return $ret['count'];
+            return $ret['count'];
+        } finally {
+            // 成功、失败或提前返回均消费本次查询配置，实体数据及比较基准不受影响。
+            $this->reset();
+        }
     }
 
     private function aggregate(string $aggregate, string|array $cols, string|null $group = null, bool $force = false): int|array|float
     {
-        $multiFields = false;
-        if (is_string($cols)) {
-            $cols = [$cols];
-        }
-
-        if (count($cols) > 1) {
-            $multiFields = true;
-        }
-
-        $str = "";
-        while ($item = array_shift($cols)) {
-            $str .= "{$aggregate}(`{$item}`) as {$item}";
-            if (!empty($cols)) {
-                $str .= " , ";
+        try {
+            $multiFields = false;
+            if (is_string($cols)) {
+                $cols = [$cols];
             }
-        }
-        $query = $this->queryLimit()->__getQueryBuilder();
-        if ($group) {
-            $query->groupBy($group);
-        }
-        $query->get($this->tableName(), 1, $str);
-        $ret = static::callQuery($query,$this->onQuery)->getResult();
-        $this->reset();
-        if (empty($ret)) {
-            if ($multiFields) {
-                return [];
+
+            if (count($cols) > 1) {
+                $multiFields = true;
             }
-            return 0;
-        }
-        $ret = $ret[0];
-        if ($multiFields) {
-            if ($force) {
-                foreach ($ret as &$row) {
-                    $row = (float) $row;
+
+            $str = "";
+            while ($item = array_shift($cols)) {
+                $str .= "{$aggregate}(`{$item}`) as {$item}";
+                if (!empty($cols)) {
+                    $str .= " , ";
                 }
-                unset($row);
             }
-            return $ret;
-        } else {
-            $ret = array_values($ret)[0] ?: 0;
-            if ($force) {
-                return (float) $ret;
+            $query = $this->queryLimit()->__getQueryBuilder();
+            if ($group) {
+                $query->groupBy($group);
             }
-            return $ret;
+            $query->get($this->tableName(), 1, $str);
+            $ret = static::callQuery($query,$this->onQuery)->getResult();
+            $this->reset();
+            if (empty($ret)) {
+                if ($multiFields) {
+                    return [];
+                }
+                return 0;
+            }
+            $ret = $ret[0];
+            if ($multiFields) {
+                if ($force) {
+                    foreach ($ret as &$row) {
+                        $row = (float) $row;
+                    }
+                    unset($row);
+                }
+                return $ret;
+            } else {
+                $ret = array_values($ret)[0] ?: 0;
+                if ($force) {
+                    return (float) $ret;
+                }
+                return $ret;
+            }
+        } finally {
+            // 成功、失败或提前返回均消费本次查询配置，实体数据及比较基准不受影响。
+            $this->reset();
         }
     }
 
@@ -393,21 +361,26 @@ abstract class AbstractEntity implements \JsonSerializable
 
     function delete()
     {
-        $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
-        if($entityRef->getOnDelete()){
-            $ret = $this->callHook($entityRef->getOnDelete());
-            if($ret === false){
-                return false;
+        try {
+            $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
+            if($entityRef->getOnDelete()){
+                $ret = $this->callHook($entityRef->getOnDelete());
+                if($ret === false){
+                    return false;
+                }
             }
+            // 实体删除必须带有有效主键，附加查询条件与主键条件共同生效。
+            $pk = $this->primaryKeyCheck('delete');
+            $this->queryLimit()->where($pk,$this->entityState->primaryKey($this, $pk));
+            $query = $this->queryLimit()->__getQueryBuilder();
+            $query->delete($this->tableName());
+            $ret = static::callQuery($query,$this->onQuery);
+            $this->reset();
+            return $ret->getAffectedRows() >= 1;
+        } finally {
+            // 成功、失败或提前返回均消费本次查询配置，实体数据及比较基准不受影响。
+            $this->reset();
         }
-        // 实体删除必须带有有效主键，附加查询条件与主键条件共同生效。
-        $pk = $this->primaryKeyCheck('delete');
-        $this->queryLimit()->where($pk,$this->{$pk});
-        $query = $this->queryLimit()->__getQueryBuilder();
-        $query->delete($this->tableName());
-        $ret = static::callQuery($query,$this->onQuery);
-        $this->reset();
-        return $ret->getAffectedRows() >= 1;
     }
 
     /** 直接按条件删除，不执行实体的 OnDelete 钩子。 */
@@ -466,72 +439,51 @@ abstract class AbstractEntity implements \JsonSerializable
 
     function update()
     {
-        $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
-        if($entityRef->getOnUpdate()){
-            $ret = $this->callHook($entityRef->getOnUpdate());
-            if($ret === false){
-                return  false;
-            }
-        }
-        $data = [];
-        $compareValues = [];
-        $properties = $entityRef->allProperties();
-        // 先比较当前值与基准，再生成数据库值；只把实际变化的字段加入更新语句。
-        foreach ($this->compareData as $key => $compareDatum){
-            $pVal = null;
-            if(isset($this->{$key})){
-                $pVal = $this->{$key};
-            }
-            if($pVal instanceof ConvertObjectInterface){
-                $pVal = $pVal->toValue();
-            }
-            if($pVal !== $compareDatum){
-                // 普通字段以赋值后的值比较，写入时再应用输出回调，避免重复转换导致误判。
-                $compareValues[$key] = $pVal;
-                $property = $properties[$key];
-                if(!(($this->{$key} ?? null) instanceof ConvertObjectInterface) && $property->toValue){
-                    $params = $property->toValue->buildPropertyRuntimeParams($pVal,$this);
-                    $pVal = call_user_func_array($property->toValue->callback,$params);
+        try {
+            $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
+            if($entityRef->getOnUpdate()){
+                $ret = $this->callHook($entityRef->getOnUpdate());
+                if($ret === false){
+                    return  false;
                 }
-                $data[$key] = $pVal;
             }
-        }
+            [$data, $compareValues] = $this->entityState->changes($this, $entityRef->allProperties());
 
-        if(!empty($this->queryLimit()->getFields())){
-            $fields = $this->queryLimit()->getFields()['fields'];
-            if(!empty($fields)){
-                $data = array_intersect_key($data, array_flip($fields));
-            }
-        }
-        if(empty($data)){
-            // 没有待写入字段时视为成功，不发送 SQL。
-            return true;
-        }
-        $pk = $this->primaryKeyCheck('update');
-        $this->queryLimit()->where($pk,$this->{$pk});
-        $query = $this->queryLimit()->__getQueryBuilder();
-        $query->update($this->tableName(),$data);
-        // 先保存发起更新的事务上下文，避免日志回调切换数据库后把基准登记到其他连接。
-        $transactionContext = FastDb::getInstance()->getTransactionContext();
-        $ret = static::callQuery($query,$this->onQuery);
-        $this->reset();
-        $success = $ret->getAffectedRows() > 0;
-        if($success){
-            // 事务回滚时恢复更新前的比较基准，让实体仍能识别尚未真正提交的修改。
-            // 这里恢复的是基准，不是实体当前属性值。
-            $transactionContext?->rememberBaseline(
-                $this,
-                $this->compareData,
-                static function (self $entity, array $baseline): void {
-                    $entity->compareData = $baseline;
+            if(!empty($this->queryLimit()->getFields())){
+                $fields = $this->queryLimit()->getFields()['fields'];
+                if(!empty($fields)){
+                    $data = array_intersect_key($data, array_flip($fields));
                 }
-            );
-            // 只同步实际写入字段的基准，被字段白名单排除的修改仍保留为待更新状态。
-            foreach ($data as $key => $value){
-                $this->compareData[$key] = $compareValues[$key];
             }
+            if(empty($data)){
+                // 本次保存已消费查询配置，即使没有变化也不把字段限制带入下次操作。
+                $this->reset();
+                return true;
+            }
+            $pk = $this->primaryKeyCheck('update');
+            $this->queryLimit()->where($pk,$this->entityState->primaryKey($this, $pk));
+            $query = $this->queryLimit()->__getQueryBuilder();
+            $query->update($this->tableName(),$data);
+            // 登记必须早于外部回调，并校验事务代次，避免回调回滚后仍接受旧写入。
+            $transactionContext = FastDb::getInstance()->getTransactionContext();
+            $active = $transactionContext?->isActive() ?? false;
+            $token = $transactionContext?->token();
+            if ($active) {
+                $transactionContext->rememberBaseline($this, $this->entityState->baseline,
+                    static function (self $entity, array $baseline): void { $entity->entityState->restore($baseline); });
+            }
+            $ret = static::callQuery($query,$this->onQuery);
+            $this->reset();
+            $success = $ret->getAffectedRows() > 0
+                && (!$active || !$token->wasRolledBack());
+            if ($success) {
+                $this->entityState->accept(array_intersect_key($compareValues, $data));
+            }
+            return $success;
+        } finally {
+            // 成功、失败或提前返回均消费本次查询配置，实体数据及比较基准不受影响。
+            $this->reset();
         }
-        return $success;
     }
 
     /** 直接写入给定数据，不执行实体的字段转换、变更检测或 OnUpdate 钩子。 */
@@ -582,51 +534,58 @@ abstract class AbstractEntity implements \JsonSerializable
 
     function insert(array|null $updateDuplicateCols = null)
     {
-        $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
-        if($entityRef->getOnInsert()){
-            $ret = $this->callHook($entityRef->getOnInsert());
-            if($ret === false){
-                return false;
+        try {
+            $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
+            if($entityRef->getOnInsert()){
+                $ret = $this->callHook($entityRef->getOnInsert());
+                if($ret === false){
+                    return false;
+                }
             }
-        }
-        // 先完成输出转换；普通 null 字段省略，让数据库使用默认值。
-        $data = $this->toArray(true);
-        $query = $this->queryLimit()->__getQueryBuilder();
-        if($updateDuplicateCols){
-            $query->onDuplicate($updateDuplicateCols);
-        }
-        $query->insert($this->tableName(),$data);
-        $ret = static::callQuery($query,$this->onQuery);
-        $isSuccess = false;
-        //swoole客户端问题 https://github.com/swoole/swoole-src/issues/5202
-        if($ret->getResult()){
-            $isSuccess = true;
-        }else if($ret->getAffectedRows() >= 1){
-            $isSuccess = true;
-        }
-        if($ret->getInsertId() >= 1){
-            // 将数据库生成的自增主键回填到实体和本次写入数据。
-            $ref = ReflectionCache::getInstance()->parseEntity(static::class);
-            if($ref->getPrimaryKey()){
-                $this->{$ref->getPrimaryKey()} = $ret->getInsertId();
-                $data[$ref->getPrimaryKey()] =  $ret->getInsertId();
+            // 先完成输出转换；普通 null 字段省略，让数据库使用默认值。
+            $data = FieldCodec::values($this, $entityRef->allProperties(), true);
+            $fields = $this->queryLimit()->getFields()['fields'] ?? null;
+            if (!empty($fields)) { $data = array_intersect_key($data, array_flip($fields)); }
+            $query = $this->queryLimit()->__getQueryBuilder();
+            if($updateDuplicateCols){
+                $query->onDuplicate($updateDuplicateCols);
             }
-            $isSuccess = true;
-        }else if(!empty($updateDuplicateCols)){
-            $isSuccess = true;
+            $query->insert($this->tableName(),$data);
+            $ret = static::callQuery($query,$this->onQuery);
+            $isSuccess = false;
+            //swoole客户端问题 https://github.com/swoole/swoole-src/issues/5202
+            if($ret->getResult()){
+                $isSuccess = true;
+            }else if($ret->getAffectedRows() >= 1){
+                $isSuccess = true;
+            }
+            if($ret->getInsertId() >= 1){
+                // 将数据库生成的自增主键回填到实体和本次写入数据。
+                $ref = ReflectionCache::getInstance()->parseEntity(static::class);
+                if($ref->getPrimaryKey()){
+                    $this->{$ref->getPrimaryKey()} = $ret->getInsertId();
+                    $data[$ref->getPrimaryKey()] =  $ret->getInsertId();
+                }
+                $isSuccess = true;
+            }else if(!empty($updateDuplicateCols)){
+                $isSuccess = true;
+            }
+            if($isSuccess){
+                // 写入成功后重新转换字段并同步基准，后续 update() 只处理新的修改。
+                $this->setData($data,true);
+            }
+            return $isSuccess;
+        } finally {
+            // 插入后兼容保留隐藏字段等输出配置，仅清除 SQL 条件。
+            $this->reset(true);
         }
-        if($isSuccess){
-            // 写入成功后重新转换字段并同步基准，后续 update() 只处理新的修改。
-            $this->setData($data,true);
-        }
-        return $isSuccess;
     }
 
 
-    private function reset():void
+    private function reset(bool $preserveSelection = false):void
     {
         // 只清理查询状态，不清空实体属性、比较基准或查询回调。
-        $this->queryBuilder = null;
+        $this->queryBuilder = $preserveSelection ? $this->queryBuilder?->withoutSqlConditions() : null;
     }
 
 
@@ -771,132 +730,32 @@ abstract class AbstractEntity implements \JsonSerializable
 
     protected function relateOne(Relate|null $relate = null,string|null $tableName = null):null|array|AbstractEntity
     {
-        $relate = $this->parseRelate($relate);
-        /** @var AbstractEntity $temp */
-        $temp = new $relate->targetEntity();
-
-        $query = $this->queryLimit()->__getQueryBuilder();
-        $fields = null;
-        $returnAsArray = false;
-        if(!empty($this->queryLimit()->getFields())){
-            $fields = $this->queryLimit()->getFields()['fields'];
-            $returnAsArray = $this->queryLimit()->getFields()['returnAsArray'];
-        }
-        if(isset($this->{$relate->selfProperty})){
-            $selfValue = $this->{$relate->selfProperty};
-        }else{
-            $selfValue = null;
-        }
-
-        if(empty($tableName)){
-            $tableName = $temp->tableName();
-        }
-
-        // 查询两条即可判断一对一关系是否违反唯一性约束，无需拉取全部匹配记录。
-        $query->where($relate->targetProperty,$selfValue)
-            ->get($tableName,2,$fields);
-        $cacheKey = $this->relationCacheKey($relate, $query, 'one', $returnAsArray);
-        // array_key_exists 能识别已缓存的 null；命中后仍清理本次查询配置。
-        if ($cacheKey !== null && array_key_exists($cacheKey, $this->relationCache)) {
-            $this->reset();
-            return $this->relationCache[$cacheKey];
-        }
-        $ret = static::callQuery($query,$this->onQuery)->getResult();
-        $this->reset();
-        if(empty($ret)){
-            if ($cacheKey !== null) {
-                $this->relationCache[$cacheKey] = null;
-            }
-            return null;
-        }
-        if(count($ret) > 1){
-            $msg = "more than one record hit is no allow in relateOne method";
-            throw new RuntimeError($msg);
-        }
-        if($returnAsArray){
-            if ($cacheKey !== null) {
-                $this->relationCache[$cacheKey] = $ret[0];
-            }
-            return $ret[0];
-        }
-        // 关联加载的数据也应作为比较基准，避免未修改的字段被整行更新。
-        $temp->setData($ret[0],true);
-        if ($cacheKey !== null) {
-            $this->relationCache[$cacheKey] = $temp;
-        }
-        return $temp;
-
+        return $this->loadRelation('one', $this->parseRelate($relate), $tableName);
     }
 
     protected function relateMany(Relate|null $relate = null,string|null $tableName = null)
     {
-        $relate = $this->parseRelate($relate);
-        /** @var AbstractEntity $temp */
-        $temp = new $relate->targetEntity();
+        return $this->loadRelation('many', $this->parseRelate($relate), $tableName);
+    }
 
-        $query = $this->queryLimit()->__getQueryBuilder();
-        $fields = null;
-        $returnAsArray = false;
-        if(!empty($this->queryLimit()->getFields())){
-            $fields = $this->queryLimit()->getFields()['fields'];
-            $returnAsArray = $this->queryLimit()->getFields()['returnAsArray'];
-        }
-        if(isset($this->{$relate->selfProperty})){
-            $selfValue = $this->{$relate->selfProperty};
-        }else{
-            $selfValue = null;
-        }
-
-        if(empty($tableName)){
-            $tableName = $temp->tableName();
-        }
-
-        $query->where($relate->targetProperty,$selfValue)
-            ->get($tableName,null,$fields);
-        $cacheKey = $this->relationCacheKey($relate, $query, 'many', $returnAsArray);
-        if ($cacheKey !== null && array_key_exists($cacheKey, $this->relationCache)) {
+    private function loadRelation(string $kind, Relate $relate, ?string $tableName): mixed
+    {
+        $this->relationLoader ??= new RelationLoader();
+        try {
+            return $this->relationLoader->$kind($this, $relate, $tableName,
+                fn ($query) => static::callQuery($query, $this->onQuery), fn () => $this->reset(), fn ($result) => $this->readTotal($result));
+        } finally {
             $this->reset();
-            return $this->relationCache[$cacheKey];
         }
-        $ret = static::callQuery($query,$this->onQuery)->getResult();
-
-        $final = [];
-        foreach ($ret as $item){
-            if($returnAsArray){
-                $final[] = $item;
-            }else{
-                $final[] = new $relate->targetEntity($item);
-            }
-        }
-        $total = null;
-        if(in_array('SQL_CALC_FOUND_ROWS',$query->getLastQueryOptions())){
-            $info = static::callQuery('SELECT FOUND_ROWS() as count',$this->onQuery);
-            $info = $info->getResult();
-            if(isset($info[0]['count'])){
-                $total = $info[0]['count'];
-            }
-        }
-        $this->reset();
-        $result = new ListResult($final,$total);
-        if ($cacheKey !== null) {
-            $this->relationCache[$cacheKey] = $result;
-        }
-        return $result;
     }
 
     private function parseRelate(?Relate $relate = null)
     {
         if($relate == null){
             // 未显式传入关系定义时，从调用该方法的实体方法上读取 Relate 属性。
-            $trace = debug_backtrace(DEBUG_BACKTRACE_PROVIDE_OBJECT,3);
+            $trace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS,3);
             $method = $trace[2]['function'];
-            $ref = new \ReflectionClass(static::class);
-            $ret = $ref->getMethod($method)->getAttributes(Relate::class);
-            if(empty($ret)){
-                $msg = "{$method} did not define Relate attribute in ".static::class;
-                throw new RuntimeError($msg);
-            }
-            $relate = new Relate(...$ret[0]->getArguments());
+            $relate = ReflectionCache::getInstance()->parseRelation(static::class, $method);
         }
         // 校验关联两端的字段，避免使用未声明的实体属性。
         $check = ReflectionCache::getInstance()->parseEntity($relate->targetEntity);
@@ -904,7 +763,7 @@ abstract class AbstractEntity implements \JsonSerializable
         if(empty($relate->selfProperty)){
             $relate->selfProperty = $this->primaryKeyCheck('relate',false);
         }else{
-            if(!key_exists($relate->selfProperty,$this->compareData)){
+            if(!key_exists($relate->selfProperty,$this->entityState->baseline)){
                 $msg = "{$relate->selfProperty} is not a define property in ".static::class;
                 throw new RuntimeError($msg);
             }

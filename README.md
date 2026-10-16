@@ -4,6 +4,27 @@ FastDb 是面向 Swoole 协程环境的 MySQL 数据访问库，组合连接池�
 
 本文面向 `3.x` 分支，依赖 `easyswoole/mysqli` ^5.0，以当前 `src/` 和 `composer.json` 为准。实体 API 位于 `AbstractEntity`，数据库与连接管理位于 `FastDb`，SQL 构建能力由 `easyswoole/mysqli` 提供。
 
+## 内部执行与实体状态
+
+`FastDb` 保留现有查询和事务入口，内部由以下组件分工：
+
+| 组件 | 职责 |
+| --- | --- |
+| `Internal\QueryExecutor` | 统一执行、计时、异常保留、结果快照和回调通知；分页总数在外部回调前读取 |
+| `Mysql\TransactionContext` | 按协程与实际连接保存事务基准，使用事务代次和操作令牌区分连续事务 |
+| `Internal\EntityState` | 字段比较基准、变更检测、主键保护和成功写入后的基准更新 |
+| `Internal\FieldCodec` | 加载赋值转换、写入值转换；与序列化隐藏字段分别处理 |
+| `Internal\FieldSelection` | 保存字段白名单、隐藏字段和输出限制，不混入 SQL 构建状态 |
+| `Internal\RelationLoader` | 关联结果构造、唯一性检查及实体实例范围的关联缓存 |
+
+`QueryResult` 和 `QueryStack` 的公开接口保持不变，测试会检查方法签名、参数名及公开属性。
+
+加载后的实体不允许修改主键再执行 `update()` / `delete()`，以避免定位到其他记录。需要显式修改主键时应自行构造条件明确的 SQL。实体克隆后，比较状态和查询所有者独立。
+
+普通查询与原始 SQL 都会同步协议的事务状态；原始 `START TRANSACTION` 开启的事务也受回收检查保护。日志回调中回滚当前事务后，实体不会接受已经回滚的字段基准，`update()` 返回 false；可重新开启事务后重试完整业务操作。事务令牌只随尚在执行的操作保留，不建立无限增长的历史事务表。
+
+`insert()` 不再把 `hideFields()` 当作数据库写入过滤器；写入白名单仍使用 `fields()`。没有待更新字段时也会消费本次查询配置，不会把一次性的字段限制带到下次保存。
+
 ## 目录
 
 - [特性与运行要求](#特性与运行要求)

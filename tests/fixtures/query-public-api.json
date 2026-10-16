@@ -1,0 +1,245 @@
+{
+    "EasySwoole\\FastDb\\Mysql\\QueryResult": {
+        "methods": {
+            "__construct": {
+                "static": false,
+                "return": "",
+                "parameters": {
+                    "startTime": {
+                        "type": "float",
+                        "optional": false,
+                        "default": null,
+                        "reference": false,
+                        "variadic": false
+                    },
+                    "startTick": {
+                        "type": "int|float|null",
+                        "optional": true,
+                        "default": null,
+                        "reference": false,
+                        "variadic": false
+                    }
+                }
+            },
+            "finishTiming": {
+                "static": false,
+                "return": "void",
+                "parameters": []
+            },
+            "getAffectedRows": {
+                "static": false,
+                "return": "string|int|null",
+                "parameters": []
+            },
+            "getConnectionName": {
+                "static": false,
+                "return": "string",
+                "parameters": []
+            },
+            "getDuration": {
+                "static": false,
+                "return": "float",
+                "parameters": []
+            },
+            "getEndTime": {
+                "static": false,
+                "return": "float",
+                "parameters": []
+            },
+            "getException": {
+                "static": false,
+                "return": "?Throwable",
+                "parameters": []
+            },
+            "getInsertId": {
+                "static": false,
+                "return": "string|int|null",
+                "parameters": []
+            },
+            "getQueryBuilder": {
+                "static": false,
+                "return": "?EasySwoole\\Mysqli\\QueryBuilder",
+                "parameters": []
+            },
+            "getRawSql": {
+                "static": false,
+                "return": "?string",
+                "parameters": []
+            },
+            "getResult": {
+                "static": false,
+                "return": "mixed",
+                "parameters": []
+            },
+            "getResultOne": {
+                "static": false,
+                "return": "mixed",
+                "parameters": []
+            },
+            "getStartTime": {
+                "static": false,
+                "return": "float",
+                "parameters": []
+            },
+            "setAffectedRows": {
+                "static": false,
+                "return": "void",
+                "parameters": {
+                    "affectedRows": {
+                        "type": "string|int|null",
+                        "optional": false,
+                        "default": null,
+                        "reference": false,
+                        "variadic": false
+                    }
+                }
+            },
+            "setConnectionName": {
+                "static": false,
+                "return": "void",
+                "parameters": {
+                    "connectionName": {
+                        "type": "string",
+                        "optional": false,
+                        "default": null,
+                        "reference": false,
+                        "variadic": false
+                    }
+                }
+            },
+            "setEndTime": {
+                "static": false,
+                "return": "void",
+                "parameters": {
+                    "endTime": {
+                        "type": "float",
+                        "optional": false,
+                        "default": null,
+                        "reference": false,
+                        "variadic": false
+                    }
+                }
+            },
+            "setException": {
+                "static": false,
+                "return": "void",
+                "parameters": {
+                    "exception": {
+                        "type": "?Throwable",
+                        "optional": false,
+                        "default": null,
+                        "reference": false,
+                        "variadic": false
+                    }
+                }
+            },
+            "setInsertId": {
+                "static": false,
+                "return": "void",
+                "parameters": {
+                    "insertId": {
+                        "type": "string|int|null",
+                        "optional": false,
+                        "default": null,
+                        "reference": false,
+                        "variadic": false
+                    }
+                }
+            },
+            "setQueryBuilder": {
+                "static": false,
+                "return": "void",
+                "parameters": {
+                    "queryBuilder": {
+                        "type": "?EasySwoole\\Mysqli\\QueryBuilder",
+                        "optional": false,
+                        "default": null,
+                        "reference": false,
+                        "variadic": false
+                    }
+                }
+            },
+            "setRawSql": {
+                "static": false,
+                "return": "void",
+                "parameters": {
+                    "rawSql": {
+                        "type": "?string",
+                        "optional": false,
+                        "default": null,
+                        "reference": false,
+                        "variadic": false
+                    }
+                }
+            },
+            "setResult": {
+                "static": false,
+                "return": "void",
+                "parameters": {
+                    "result": {
+                        "type": "mixed",
+                        "optional": false,
+                        "default": null,
+                        "reference": false,
+                        "variadic": false
+                    }
+                }
+            },
+            "setStartTime": {
+                "static": false,
+                "return": "void",
+                "parameters": {
+                    "startTime": {
+                        "type": "float",
+                        "optional": false,
+                        "default": null,
+                        "reference": false,
+                        "variadic": false
+                    }
+                }
+            }
+        },
+        "properties": []
+    },
+    "EasySwoole\\FastDb\\Beans\\QueryStack": {
+        "methods": [],
+        "properties": {
+            "connectionName": {
+                "type": "string",
+                "readonly": false,
+                "default": null,
+                "initialized": false
+            },
+            "duration": {
+                "type": "float",
+                "readonly": false,
+                "default": 0.0,
+                "initialized": true
+            },
+            "endTime": {
+                "type": "float",
+                "readonly": false,
+                "default": null,
+                "initialized": false
+            },
+            "query": {
+                "type": "?EasySwoole\\Mysqli\\QueryBuilder",
+                "readonly": false,
+                "default": null,
+                "initialized": false
+            },
+            "rawQuery": {
+                "type": "?string",
+                "readonly": false,
+                "default": null,
+                "initialized": false
+            },
+            "startTime": {
+                "type": "float",
+                "readonly": false,
+                "default": null,
+                "initialized": false
+            }
+        }
+    }
+}

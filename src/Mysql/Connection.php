@@ -4,6 +4,7 @@ namespace EasySwoole\FastDb\Mysql;
 
 use EasySwoole\FastDb\Exception\RuntimeError;
 use Swoole\Coroutine;
+use EasySwoole\FastDb\Internal\TransactionSql;
 use EasySwoole\Mysqli\Client;
 use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\Mysqli\Exception\Exception as QueryException;
@@ -62,7 +63,9 @@ class Connection extends Client implements ObjectInterface
     public function query(QueryBuilder $builder, ?float $timeout = null): bool|array
     {
         try {
-            return parent::query($builder, $timeout);
+            $result = parent::query($builder, $timeout);
+            $this->synchronizeTransaction($builder->getLastPrepareQuery());
+            return $result;
         } catch (\Throwable $error) {
             $this->restoreDeadlockedTransaction($error);
             throw $this->withTimeoutContext($error, $builder->getLastPrepareQuery(), $builder);
@@ -72,7 +75,9 @@ class Connection extends Client implements ObjectInterface
     public function rawQuery(string $query, ?float $timeout = null)
     {
         try {
-            return parent::rawQuery($query, $timeout);
+            $result = parent::rawQuery($query, $timeout);
+            $this->synchronizeTransaction($query);
+            return $result;
         } catch (\Throwable $error) {
             $this->restoreDeadlockedTransaction($error);
             throw $this->withTimeoutContext($error, $query);
@@ -80,6 +85,19 @@ class Connection extends Client implements ObjectInterface
     }
 
     /** 仅包装驱动超时异常，保留原异常链，并复制构建器用于事后定位 SQL。 */
+    /** 以协议状态同步原始事务 SQL、DDL 隐式提交及普通事务入口。 */
+    private function synchronizeTransaction(?string $sql): void
+    {
+        $protocol = $this->mysqlClient();
+        if ($protocol === null) { return; }
+        $active = $protocol->inTransaction();
+        $completion = TransactionSql::completion($sql);
+        if ($this->isInTransaction && (!$active || $completion !== null)) {
+            $this->finishTransaction($completion ?? true);
+        }
+        $this->isInTransaction = $active;
+    }
+
     private function withTimeoutContext(\Throwable $error, ?string $sql, ?QueryBuilder $builder = null): \Throwable
     {
         if (!$error instanceof DriverTimeoutException) {
@@ -108,10 +126,14 @@ class Connection extends Client implements ObjectInterface
 
     private function completeTransaction(string $command, TransactionCompletionFlags $flags, ?float $timeout): bool
     {
-        // mysqli 5.x 的事务辅助方法没有超时参数，这里通过原始 SQL 传递本次超时。
+        $context = $this->getTransactionContext();
+        $version = $context->version();
         $success = $this->rawQuery($command . $flags->toSqlSuffix(), $timeout) === true;
-        if ($success && $flags->releasesConnection()) {
-            $this->close();
+        if ($success) {
+            // CHAIN 结束旧事务后立即开始新事务，协议的布尔状态不足以表达此边界。
+            if ($context->version() === $version) { $this->finishTransaction($command === 'COMMIT'); }
+            $this->isInTransaction = in_array($flags, [TransactionCompletionFlags::Chain, TransactionCompletionFlags::ChainNoRelease], true);
+            if ($flags->releasesConnection()) { $this->close(); }
         }
         return $success;
     }

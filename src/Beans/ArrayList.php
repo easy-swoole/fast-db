@@ -45,10 +45,8 @@ class ArrayList  implements \Iterator , \JsonSerializable, \Countable , \ArrayAc
 
     function first():array|AbstractEntity|null
     {
-        if(isset($this->data[0])){
-            return $this->data[0];
-        }
-        return null;
+        $key = array_key_first($this->data);
+        return $key === null ? null : $this->data[$key];
     }
 
     public function jsonSerialize(): array
@@ -99,7 +97,8 @@ class ArrayList  implements \Iterator , \JsonSerializable, \Countable , \ArrayAc
         if($indexOrEntity instanceof AbstractEntity){
             foreach ($this->data as $key => $item){
                 if($item === $indexOrEntity){
-                    array_splice($this->data, $key, 1);
+                    unset($this->data[$key]);
+                    $this->data = array_values($this->data);
                     break;
                 }
             }

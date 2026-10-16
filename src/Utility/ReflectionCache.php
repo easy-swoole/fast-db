@@ -17,7 +17,8 @@ class ReflectionCache
 {
     use Singleton;
 
-    private $entityData = [];
+    private array $entityData = [];
+    private array $relationData = [];
 
     /**
      * @throws \ReflectionException
@@ -25,7 +26,7 @@ class ReflectionCache
      */
     function parseEntity(string $entityClass):EntityReflection
     {
-        $key = md5($entityClass);
+        $key = $entityClass;
         if(isset($this->entityData[$key])){
             return $this->entityData[$key];
         }
@@ -67,6 +68,19 @@ class ReflectionCache
 
         $this->entityData[$key] = $entityReflection;
         return $entityReflection;
+    }
+
+    /** 返回副本，避免调用方补全 selfProperty 时修改缓存中的原始关系定义。 */
+    public function parseRelation(string $entityClass, string $method): Relate
+    {
+        if (!isset($this->relationData[$entityClass][$method])) {
+            $attributes = (new \ReflectionMethod($entityClass, $method))->getAttributes(Relate::class);
+            if (empty($attributes)) {
+                throw new RuntimeError("{$method} did not define Relate attribute in {$entityClass}");
+            }
+            $this->relationData[$entityClass][$method] = $attributes[0]->newInstance();
+        }
+        return clone $this->relationData[$entityClass][$method];
     }
 
     protected function parseClassTag(string $targetTag,\ReflectionClass $ref)

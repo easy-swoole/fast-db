@@ -3,27 +3,21 @@
 namespace EasySwoole\FastDb\Beans;
 
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
+use EasySwoole\FastDb\Internal\FieldSelection;
 use EasySwoole\Mysqli\QueryBuilder;
 
 class Query
 {
     private QueryBuilder $queryBuilder;
 
-    private ?array $fields = null;
-
-    private ?array $hideFields = null;
-
-    /**
-     * @var bool
-     * 用于把field限制传递到查询后的子对象。实现子对象的toArray同步限制filed，
-     * 可以直接整个list json_encode
-     */
-    private bool $persistFieldLimit = false;
+    // SQL 条件由 QueryBuilder 管理，输出筛选规则单独保存。
+    private FieldSelection $selection;
 
     public function __construct(
         private readonly AbstractEntity $entity
     ){
         $this->queryBuilder = new QueryBuilder();
+        $this->selection = new FieldSelection();
     }
 
     function limit(int $num,bool $withTotalCount = false):Query
@@ -34,13 +28,13 @@ class Query
 
     function persistFieldLimit(bool $persistFieldLimit = true):Query
     {
-        $this->persistFieldLimit = $persistFieldLimit;
+        $this->selection->persistFieldLimit = $persistFieldLimit;
         return $this;
     }
 
     function isPersistFieldLimit():bool
     {
-        return $this->persistFieldLimit;
+        return $this->selection->persistFieldLimit;
     }
 
     function page(?int $page,bool $withTotalCount = false,int $pageSize = 10):Query
@@ -55,7 +49,7 @@ class Query
 
     function fields(?array $fields = null,bool $returnAsArray = false):Query
     {
-        $this->fields = [
+        $this->selection->fields = [
             'fields'=>$fields,
             'returnAsArray'=>$returnAsArray
         ];
@@ -64,13 +58,13 @@ class Query
 
     function returnAsArray():Query
     {
-        if(!is_array($this->fields)){
-            $this->fields = [
+        if(!is_array($this->selection->fields)){
+            $this->selection->fields = [
                 'returnAsArray'=>true,
                 'fields'=>null
             ];
         }else{
-            $this->fields['returnAsArray'] = true;
+            $this->selection->fields['returnAsArray'] = true;
         }
         return $this;
     }
@@ -80,18 +74,18 @@ class Query
         if(is_string($hideFields)){
             $hideFields = [$hideFields];
         }
-        $this->hideFields = $hideFields;
+        $this->selection->hideFields = $hideFields;
         return $this;
     }
 
     function getHideFields():?array
     {
-        return $this->hideFields;
+        return $this->selection->hideFields;
     }
 
     function getFields():?array
     {
-        return $this->fields;
+        return $this->selection->fields;
     }
 
     function groupBy(string $groupByField):Query
@@ -146,9 +140,27 @@ class Query
         return $this->queryBuilder;
     }
 
+    /** 清理 SQL 条件但保留输出配置，供序列化及插入后的兼容清理使用。 */
+    public function withoutSqlConditions(): Query
+    {
+        $copy = new Query($this->entity);
+        $copy->selection = clone $this->selection;
+        return $copy;
+    }
+
+    /** 克隆实体时重新绑定所有者，同时复制 SQL 条件和输出配置。 */
+    public function forEntity(AbstractEntity $entity): Query
+    {
+        $copy = new Query($entity);
+        $copy->queryBuilder = clone $this->queryBuilder;
+        $copy->selection = clone $this->selection;
+        return $copy;
+    }
+
     function __clone()
     {
         //chunk 的时候，复用query builder
         $this->queryBuilder = clone $this->queryBuilder;
+        $this->selection = clone $this->selection;
     }
 }
