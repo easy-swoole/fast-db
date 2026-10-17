@@ -201,10 +201,7 @@ final class ConnectionTest extends TestCase
             foreach (['begin', 'commit', 'rollback'] as $operation) {
                 [$socket, $peer] = swoole_coroutine_socketpair(AF_UNIX, SOCK_STREAM, 0);
                 $config = new \EasySwoole\Mysqli\Config(['timeout' => 2.0]);
-                $protocol = new \EasySwoole\Mysqli\Protocol\Connection($config);
-                (new \ReflectionProperty($protocol, 'socket'))->setValue($protocol, $socket);
-                (new \ReflectionProperty($protocol, 'connected'))->setValue($protocol, true);
-                (new \ReflectionProperty($protocol, 'inTransaction'))->setValue($protocol, $operation !== 'begin');
+                $protocol = $this->createConnectedProtocol($config, $socket, $operation !== 'begin');
                 $connection = new Connection($config);
                 (new \ReflectionProperty(\EasySwoole\Mysqli\Client::class, 'mysqlClient'))->setValue($connection, $protocol);
                 $connection->isInTransaction = $operation !== 'begin';
@@ -315,9 +312,7 @@ final class ConnectionTest extends TestCase
         $check = function (): void {
             [$socket, $peer] = swoole_coroutine_socketpair(AF_UNIX, SOCK_STREAM, 0);
             $config = new \EasySwoole\Mysqli\Config(['timeout' => 0.03]);
-            $protocol = new \EasySwoole\Mysqli\Protocol\Connection($config);
-            (new \ReflectionProperty($protocol, 'socket'))->setValue($protocol, $socket);
-            (new \ReflectionProperty($protocol, 'connected'))->setValue($protocol, true);
+            $protocol = $this->createConnectedProtocol($config, $socket);
             $connection = new Connection($config);
             $connection->connectionName = 'reporting';
             (new \ReflectionProperty(\EasySwoole\Mysqli\Client::class, 'mysqlClient'))->setValue($connection, $protocol);
@@ -396,6 +391,26 @@ final class ConnectionTest extends TestCase
         $this->assertSame(1, $called);
         $this->assertSame($expected, $db->getQueryStack(-1)->rawQuery);
         $this->assertSame($operation !== 'begin', $connection->isInTransaction);
+    }
+
+
+    /**
+     * 注入不响应请求的已连接 Socket，跳过握手以单独验证查询和事务超时。
+     * mysqli 5.0.3 将传输和会话状态分别交给 PacketStream、SessionState 管理。
+     */
+    private function createConnectedProtocol(
+        \EasySwoole\Mysqli\Config $config,
+        \Swoole\Coroutine\Socket $socket,
+        bool $inTransaction = false
+    ): \EasySwoole\Mysqli\Protocol\Connection {
+        $protocol = new \EasySwoole\Mysqli\Protocol\Connection($config);
+        $stream = (new \ReflectionProperty($protocol, 'stream'))->getValue($protocol);
+        (new \ReflectionProperty($stream, 'socket'))->setValue($stream, $socket);
+        $state = (new \ReflectionProperty($protocol, 'state'))->getValue($protocol);
+        $state->established();
+        // SERVER_STATUS_IN_TRANS 是服务端返回的事务状态位。
+        $state->applyServerStatus($inTransaction ? 0x0001 : 0);
+        return $protocol;
     }
 
 }
