@@ -701,6 +701,107 @@ $user->update(); // nullable 属性可清空到 SQL NULL。
 
 `ConvertList::toObject()` 接收数组或 JSON 字符串，空值/不能解码为数组的值转成空列表。`append(null)` 不追加。`remove()` 会保留原数组键，删除后 JSON 编码可能呈现对象形式；需要列表 JSON 时可先使用 `array_values()` 整理数据并重新赋值。
 
+#### Bean 列表
+
+通过子类的 `itemClass()` 指定元素类型，支持 `SplBean` 及其子类（包括 `ConvertBean`）：
+
+```php
+class UserBean extends ConvertBean
+{
+    public string $name = '';
+}
+
+class UserList extends ConvertList
+{
+    protected static function itemClass(): ?string
+    {
+        return UserBean::class;
+    }
+}
+
+// 在实体内声明字段。
+#[Property(convertObject: UserList::class)]
+public ?UserList $users;
+
+// JSON 字段读取或 setData() 时，数组元素自动转换为 UserBean。
+$model->setData(['users' => '[{"name":"张三"}]']);
+$model->users->first()->name = '李四';
+$model->users->append(['name' => '王五']);
+$model->users->append(new UserBean(['name' => '赵六']));
+$model->update(); // Bean 的修改会参与字段变更检测，保存为 JSON 数组。
+```
+
+`toArray()` 返回 Bean 元素数组；`toValue()` 返回 JSON 数组字符串，元素不会被重复编码成 JSON 字符串。初始化和 `append()` 接收元素数组或指定类型的 Bean，已有 Bean 保留原实例，其他元素类型抛出 `InvalidArgumentException`；`append(null)` 仍忽略。类型化列表删除元素后，`toValue()` 会重新排列键，保持 JSON 数组格式。普通 `ConvertList` 的行为保持不变。
+
+#### Bean 列表内嵌套 Bean
+
+Bean 内部的属性可以继续转换为另一个 Bean。实体字段使用 FastDb 的 `#[Property]`，Bean 内部属性使用 SPL 的 `#[ConvertBean]`；下面将 SPL 注解起别名为 `NestedBean`，避免与 FastDb 的 `ConvertBean` 基类重名。
+
+```php
+use EasySwoole\FastDb\AbstractInterface\ConvertBean;
+use EasySwoole\FastDb\AbstractInterface\ConvertList;
+use EasySwoole\Spl\Attribute\ConvertBean as NestedBean;
+
+class UserAddress extends ConvertBean
+{
+    public string $city = '';
+}
+
+class MemberBean extends ConvertBean
+{
+    public string $name = '';
+
+    #[NestedBean(UserAddress::class)]
+    public ?UserAddress $address;
+}
+
+class MemberList extends ConvertList
+{
+    protected static function itemClass(): ?string
+    {
+        return MemberBean::class;
+    }
+}
+```
+
+在实体中声明字段（数据库需有对应的 JSON 或文本列）：
+
+```php
+#[Property(convertObject: MemberList::class)]
+public ?MemberList $members;
+```
+
+赋值或从数据库读取时，每个元素会转换为 `MemberBean`，其中的 `address` 会继续转换为 `UserAddress`：
+
+```php
+$model->setData(['members' => [
+    ['name' => '张三', 'address' => ['city' => '杭州']],
+]]);
+// 同样支持 JSON 字符串：
+// $model->setData(['members' => '[{"name":"张三","address":{"city":"杭州"}}]']);
+
+$member = $model->members->first();
+$member->address->city = '上海';
+$model->update(); // 嵌套 Bean 的修改也参与变更检测。
+
+$model->members->append([
+    'name' => '李四',
+    'address' => ['city' => '北京'],
+]);
+$model->update(); // 追加元素时也会转换嵌套的 address。
+```
+
+保存后的字段内容为 JSON 数组，嵌套 Bean 保持 JSON 对象结构：
+
+```json
+[
+    {"name": "张三", "address": {"city": "上海"}},
+    {"name": "李四", "address": {"city": "北京"}}
+]
+```
+
+实体的 `toArray()` 对该字段仍返回 JSON 字符串；`$model->members->toArray()` 返回 Bean 元素数组，`$member->toArray()` 可获得包含嵌套地址数组的数据。此示例的插入、数据库读取还原、嵌套属性修改及追加保存已通过测试数据库验证。
+
 ### ConvertDateTime
 
 `ConvertDateTime` 继承 PHP `DateTime` 并实现 `ConvertObjectInterface`，用于 MySQL `DATETIME` / `DATETIME(fsp)` 字段。
