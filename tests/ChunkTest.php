@@ -74,6 +74,53 @@ final class ChunkTest extends TestCase
         });
     }
 
+    public function testFalseStopsInsideAFullPageWithoutCallingRemainingRowsOrReadingAnotherPage(): void
+    {
+        $this->withDatabase([[['id' => 1], ['id' => 2], ['id' => 3]]], function (array &$queries, array &$rawQueries): void {
+            $entity = new ChunkEntity();
+            $entity->queryLimit()->where('status', 1)->orderBy('id', 'ASC')
+                ->fields(['id'])->hideFields('name')->persistFieldLimit();
+            $seen = [];
+            $result = $entity->chunk(static function (ChunkEntity $item) use (&$seen): bool {
+                $seen[] = $item->id;
+                return $item->id !== 2;
+            }, 3);
+
+            $this->assertNull($result, 'The existing chunk() return contract remains unchanged.');
+            $this->assertSame([1, 2], $seen);
+            $this->assertCount(1, $queries);
+            $this->assertSame([], $rawQueries);
+            $this->assertNull($entity->queryLimit()->getFields());
+            $this->assertNull($entity->queryLimit()->getHideFields());
+            $this->assertFalse($entity->queryLimit()->isPersistFieldLimit());
+            $next = $entity->queryLimit()->__getQueryBuilder()->get($entity->tableName());
+            $this->assertSame([], $next->getLastBindParams());
+            $this->assertSame([], $next->getLastQueryOptions());
+            $this->assertStringNotContainsString('WHERE', $next->getLastPrepareQuery());
+            $this->assertStringNotContainsString('ORDER BY', $next->getLastPrepareQuery());
+            $this->assertStringNotContainsString('LIMIT', $next->getLastPrepareQuery());
+        });
+    }
+
+    public function testZeroReturnValueDoesNotStopDeliveryAndChunkStillReturnsNull(): void
+    {
+        $this->withDatabase([
+            [['id' => 1], ['id' => 2]],
+            [['id' => 3]],
+        ], function (array &$queries, array &$rawQueries): void {
+            $seen = [];
+            $result = (new ChunkEntity())->chunk(static function (ChunkEntity $item) use (&$seen): int {
+                $seen[] = $item->id;
+                return 0;
+            }, 2);
+
+            $this->assertNull($result);
+            $this->assertSame([1, 2, 3], $seen);
+            $this->assertCount(2, $queries);
+            $this->assertSame([], $rawQueries);
+        });
+    }
+
     public function testCallbackFailureClearsTheOriginalQueryState(): void
     {
         $this->withDatabase([[['id' => 1]]], function (array &$queries, array &$rawQueries): void {

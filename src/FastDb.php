@@ -4,6 +4,7 @@ namespace EasySwoole\FastDb;
 
 use EasySwoole\Component\Singleton;
 use EasySwoole\FastDb\Internal\QueryExecutor;
+use EasySwoole\FastDb\Internal\TransactionScope;
 use EasySwoole\FastDb\Beans\QueryStack;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\Mysql\Connection;
@@ -136,6 +137,97 @@ class FastDb
         return 'default';
     }
 
+    /** 临时选择连接；仅管理选库，回调接收 FastDb，不借还连接或改变事务。 */
+    public function withConnection(string $name, callable $callback): mixed
+    {
+        if ($name === '' || $name === '0') { throw new \InvalidArgumentException('Connection name must be non-empty and cannot be "0"'); }
+        $cid = Coroutine::getCid();
+        if (!isset($this->configs[$name]) && !isset($this->currentConnection[$cid][$name])) {
+            throw new RuntimeError('connection ' . $name . ' not register yet');
+        }
+        $previous = $this->selectConnection();
+        $this->selectConnection($name);
+        try { return $callback($this); }
+        finally { $this->selectConnection($previous); }
+    }
+
+    /** 绑定当前实际连接的回调事务；同连接嵌套加入原事务，不创建 savepoint。 */
+    public function transaction(callable $callback, TransactionStartFlags $flags = TransactionStartFlags::None,
+        ?float $timeout = null): mixed
+    {
+        if ($timeout !== null && (!is_finite($timeout) || $timeout <= 0)) {
+            throw new \InvalidArgumentException('Transaction timeout must be finite and greater than zero');
+        }
+        $client = $this->getClient();
+        $context = $this->getTransactionContext($client);
+        $scope = $client->__getTransactionScope();
+        if ($scope !== null && !$scope->isCurrent($client, false)) {
+            if ($scope->depth > 0) { throw new RuntimeError('The managed transaction connection or generation has changed'); }
+            $client->__setTransactionScope(null);
+            $scope = null;
+        }
+        $owner = !$client->isInTransaction;
+        if (!$owner && ($flags !== TransactionStartFlags::None || $timeout !== null)) {
+            throw new \InvalidArgumentException('A joined transaction cannot change start flags or timeout');
+        }
+        $scope ??= new TransactionScope($context);
+        if ($scope->unusable) { throw new RuntimeError('Transaction cleanup failed; close or recycle the connection before reuse'); }
+        if ($scope->rollbackOnly) { throw new RuntimeError('Transaction is marked rollback-only'); }
+        $client->__setTransactionScope($scope);
+        $scope->depth++;
+        $left = false;
+        try {
+            if ($owner) {
+                $scope->authorizeBegin($flags->toSql());
+                try {
+                    if (!$this->begin($client, $flags, $timeout)) { throw new RuntimeError('Failed to begin scoped transaction'); }
+                } finally { $scope->clearPermit(); }
+            }
+            if (!$scope->isCurrent($client)) { throw new RuntimeError('The scoped transaction is no longer active'); }
+            if ($scope->rollbackOnly) { throw new RuntimeError('Transaction is marked rollback-only'); }
+            $value = $callback($this);
+            if (!$scope->isCurrent($client)) { throw new RuntimeError('The scoped transaction connection or generation changed during the callback'); }
+            if ($scope->rollbackOnly) { throw new RuntimeError('Transaction is marked rollback-only by an inner scope'); }
+            // 回调已经退出；结束 owner 后旧 scope 不再限制提交观察回调的新事务。
+            $scope->depth--;
+            $left = true;
+            if ($owner) {
+                if (!$this->commit($client, TransactionCompletionFlags::NoChainNoRelease, $timeout)) {
+                    throw new RuntimeError('Failed to commit scoped transaction');
+                }
+                if ($scope->isCurrent($client)) { throw new RuntimeError('The scoped transaction was not completed by commit'); }
+            }
+            return $value;
+        } catch (\Throwable $error) {
+            $scope->rollbackOnly = true;
+            if (!$left) { $scope->depth--; $left = true; }
+            if ($owner) { $this->rollbackOwnedScope($client, $scope, $timeout); }
+            throw $error;
+        } finally {
+            if (!$left) { $scope->depth--; }
+            if ($client->__getTransactionScope() === $scope && $scope->depth === 0
+                && (!$scope->rollbackOnly || !$scope->isCurrent($client))) {
+                $client->__setTransactionScope(null);
+            }
+        }
+    }
+
+    /** 清理仍属于原代次的事务，保留业务/提交异常，绝不回滚观察回调开启的新事务。 */
+    private function rollbackOwnedScope(Connection $client, TransactionScope $scope, ?float $timeout): void
+    {
+        if (!$scope->isCurrent($client)) { return; }
+        try {
+            if (!$this->rollback($client, TransactionCompletionFlags::NoChainNoRelease, $timeout)) {
+                throw new RuntimeError('Failed to rollback scoped transaction');
+            }
+        } catch (\Throwable) {
+            if ($scope->isCurrent($client)) {
+                try { $client->close(); } catch (\Throwable) {}
+                if ($scope->isCurrent($client)) { $scope->unusable = true; }
+            }
+        }
+    }
+
     /**
      * @throws RuntimeError
      * @throws Exception
@@ -176,6 +268,11 @@ class FastDb
     {
         $cid = Coroutine::getCid();
         if(isset($this->currentConnection[$cid])){
+            foreach ($this->currentConnection[$cid] as $client) {
+                if (($client->__getTransactionScope()?->depth ?? 0) > 0) {
+                    throw new RuntimeError('Cannot recycle a connection owned by an active transaction() scope');
+                }
+            }
             // 先检查全部连接再开始回收，确保拒绝回收时连接、查询栈均保持原样。
             if($checkTransaction){
                 foreach ($this->currentConnection[$cid] as $selectDb => $client){
@@ -205,6 +302,7 @@ class FastDb
     function begin(?Connection $client = null, TransactionStartFlags $flags = TransactionStartFlags::None, ?float $timeout = null): bool
     {
         $client ??= $this->getClient();
+        $client->__getTransactionScope()?->assertControl($client, $flags->toSql());
         if ($client->isInTransaction) { return true; }
         $context = $this->getTransactionContext($client);
         $version = $context->version();
@@ -218,6 +316,7 @@ class FastDb
     function commit(?Connection $client = null, TransactionCompletionFlags $flags = TransactionCompletionFlags::NoChainNoRelease, ?float $timeout = null):bool
     {
         $client ??= $this->currentConnection();
+        $client?->__getTransactionScope()?->assertControl($client, 'COMMIT' . $flags->toSqlSuffix());
         if ($client === null || !$client->isInTransaction) { return true; }
         $context = $this->getTransactionContext($client);
         $version = $context->version();
@@ -236,6 +335,7 @@ class FastDb
     function rollback(?Connection $client = null, TransactionCompletionFlags $flags = TransactionCompletionFlags::NoChainNoRelease, ?float $timeout = null):bool
     {
         $client ??= $this->currentConnection();
+        $client?->__getTransactionScope()?->assertControl($client, 'ROLLBACK' . $flags->toSqlSuffix());
         if ($client === null || !$client->isInTransaction) { return true; }
         $context = $this->getTransactionContext($client);
         $version = $context->version();
@@ -258,7 +358,11 @@ class FastDb
         $builder = $build === null ? $queryBuilder : new QueryBuilder();
         return $this->execute($client, static function () use ($client, $builder, $build, $timeout) {
             if ($build !== null) { $build($builder); }
-            return $client->query($builder, $timeout);
+            $scope = $client->__getTransactionScope();
+            if ($scope === null) { return $client->query($builder, $timeout); }
+            $frame = $scope->enterExecution($client, $builder->getLastPrepareQuery());
+            try { return $client->query($builder, $timeout); }
+            finally { $scope->leaveExecution($frame); }
         }, $builder);
     }
 
@@ -273,8 +377,22 @@ class FastDb
     {
         $this->getTransactionContext($client);
         $this->executor ??= new QueryExecutor();
+        if ($sql !== null && $client->__getTransactionScope() !== null) {
+            $original = $operation;
+            $operation = fn () => $this->runScopedOperation($client, $sql, $original);
+        }
         return $this->executor->execute($client, $client->connectionName ?? $this->selectConnection(),
             $operation, fn (QueryResult $result) => $this->notifyQuery($result), $builder, $sql);
+    }
+
+    /** Facade 捕获工厂构建后的实际 SQL，Connection 再于发送前检查，许可只可消费一次。 */
+    private function runScopedOperation(Connection $client, ?string $sql, callable $operation): mixed
+    {
+        $scope = $client->__getTransactionScope();
+        if ($scope === null) { return $operation(); }
+        $frame = $scope->enterExecution($client, $sql);
+        try { return $operation(); }
+        finally { $scope->leaveExecution($frame); }
     }
 
     /** 分页执行器预先读取的总数，不在 QueryResult 上增加接口。 */
@@ -332,6 +450,14 @@ class FastDb
             try {
                 // 协程已结束，必须清理未完成事务，不能使用默认的拒绝回收检查。
                 if ($this->contextCleanupRegistered[$cid]) {
+                    // 硬退出协程可能跳过业务 finally；先关闭仍被作用域持有的会话，避免重借窗口。
+                    foreach ($this->currentConnection[$cid] ?? [] as $client) {
+                        $scope = $client->__getTransactionScope();
+                        if (($scope?->depth ?? 0) > 0) {
+                            try { $client->close(); }
+                            finally { $scope->depth = 0; $client->__setTransactionScope(null); }
+                        }
+                    }
                     $this->recycleContext(false);
                 }
             } finally {
@@ -398,6 +524,13 @@ class FastDb
 
     function reset()
     {
+        foreach ($this->currentConnection as $connections) {
+            foreach ($connections as $client) {
+                if (($client->__getTransactionScope()?->depth ?? 0) > 0) {
+                    throw new RuntimeError('Cannot reset pools while transaction() scopes are active');
+                }
+            }
+        }
         /** @var Pool $pool */
         foreach ($this->pools as $pool){
             $pool->reset();

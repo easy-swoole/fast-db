@@ -14,12 +14,14 @@
             <exclude>tests/TransactionTest.php</exclude>
             <exclude>tests/ModelTest.php</exclude>
             <exclude>tests/RelationTest.php</exclude>
+            <exclude>tests/ScopeIntegrationTest.php</exclude>
         </testsuite>
         <testsuite name="integration">
             <file>tests/FastDbTest.php</file>
             <file>tests/TransactionTest.php</file>
             <file>tests/ModelTest.php</file>
             <file>tests/RelationTest.php</file>
+            <file>tests/ScopeIntegrationTest.php</file>
         </testsuite>
     </testsuites>
 </phpunit>

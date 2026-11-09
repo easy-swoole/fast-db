@@ -1,0 +1,659 @@
+<?php
+
+declare(strict_types=1);
+
+namespace EasySwoole\FastDb\Tests;
+
+use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
+use EasySwoole\FastDb\AbstractInterface\ConvertList;
+use EasySwoole\FastDb\Attributes\Property;
+use EasySwoole\FastDb\Attributes\Relate;
+use EasySwoole\FastDb\Exception\RuntimeError;
+use EasySwoole\FastDb\FastDb;
+use EasySwoole\FastDb\Mysql\Connection;
+use EasySwoole\FastDb\Mysql\QueryResult;
+use EasySwoole\Mysqli\Config;
+use EasySwoole\Mysqli\QueryBuilder;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\TestCase;
+use Swoole\Coroutine;
+
+final class RelationPreloadTest extends TestCase
+{
+    private ?\ReflectionProperty $singleton = null;
+    private mixed $originalInstance = null;
+    private FastDb $db;
+    private PreloadFixtureConnection $connection;
+    private array $events = [];
+
+    protected function setUp(): void
+    {
+        if (!extension_loaded('pdo_sqlite')) { $this->markTestSkipped('SQLite executes relation queries without MySQL writes.'); }
+        $database = new \PDO('sqlite::memory:', options: [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
+        $database->exec('CREATE TABLE preload_parents (id INTEGER PRIMARY KEY, group_code TEXT, name TEXT)');
+        $database->exec('CREATE TABLE preload_children (id INTEGER PRIMARY KEY, parent_id INTEGER, group_code TEXT COLLATE NOCASE, name TEXT, payload TEXT)');
+        $database->exec('CREATE TABLE preload_profiles (id INTEGER PRIMARY KEY, parent_id INTEGER, name TEXT)');
+        $database->exec("INSERT INTO preload_parents VALUES (1,'a','first'),(2,'a','second'),(3,'b','third')");
+        $database->exec("INSERT INTO preload_children VALUES (11,1,'a','child-11','[11]'),(12,1,'a','child-12','[12]'),(13,2,'a','child-13','[13]')");
+        $database->exec("INSERT INTO preload_profiles VALUES (21,1,'profile-1'),(23,3,'profile-3')");
+        $this->connection = new PreloadFixtureConnection($database);
+        $this->connection->connectionName = 'default';
+        $this->db = new FastDb();
+        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db,
+            [Coroutine::getCid() => ['default' => $this->connection]]);
+        $this->db->setOnQuery(function (QueryResult $result): void { $this->events[] = $result; });
+        $this->singleton = new \ReflectionProperty(FastDb::class, 'instance');
+        $this->originalInstance = $this->singleton->getValue();
+        $this->singleton->setValue(null, $this->db);
+    }
+
+    protected function tearDown(): void
+    {
+        if ($this->singleton === null) { return; }
+        $this->db->setOnQuery(static function (): void {});
+        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db, []);
+        $this->singleton->setValue(null, $this->originalInstance);
+    }
+
+    private function parents(array|string $relations): array
+    {
+        $owner = new PreloadFixtureParent();
+        $owner->queryLimit()->orderBy('id', 'ASC')->withRelations($relations);
+        return $owner->all()->list();
+    }
+
+    private function childIds(PreloadFixtureParent $parent): array
+    {
+        return array_map(static fn(PreloadFixtureChild $child): int => $child->id, $parent->children()->list());
+    }
+
+    public function testQueriesWithoutPreloadingDoNotExecuteRelationSql(): void
+    {
+        $parents = (new PreloadFixtureParent())->all()->list();
+        $this->assertCount(3, $parents);
+        $this->assertCount(1, $this->connection->queries);
+        $this->assertCount(1, $this->events);
+    }
+
+    public function testBatchLoadingRemovesThePerParentQueriesAndKeepsExistingRelationCalls(): void
+    {
+        $parents = $this->parents(['children', 'profile']);
+        $this->assertCount(3, $this->connection->queries);
+        $this->assertCount(3, $this->events);
+        $this->assertSame([11, 12], $this->childIds($parents[0]));
+        $this->assertSame([13], $this->childIds($parents[1]));
+        $this->assertSame([], $this->childIds($parents[2]));
+        $this->assertSame('profile-1', $parents[0]->profile()->name);
+        $this->assertNull($parents[1]->profile());
+        $this->assertSame('profile-3', $parents[2]->profile()->name);
+        $this->assertCount(3, $this->connection->queries);
+        $this->assertCount(3, $this->events);
+    }
+
+    public function testPrefetchedChildrenHaveConvertedFieldsAndAnAcceptedDatabaseBaseline(): void
+    {
+        $parents = $this->parents('children');
+        $child = $parents[0]->children()->first();
+        $this->assertInstanceOf(ConvertList::class, $child->payload);
+        $this->assertSame([11], $child->payload->toArray());
+        $this->assertTrue($child->update());
+        $this->assertCount(2, $this->connection->queries);
+        $child->name = 'changed';
+        $this->assertTrue($child->update());
+        $this->assertSame('changed', $this->connection->database->query('SELECT name FROM preload_children WHERE id=11')->fetchColumn());
+        $this->assertCount(3, $this->connection->queries);
+        $this->assertStringNotContainsString('`payload` =', $this->connection->queries[2]['sql']);
+    }
+
+    public function testEmptyParentResultDoesNotRunRelationQueries(): void
+    {
+        $owner = new PreloadFixtureParent();
+        $owner->queryLimit()->where('id', 999)->withRelations(['children', 'profile']);
+        $this->assertSame([], $owner->all()->list());
+        $this->assertCount(1, $this->connection->queries);
+        $this->assertCount(1, $this->events);
+    }
+
+    public function testClearRelationCacheDiscardsPrefetchedRowsAsWell(): void
+    {
+        $parent = $this->parents('children')[0];
+        $this->assertSame([11, 12], $this->childIds($parent));
+        $this->connection->database->exec("INSERT INTO preload_children VALUES (14,1,'a','new child','[14]')");
+        $parent->clearRelationCache();
+        $this->assertSame([11, 12, 14], $this->childIds($parent));
+        $this->assertCount(3, $this->connection->queries);
+    }
+
+    public function testChangingTheParentRelationKeyCannotReuseTheOldParentGroup(): void
+    {
+        $parent = $this->parents('children')[0];
+        $parent->id = 2;
+        $this->assertSame([13], $this->childIds($parent));
+        $this->assertCount(3, $this->connection->queries);
+    }
+
+    public function testDuplicateOneRelationStillRaisesTheExistingCardinalityError(): void
+    {
+        $this->connection->database->exec("INSERT INTO preload_profiles VALUES (24,3,'duplicate')");
+        try {
+            $parents = $this->parents('profile');
+            $parents[2]->profile();
+            $this->fail('A one relation may not silently choose one duplicate row');
+        } catch (RuntimeError $error) {
+            $this->assertStringContainsString('more than one', $error->getMessage());
+        }
+        $this->assertCount(2, $this->connection->queries);
+    }
+
+    public function testParentsWithTheSameForeignValueDoNotShareMutableChildInstances(): void
+    {
+        $parents = $this->parents('groupChildren');
+        $first = $parents[0]->groupChildren()->first();
+        $second = $parents[1]->groupChildren()->first();
+        $this->assertSame($first->id, $second->id);
+        $this->assertNotSame($first, $second);
+        $first->name = 'local change';
+        $first->payload->append('local item');
+        $this->assertSame('child-11', $second->name);
+        $this->assertSame([11], $second->payload->toArray());
+        $this->assertCount(2, $this->connection->queries);
+    }
+
+    public function testSqlNullRelationKeysKeepTheExistingLazyEqualitySemantics(): void
+    {
+        $this->connection->database->exec("INSERT INTO preload_parents VALUES (4,NULL,'null group')");
+        $this->connection->database->exec("INSERT INTO preload_children VALUES (14,4,NULL,'null child','[14]')");
+        $lazyParent = new PreloadFixtureParent(['id' => 4, 'group_code' => null, 'name' => 'null group']);
+        // The current driver compiles '= NULL'; preloading must preserve that lazy-query result.
+        $this->assertSame([], $lazyParent->groupChildren()->list());
+        $this->assertCount(1, $this->connection->queries);
+        $parents = $this->parents('groupChildren');
+        $this->assertCount(3, $this->connection->queries);
+        $this->assertSame([], $parents[3]->groupChildren()->list());
+        $this->assertSame([], $parents[2]->groupChildren()->list());
+        $this->assertCount(3, $this->connection->queries);
+    }
+
+    public function testCaseInsensitiveSqlKeysAreNotGroupedByPhpStringEquality(): void
+    {
+        $this->connection->database->exec("UPDATE preload_parents SET group_code='A' WHERE id=1");
+        $parents = $this->parents('groupChildren');
+        foreach ([$parents[0], $parents[1]] as $parent) {
+            $this->assertSame([11, 12, 13], array_map(static fn(PreloadFixtureChild $child): int => $child->id, $parent->groupChildren()->list()));
+        }
+        $this->assertCount(2, $this->connection->queries);
+    }
+
+    public function testNumericSqlAffinityIsNotGroupedByTheTextualParentKey(): void
+    {
+        $this->connection->database->exec("UPDATE preload_parents SET group_code=CASE id WHEN 1 THEN '01' WHEN 2 THEN '1' ELSE '003' END");
+        $parents = $this->parents('numericChildren');
+        foreach ([$parents[0], $parents[1]] as $parent) {
+            $this->assertSame([11, 12], array_map(static fn(PreloadFixtureChild $child): int => $child->id, $parent->numericChildren()->list()));
+        }
+        $this->assertSame([], $parents[2]->numericChildren()->list());
+        $this->assertCount(2, $this->connection->queries);
+    }
+
+    public function testGetterWithAdditionalConditionsDoesNotUseAnUnfilteredPrefetch(): void
+    {
+        $parent = $this->parents('children')[0];
+        $parent->queryLimit()->where('id', 12);
+        $this->assertSame([12], $this->childIds($parent));
+        $this->assertCount(3, $this->connection->queries);
+    }
+
+    public function testRelationWrapperOrConditionsRetainTheirForeignKeyBoundaryInTheBatch(): void
+    {
+        $parents = $this->parents('filteredChildren');
+        $this->assertSame([11], array_map(static fn(PreloadFixtureChild $child): int => $child->id, $parents[0]->filteredChildren()->list()));
+        $this->assertSame([13], array_map(static fn(PreloadFixtureChild $child): int => $child->id, $parents[1]->filteredChildren()->list()));
+        $this->assertSame([], $parents[2]->filteredChildren()->list());
+        $this->assertCount(2, $this->connection->queries);
+    }
+
+    public function testPreloadUsesTheParentQueryConnectionAndRestoresTheObserverSelectedConnection(): void
+    {
+        $otherDatabase = new \PDO('sqlite::memory:', options: [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
+        $otherDatabase->exec('CREATE TABLE preload_children (id INTEGER, parent_id INTEGER, group_code TEXT, name TEXT, payload TEXT)');
+        $otherDatabase->exec("INSERT INTO preload_children VALUES (111,1,'a','other database','[111]')");
+        $other = new PreloadFixtureConnection($otherDatabase);
+        $other->connectionName = 'other';
+        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db,
+            [Coroutine::getCid() => ['default' => $this->connection, 'other' => $other]]);
+        $this->db->setOnQuery(function (QueryResult $result): void {
+            $this->events[] = $result;
+            if (str_contains($result->getQueryBuilder()?->getLastPrepareQuery() ?? '', 'preload_parents')) {
+                $this->db->selectConnection('other');
+            }
+        });
+
+        $parents = $this->parents('children');
+        $this->assertSame('other', $this->db->selectConnection());
+        $this->assertCount(2, $this->connection->queries);
+        $this->assertSame([], $other->queries);
+        foreach ($this->events as $event) { $this->assertSame('default', $event->getConnectionName()); }
+        $this->db->selectConnection('default');
+        $this->assertSame([11, 12], $this->childIds($parents[0]));
+        $this->assertCount(2, $this->connection->queries);
+    }
+
+    #[DataProvider('parentOutputModes')]
+    public function testTargetConstructorConnectionChoiceMatchesLazyLoadingAndPrimesTheCorrectCache(bool $arrays): void
+    {
+        $otherDatabase = new \PDO('sqlite::memory:', options: [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
+        $otherDatabase->exec('CREATE TABLE preload_children (id INTEGER, parent_id INTEGER, group_code TEXT, name TEXT, payload TEXT)');
+        $otherDatabase->exec("INSERT INTO preload_children VALUES (111,1,'a','other child','[111]')");
+        $other = new PreloadFixtureConnection($otherDatabase);
+        $other->connectionName = 'other';
+        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db,
+            [Coroutine::getCid() => ['default' => $this->connection, 'other' => $other]]);
+
+        // The existing lazy path constructs the target before choosing its execution connection.
+        $lazy = new PreloadFixtureParent(['id' => 1]);
+        $this->assertSame([111], array_map(static fn(PreloadFixtureConstructorChild $child): int => $child->id, $lazy->constructorChildren()->list()));
+        $this->assertCount(1, $other->queries);
+        $this->assertSame([], $this->connection->queries);
+        $this->db->selectConnection('default');
+
+        $owner = new PreloadFixtureParent();
+        $owner->queryLimit()->orderBy('id', 'ASC')->withRelations('constructorChildren');
+        if ($arrays) { $owner->queryLimit()->returnAsArray(); }
+        $parents = $owner->all()->list();
+        $this->assertSame('default', $this->db->selectConnection(), 'The preload scope must restore its caller connection.');
+        $this->assertCount(1, $this->connection->queries);
+        $this->assertCount(2, $other->queries);
+        if ($arrays) {
+            $this->assertSame([111], array_column($parents[0]['constructorChildren'], 'id'));
+            $this->assertSame([], $parents[1]['constructorChildren']);
+        } else {
+            $this->assertSame([111], array_map(static fn(PreloadFixtureConstructorChild $child): int => $child->id, $parents[0]->constructorChildren()->list()));
+            $this->assertSame([], $parents[1]->constructorChildren()->list());
+        }
+        $this->assertCount(2, $other->queries, 'Accessing the existing getter must hit the actual-connection preload.');
+    }
+
+    public function testDynamicWrapperConditionsAndTablesAreAppliedToTheirOwnParents(): void
+    {
+        $this->connection->database->exec('CREATE TABLE preload_archived_children AS SELECT * FROM preload_children WHERE 0');
+        $this->connection->database->exec("INSERT INTO preload_archived_children VALUES (31,2,'a','archived child','[31]')");
+        $parents = $this->parents('dynamicChildren');
+
+        $this->assertSame([12], array_map(static fn(PreloadFixtureChild $child): int => $child->id, $parents[0]->dynamicChildren()->list()));
+        $this->assertSame([31], array_map(static fn(PreloadFixtureChild $child): int => $child->id, $parents[1]->dynamicChildren()->list()));
+        $this->assertSame([], $parents[2]->dynamicChildren()->list());
+        // The normal-table filters differ, and the archived table is a third compatible-plan group.
+        $this->assertCount(4, $this->connection->queries);
+        $this->assertCount(4, $this->events);
+    }
+
+    public static function parentOutputModes(): array { return [[false], [true]]; }
+
+    #[DataProvider('parentOutputModes')]
+    public function testTemporaryParentKeyChangesUseTheValueAtTheRelationEntrance(bool $arrays): void
+    {
+        $owner = new PreloadFixtureParent();
+        $owner->queryLimit()->fields(null, $arrays)->withRelations('redirectedChildren');
+        $parents = $owner->all()->list();
+        foreach ($parents as $index => $parent) {
+            $children = $arrays ? $parent['redirectedChildren'] : $parent->redirectedChildren()->list();
+            $this->assertSame([13], array_map(static fn($child): int => is_array($child) ? $child['id'] : $child->id, $children));
+            $this->assertSame($index + 1, $arrays ? $parent['id'] : $parent->id);
+        }
+        $this->assertCount(2, $this->connection->queries);
+    }
+
+    #[DataProvider('parentOutputModes')]
+    public function testDynamicTargetTableNameIsResolvedForEachParentsCapturedContext(bool $arrays): void
+    {
+        $this->connection->database->exec('CREATE TABLE preload_archived_children AS SELECT * FROM preload_children WHERE 0');
+        $this->connection->database->exec("INSERT INTO preload_archived_children VALUES (31,2,'a','archived child','[31]')");
+        $owner = new PreloadFixtureParent();
+        $owner->queryLimit()->orderBy('id', 'ASC')->withRelations('contextChildren');
+        if ($arrays) { $owner->queryLimit()->returnAsArray(); }
+        $parents = $owner->all()->list();
+
+        $this->assertCount(3, $this->connection->queries, 'Both dynamic target tables must be loaded before any relation getter.');
+        $ids = static fn(array $children): array => array_map(static fn($child): int => is_array($child) ? $child['id'] : $child->id, $children);
+        $this->assertSame([11, 12], $ids($arrays ? $parents[0]['contextChildren'] : $parents[0]->contextChildren()->list()));
+        $this->assertSame([31], $ids($arrays ? $parents[1]['contextChildren'] : $parents[1]->contextChildren()->list()));
+        $this->assertSame([], $arrays ? $parents[2]['contextChildren'] : $parents[2]->contextChildren()->list());
+        $this->assertCount(3, $this->connection->queries);
+    }
+
+    public function testEntityRelationsCanExplicitlyReturnArrayRows(): void
+    {
+        $parents = $this->parents(['arrayChildren', 'arrayProfile']);
+        $children = $parents[0]->arrayChildren();
+        $this->assertIsArray($children->first());
+        $this->assertSame([11, 12], array_column($children->list(), 'id'));
+        $this->assertSame('[11]', $children->first()['payload']);
+        $this->assertSame(['id' => 21, 'parent_id' => 1, 'name' => 'profile-1'], $parents[0]->arrayProfile());
+        $this->assertNull($parents[1]->arrayProfile());
+        $this->assertSame([], $parents[2]->arrayChildren()->list());
+        $this->assertCount(3, $this->connection->queries);
+    }
+
+    public function testSelectedChildFieldsCanOmitTheForeignKeyAndPreserveAnAlias(): void
+    {
+        $parents = $this->parents('selectedChildren');
+        $rows = $parents[0]->selectedChildren()->list();
+        $this->assertSame([
+            ['id' => 11, 'name' => 'child-11', 'encoded' => '[11]'],
+            ['id' => 12, 'name' => 'child-12', 'encoded' => '[12]'],
+        ], $rows);
+        $this->assertSame([13], array_column($parents[1]->selectedChildren()->list(), 'id'));
+        $this->assertSame([], $parents[2]->selectedChildren()->list());
+        $this->assertCount(2, $this->connection->queries);
+    }
+
+    public function testArrayRelationNamesCannotOverwriteSelectedParentFields(): void
+    {
+        $this->connection->database->exec("ALTER TABLE preload_parents ADD COLUMN children TEXT DEFAULT 'original field'");
+        $owner = new PreloadFixtureCollisionParent();
+        $owner->queryLimit()->returnAsArray()->withRelations('children');
+        try { $owner->all(); $this->fail('A relation must not overwrite a selected parent field'); }
+        catch (RuntimeError $error) { $this->assertStringContainsString('conflict', strtolower($error->getMessage())); }
+        $this->assertCount(1, $this->connection->queries);
+        $this->assertSame('original field', $this->connection->database->query('SELECT children FROM preload_parents WHERE id=1')->fetchColumn());
+    }
+
+    public function testMoreThan250UniqueKeysAreLoadedInCompleteBoundedBatches(): void
+    {
+        $insertParent = $this->connection->database->prepare('INSERT INTO preload_parents VALUES (?, ?, ?)');
+        $insertChild = $this->connection->database->prepare('INSERT INTO preload_children VALUES (?, ?, ?, ?, ?)');
+        for ($id = 4; $id <= 505; $id++) {
+            $insertParent->execute([$id, 'group-' . $id, 'parent-' . $id]);
+            $insertChild->execute([1000 + $id, $id, 'group-' . $id, 'child-' . $id, '[' . (1000 + $id) . ']']);
+        }
+        $parents = $this->parents('children');
+        $seen = [];
+        foreach ($parents as $parent) { $seen[$parent->id] = $this->childIds($parent); }
+        $this->assertCount(505, $seen);
+        $this->assertSame([11, 12], $seen[1]);
+        $this->assertSame([], $seen[3]);
+        $this->assertSame([1250], $seen[250]);
+        $this->assertSame([1251], $seen[251]);
+        $this->assertSame([1500], $seen[500]);
+        $this->assertSame([1505], $seen[505]);
+        $this->assertSame(505, array_sum(array_map('count', $seen)));
+        $this->assertCount(4, $this->connection->queries); // Parent SELECT plus 250/250/5-key batches.
+        $this->assertCount(4, $this->events);
+    }
+
+    public function testRelationMethodNamesAreCanonicalizedAndDeduplicatedCaseInsensitively(): void
+    {
+        $owner = new PreloadFixtureParent();
+        $owner->queryLimit()->returnAsArray()->orderBy('id', 'ASC')->withRelations(['CHILDREN', 'children', 'Children']);
+        $parents = $owner->all()->list();
+        $this->assertArrayHasKey('children', $parents[0]);
+        $this->assertArrayNotHasKey('CHILDREN', $parents[0]);
+        $this->assertSame([11, 12], array_column($parents[0]['children'], 'id'));
+        $this->assertCount(2, $this->connection->queries);
+    }
+
+    public function testCursorChunksPreloadOnlyTheirCurrentPage(): void
+    {
+        $owner = new PreloadFixtureParent();
+        $owner->queryLimit()->withRelations('children');
+        $seen = [];
+        $this->assertSame(3, $owner->chunkById(function (PreloadFixtureParent $parent) use (&$seen): void {
+            $seen[$parent->id] = $this->childIds($parent);
+        }, 2));
+        $this->assertSame([1 => [11, 12], 2 => [13], 3 => []], $seen);
+        $this->assertCount(4, $this->connection->queries);
+        $this->assertCount(4, $this->events);
+    }
+
+    public function testArrayRowsAttachOneAndManyRelationsWhileTheParentKeyCanBeHidden(): void
+    {
+        $owner = new PreloadFixtureParent();
+        $owner->queryLimit()->orderBy('id', 'ASC')->fields(['id', 'name'], true)->hideFields('id')
+            ->withRelations(['children', 'profile']);
+        $parents = $owner->all()->list();
+
+        $this->assertSame(['name', 'children', 'profile'], array_keys($parents[0]));
+        $this->assertSame('first', $parents[0]['name']);
+        $this->assertSame([11, 12], array_column($parents[0]['children'], 'id'));
+        $this->assertSame('[11]', $parents[0]['children'][0]['payload']);
+        $this->assertSame(['id' => 21, 'parent_id' => 1, 'name' => 'profile-1'], $parents[0]['profile']);
+        $this->assertNull($parents[1]['profile']);
+        $this->assertSame([], $parents[2]['children']);
+        $this->assertCount(3, $this->connection->queries);
+        $this->assertCount(3, $this->events);
+    }
+
+    public function testOrdinaryPaginationPreloadsOnlyItsReturnedParents(): void
+    {
+        $owner = new PreloadFixtureParent();
+        $owner->queryLimit()->orderBy('id', 'ASC')->page(1, false, 2)->withRelations('children');
+        $parents = $owner->all()->list();
+        $this->assertSame([1, 2], array_map(static fn(PreloadFixtureParent $parent): int => $parent->id, $parents));
+        $this->assertSame([11, 12], $this->childIds($parents[0]));
+        $this->assertSame([13], $this->childIds($parents[1]));
+        $this->assertCount(2, $this->connection->queries);
+    }
+
+    public function testOffsetChunksAlsoPreloadEachPageWithoutPerParentQueries(): void
+    {
+        $owner = new PreloadFixtureParent();
+        $owner->queryLimit()->orderBy('id', 'ASC')->withRelations('children');
+        $seen = [];
+        $this->assertNull($owner->chunk(function (PreloadFixtureParent $parent) use (&$seen): void {
+            $seen[$parent->id] = $this->childIds($parent);
+        }, 2));
+        $this->assertSame([1 => [11, 12], 2 => [13], 3 => []], $seen);
+        $this->assertCount(4, $this->connection->queries);
+        $this->assertCount(4, $this->events);
+    }
+
+    public function testPreloadConfigurationIsConsumedByTheQuery(): void
+    {
+        $owner = new PreloadFixtureParent();
+        $owner->queryLimit()->withRelations('children');
+        $owner->all();
+        $this->assertCount(2, $this->connection->queries);
+        $owner->all();
+        $this->assertCount(3, $this->connection->queries);
+    }
+
+    public function testRepeatedRelationNamesDoNotIssueDuplicateBatchQueries(): void
+    {
+        $parents = $this->parents(['children', 'children']);
+        $this->assertSame([11, 12], $this->childIds($parents[0]));
+        $this->assertCount(2, $this->connection->queries);
+    }
+
+    public static function invalidParentSelections(): array
+    {
+        return [
+            'missing primary key' => [['name'], false, false, 'children'],
+            'renamed primary key' => [['id AS other', 'name'], false, false, 'children'],
+            'hidden primary key for entities' => [null, true, false, 'children'],
+            'missing primary key for array output' => [['name'], false, true, 'children'],
+            'missing explicit relation field' => [['id', 'name'], false, false, 'groupChildren'],
+        ];
+    }
+
+    #[DataProvider('invalidParentSelections')]
+    public function testRelationKeysMustBeAvailableUnderTheirOriginalName(?array $fields, bool $hideKey, bool $arrays, string $relation): void
+    {
+        $owner = new PreloadFixtureParent();
+        $owner->queryLimit()->fields($fields, $arrays)->withRelations($relation);
+        if ($hideKey) { $owner->queryLimit()->hideFields('id'); }
+        try { $owner->all(); $this->fail('A missing relation field must not silently create empty groups'); }
+        catch (RuntimeError|\InvalidArgumentException|\UnexpectedValueException) { $this->addToAssertionCount(1); }
+        $this->assertCount(1, $this->connection->queries);
+        $this->assertNull($owner->queryLimit()->getFields());
+        $this->assertNull($owner->queryLimit()->getHideFields());
+    }
+
+    public static function unsupportedRelations(): array
+    {
+        return [['limitedChildren'], ['pagedChildren'], ['groupedChildren'], ['countedChildren'], ['lockedChildren']];
+    }
+
+    #[DataProvider('unsupportedRelations')]
+    public function testUnsupportedPerParentShapesFailExplicitlyBeforeTargetQueries(string $relation): void
+    {
+        $owner = new PreloadFixtureParent();
+        $owner->queryLimit()->withRelations($relation);
+        try { $owner->all(); $this->fail('Per-parent pagination or grouping cannot be silently changed into a batch'); }
+        catch (RuntimeError|\InvalidArgumentException) { $this->addToAssertionCount(1); }
+        $this->assertCount(1, $this->connection->queries);
+        $this->assertNull($owner->queryLimit()->getFields());
+    }
+
+    public function testUnknownRelationFailsClearlyWithoutTargetQueries(): void
+    {
+        $owner = new PreloadFixtureParent();
+        try { $owner->queryLimit()->withRelations('missingRelation')->returnEntity()->all(); $this->fail('Unknown relation must fail'); }
+        catch (RuntimeError|\InvalidArgumentException) { $this->addToAssertionCount(1); }
+        $this->assertLessThanOrEqual(1, count($this->connection->queries));
+    }
+
+    public function testMethodsWithoutARelateAttributeAreRejectedBeforeInvocation(): void
+    {
+        PreloadFixtureParent::$nonRelationCalls = 0;
+        $owner = new PreloadFixtureParent();
+        try { $owner->queryLimit()->withRelations('nonRelationOperation')->returnEntity()->all(); $this->fail('Only declared relation wrappers may be captured'); }
+        catch (RuntimeError|\InvalidArgumentException) { $this->addToAssertionCount(1); }
+        $this->assertSame(0, PreloadFixtureParent::$nonRelationCalls);
+        $this->assertSame(3, (int)$this->connection->database->query('SELECT COUNT(*) FROM preload_parents')->fetchColumn());
+        foreach ($this->connection->queries as $query) { $this->assertStringNotContainsString('DELETE', $query['sql']); }
+    }
+}
+
+class PreloadFixtureParent extends AbstractEntity
+{
+    public static int $nonRelationCalls = 0;
+    #[Property(isPrimaryKey: true)] public int $id;
+    #[Property] public ?string $group_code;
+    #[Property] public ?string $name;
+    public function tableName(): string { return 'preload_parents'; }
+
+    public function nonRelationOperation() { self::$nonRelationCalls++; return $this->delete(); }
+
+    #[Relate(PreloadFixtureChild::class, 'parent_id', cacheResult: true)]
+    public function children() { return $this->relateMany(); }
+
+    #[Relate(PreloadFixtureChild::class, 'parent_id')]
+    public function redirectedChildren()
+    {
+        $original = $this->id;
+        $this->id = 2;
+        try { return $this->relateMany(); }
+        finally { $this->id = $original; }
+    }
+
+    #[Relate(PreloadFixtureProfile::class, 'parent_id', cacheResult: true)]
+    public function profile() { return $this->relateOne(); }
+
+    #[Relate(PreloadFixtureChild::class, 'group_code', 'group_code', cacheResult: true)]
+    public function groupChildren() { return $this->relateMany(); }
+
+    #[Relate(PreloadFixtureChild::class, 'parent_id', 'group_code', cacheResult: true)]
+    public function numericChildren() { return $this->relateMany(); }
+
+    #[Relate(PreloadFixtureChild::class, 'parent_id', cacheResult: true)]
+    public function filteredChildren()
+    {
+        $this->queryLimit()->where('name', 'child-11')->orWhere('name', 'child-13');
+        return $this->relateMany();
+    }
+
+    #[Relate(PreloadFixtureChild::class, 'parent_id', cacheResult: true)]
+    public function dynamicChildren()
+    {
+        $this->queryLimit()->where('id', $this->id === 1 ? 12 : 0, '>=');
+        return $this->relateMany(null, $this->id === 2 ? 'preload_archived_children' : null);
+    }
+
+    #[Relate(PreloadFixtureDynamicChild::class, 'parent_id', cacheResult: true)]
+    public function contextChildren()
+    {
+        PreloadFixtureDynamicChild::$contextTable = $this->id === 2 ? 'preload_archived_children' : 'preload_children';
+        return $this->relateMany();
+    }
+
+    #[Relate(PreloadFixtureChild::class, 'parent_id', cacheResult: true)]
+    public function arrayChildren() { $this->queryLimit()->returnAsArray(); return $this->relateMany(); }
+
+    #[Relate(PreloadFixtureProfile::class, 'parent_id', cacheResult: true)]
+    public function arrayProfile() { $this->queryLimit()->returnAsArray(); return $this->relateOne(); }
+
+    #[Relate(PreloadFixtureChild::class, 'parent_id', cacheResult: true)]
+    public function selectedChildren() { $this->queryLimit()->fields(['id', 'name', 'payload AS encoded'], true); return $this->relateMany(); }
+
+    #[Relate(PreloadFixtureConstructorChild::class, 'parent_id', cacheResult: true)]
+    public function constructorChildren() { return $this->relateMany(); }
+
+    #[Relate(PreloadFixtureChild::class, 'parent_id')]
+    public function limitedChildren() { $this->queryLimit()->limit(1); return $this->relateMany(); }
+
+    #[Relate(PreloadFixtureChild::class, 'parent_id')]
+    public function pagedChildren() { $this->queryLimit()->page(1, false, 1); return $this->relateMany(); }
+
+    #[Relate(PreloadFixtureChild::class, 'parent_id')]
+    public function groupedChildren() { $this->queryLimit()->groupBy('parent_id'); return $this->relateMany(); }
+
+    #[Relate(PreloadFixtureChild::class, 'parent_id')]
+    public function countedChildren() { $this->queryLimit()->page(1, true, 10); return $this->relateMany(); }
+
+    #[Relate(PreloadFixtureChild::class, 'parent_id')]
+    public function lockedChildren() { $this->queryLimit()->selectForUpdate(); return $this->relateMany(); }
+}
+
+class PreloadFixtureCollisionParent extends PreloadFixtureParent
+{
+    #[Property] public ?string $children;
+}
+
+class PreloadFixtureChild extends AbstractEntity
+{
+    #[Property(isPrimaryKey: true)] public int $id;
+    #[Property] public ?int $parent_id;
+    #[Property] public ?string $group_code;
+    #[Property] public ?string $name;
+    #[Property(convertObject: ConvertList::class)] public ?ConvertList $payload;
+    public function tableName(): string { return 'preload_children'; }
+}
+
+class PreloadFixtureProfile extends AbstractEntity
+{
+    #[Property(isPrimaryKey: true)] public int $id;
+    #[Property] public ?int $parent_id;
+    #[Property] public ?string $name;
+    public function tableName(): string { return 'preload_profiles'; }
+}
+
+class PreloadFixtureDynamicChild extends PreloadFixtureChild
+{
+    public static string $contextTable = 'preload_children';
+    public function tableName(): string { return self::$contextTable; }
+}
+
+class PreloadFixtureConstructorChild extends PreloadFixtureChild
+{
+    public function __construct(array|null $data = null)
+    {
+        parent::__construct($data);
+        FastDb::getInstance()->selectConnection('other');
+    }
+}
+
+class PreloadFixtureConnection extends Connection
+{
+    public array $queries = [];
+    public function __construct(public \PDO $database) { parent::__construct(new Config()); }
+    public function query(QueryBuilder $builder, ?float $timeout = null): bool|array
+    {
+        $sql = $builder->getLastPrepareQuery();
+        $parameters = $builder->getLastBindParams();
+        $this->queries[] = ['sql' => $sql, 'parameters' => $parameters];
+        $statement = $this->database->prepare($sql);
+        $statement->execute($parameters);
+        $this->lastAffectRows = $statement->rowCount(); $this->lastInsertId = 0;
+        return $statement->columnCount() > 0 ? $statement->fetchAll(\PDO::FETCH_ASSOC) : true;
+    }
+}

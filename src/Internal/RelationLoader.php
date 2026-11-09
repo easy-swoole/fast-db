@@ -13,15 +13,20 @@ use EasySwoole\Mysqli\QueryBuilder;
 final class RelationLoader
 {
     private array $cache = [];
-    public function clear(): void { $this->cache = []; }
+    private array $preloaded = [];
 
-    private function cacheKey(Relate $relate, QueryBuilder $query, string $kind, bool $returnAsArray): ?string
+    public function clear(): void { $this->cache = $this->preloaded = []; }
+
+    /** 显式预取独立于按需缓存，只保留调用形状的快照和结果。 */
+    public function prime(Relate $relate, QueryBuilder $lookup, string $kind, bool $returnAsArray, string $connectionName, mixed $data): void
     {
-        if (!$relate->cacheResult) {
-            return null;
-        }
+        $this->preloaded[$this->fingerprint($relate, $lookup, $kind, $returnAsArray, $connectionName)] = $data;
+    }
+
+    private function fingerprint(Relate $relate, QueryBuilder $query, string $kind, bool $returnAsArray, string $connectionName): string
+    {
         return hash('sha256', serialize([
-            FastDb::getInstance()->selectConnection(),
+            $connectionName,
             $kind,
             $relate->targetEntity,
             $returnAsArray,
@@ -42,21 +47,27 @@ final class RelationLoader
         $value = $entity->{$relate->selfProperty} ?? null;
         $entity->queryLimit()->whereRequired($relate->targetProperty, $value);
         $query->get($tableName ?: $target->tableName(), $kind === 'one' ? 2 : null, $fields);
-        return [$target, $query, $returnAsArray, $this->cacheKey($relate, $query, $kind, $returnAsArray)];
+        $key = $relate->cacheResult || $this->preloaded !== []
+            ? $this->fingerprint($relate, $query, $kind, $returnAsArray, FastDb::getInstance()->selectConnection()) : null;
+        return [$target, $query, $returnAsArray, $key];
     }
 
     public function one(AbstractEntity $entity, Relate $relate, ?string $tableName, callable $execute, callable $reset, callable $readTotal): null|array|AbstractEntity
     {
         [$temp, $query, $returnAsArray, $cacheKey] = $this->prepare($entity, $relate, $tableName, 'one');
-        // array_key_exists 能识别已缓存的 null；命中后仍清理本次查询配置。
-        if ($cacheKey !== null && array_key_exists($cacheKey, $this->cache)) {
+        // 显式预取即使 cacheResult=false 也可读取，null 也是有效命中。
+        if ($cacheKey !== null && array_key_exists($cacheKey, $this->preloaded)) {
+            $reset();
+            return $this->preloaded[$cacheKey];
+        }
+        if ($relate->cacheResult && $cacheKey !== null && array_key_exists($cacheKey, $this->cache)) {
             $reset();
             return $this->cache[$cacheKey];
         }
         $ret = $execute($query)->getResult();
         $reset();
         if(empty($ret)){
-            if ($cacheKey !== null) {
+            if ($relate->cacheResult && $cacheKey !== null) {
                 $this->cache[$cacheKey] = null;
             }
             return null;
@@ -66,14 +77,14 @@ final class RelationLoader
             throw new RuntimeError($msg);
         }
         if($returnAsArray){
-            if ($cacheKey !== null) {
+            if ($relate->cacheResult && $cacheKey !== null) {
                 $this->cache[$cacheKey] = $ret[0];
             }
             return $ret[0];
         }
         // 关联加载的数据也应作为比较基准，避免未修改的字段被整行更新。
         $temp->setData($ret[0],true);
-        if ($cacheKey !== null) {
+        if ($relate->cacheResult && $cacheKey !== null) {
             $this->cache[$cacheKey] = $temp;
         }
         return $temp;
@@ -83,7 +94,11 @@ final class RelationLoader
     public function many(AbstractEntity $entity, Relate $relate, ?string $tableName, callable $execute, callable $reset, callable $readTotal): ListResult
     {
         [$temp, $query, $returnAsArray, $cacheKey] = $this->prepare($entity, $relate, $tableName, 'many');
-        if ($cacheKey !== null && array_key_exists($cacheKey, $this->cache)) {
+        if ($cacheKey !== null && array_key_exists($cacheKey, $this->preloaded)) {
+            $reset();
+            return $this->preloaded[$cacheKey];
+        }
+        if ($relate->cacheResult && $cacheKey !== null && array_key_exists($cacheKey, $this->cache)) {
             $reset();
             return $this->cache[$cacheKey];
         }
@@ -104,7 +119,7 @@ final class RelationLoader
         }
         $reset();
         $result = new ListResult($final,$total);
-        if ($cacheKey !== null) {
+        if ($relate->cacheResult && $cacheKey !== null) {
             $this->cache[$cacheKey] = $result;
         }
         return $result;

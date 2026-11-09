@@ -13,6 +13,7 @@ class Query
 
     // SQL 条件由 QueryBuilder 管理，输出筛选规则单独保存。
     private FieldSelection $selection;
+    private array $relations = [];
 
     public function __construct(
         private readonly AbstractEntity $entity
@@ -98,6 +99,27 @@ class Query
         return $this->selection->fields;
     }
 
+    /** 声明本次查询需要批量加载的关系方法；空数组清除声明。 */
+    public function withRelations(string|array $relations): Query
+    {
+        $names = is_string($relations) ? [$relations] : $relations;
+        foreach ($names as $name) {
+            if (!is_string($name) || preg_match('/\A[a-zA-Z_][a-zA-Z0-9_]*\z/D', $name) !== 1) {
+                throw new \InvalidArgumentException('Relations must be a list of method names');
+            }
+        }
+        foreach ($names as &$name) {
+            try { $name = (new \ReflectionMethod($this->entity, $name))->getName(); }
+            catch (\ReflectionException $error) { throw new RuntimeError('Unknown relation method: ' . $name, 0, $error); }
+        }
+        unset($name);
+        $this->relations = array_values(array_unique($names));
+        return $this;
+    }
+
+    /** @internal */
+    public function getRelations(): array { return $this->relations; }
+
     function groupBy(string $groupByField):Query
     {
         $this->builder()->groupBy($groupByField);
@@ -169,12 +191,27 @@ class Query
         return $copy;
     }
 
+    /** @internal 创建独立的游标分页 Query，保留输出配置和原模板。 */
+    public function forPageAfterId(string $column, mixed $lastId, int $size): Query
+    {
+        $builder = $this->builder();
+        if (!method_exists($builder, 'forPageAfterId')) {
+            throw new RuntimeError('chunkById requires QueryBuilder::forPageAfterId(); upgrade easyswoole/mysqli');
+        }
+        $copy = new Query($this->entity);
+        $copy->queryBuilder = $builder->forPageAfterId($column, $lastId, $size);
+        $copy->selection = clone $this->selection;
+        $copy->relations = $this->relations;
+        return $copy;
+    }
+
     /** 克隆实体时重新绑定所有者，同时复制 SQL 条件和输出配置。 */
     public function forEntity(AbstractEntity $entity): Query
     {
         $copy = new Query($entity);
         $copy->queryBuilder = $this->queryBuilder === null ? null : clone $this->queryBuilder;
         $copy->selection = clone $this->selection;
+        $copy->relations = $this->relations;
         return $copy;
     }
 

@@ -16,6 +16,7 @@ FastDb 是面向 Swoole 协程环境的 MySQL 数据访问库，组合连接池�
 | `Internal\FieldCodec` | 加载赋值转换、写入值转换；与序列化隐藏字段分别处理 |
 | `Internal\FieldSelection` | 保存字段白名单、隐藏字段和输出限制，不混入 SQL 构建状态 |
 | `Internal\RelationLoader` | 关联结果构造、唯一性检查及实体实例范围的关联缓存 |
+| `Internal\RelationPreloader` | 显式预加载时逐父捕获关联计划、分批查询，并回填实体缓存或附加数组结果 |
 
 `QueryResult` 和 `QueryStack` 的公开接口保持不变，测试会检查方法签名、参数名及公开属性。
 
@@ -66,8 +67,10 @@ FastDb 是面向 Swoole 协程环境的 MySQL 数据访问库，组合连接池�
 - 查询结果可返回实体、原始数组或支持遍历/计数/数组访问的 `ListResult`。
 - 条件、排序、连接、分组、分页、分块、聚合与 `FOR UPDATE`。
 - 实体只更新已变化的字段；成功写入后更新比较基准，支持同一对象连续修改和还原。
+- 数据库格式数组可通过 iterable 分批直接插入或 upsert，不逐行构造实体。
+- 选库作用域退出时恢复连接名；回调事务按实际连接管理提交、回滚及同连接嵌套加入。
 - 字段白名单、隐藏字段与可重复序列化的输出限制。
-- 插入、更新、删除、初始化钩子，以及显式一对一/一对多关联查询。
+- 插入、更新、删除、初始化钩子，以及一对一/一对多关联与可选批量预加载。
 - 全局/单次查询回调、耗时统计与协程级查询栈。
 - PHPUnit 13.4 测试入口，支持独立单元测试和真实数据库集成测试。
 
@@ -479,6 +482,35 @@ $entity->chunk(function (User $user): void {
 
 `chunk($callback, $chunkSize = 10)` 按 OFFSET 分页读取，每次回调接收一条记录，不是一个数组块。请提供稳定排序；遍历中删除记录或修改筛选条件可能改变后续页的偏移，不适合需要稳定游标的迁移任务。 `chunk()` 不主动请求总数统计，按本页条数判断是否继续；调用前显式开启的总数统计选项仍保留。
 
+回调返回严格的 `false` 时立即停止，不再交付本批剩余记录或查询后续批次；没有返回值或返回其他值时继续。`chunk()` 本身不返回累计处理条数。
+
+#### 按稳定键分块
+
+需要逐条更新待处理状态、删除记录或扫描较多数据时，可使用键集分页：
+
+```php
+$entity = new User();
+$entity->queryLimit()->where('status', 0);
+$processed = $entity->chunkById(function (User $user): void {
+    $user->status = 1;
+    $user->update();
+}, 100);
+
+echo $processed; // 已交付给回调的记录数。
+```
+
+`chunkById(callable $func, int $chunkSize = 10, ?string $column = null): int` 默认使用实体主键，也可通过第三个参数指定稳定、唯一、非 NULL 的整数或字符串列。`$column` 必须是实体已声明为 `Property` 的原始列名，不能填写 SQL 表达式或别名。无主键实体需要显式指定符合条件的列。该入口要求 mysqli 提供 `QueryBuilder::forPageAfterId()`。
+
+始终按该列 ASC 排序，从首批开始，再用“游标列 > 上一批最后的游标值”读取下一批；已有排序及页码偏移不决定遍历顺序和起点。每次回调接收一条实体；启用 `returnAsArray()` 时接收一条数组，与 `chunk()` 一致。
+
+回调返回严格的 `false` 时立即停止，返回的计数包含触发停止的这一条；没有返回值或返回其他值时继续。每页通过 FastDb 的统一执行入口查询，沿用 `all()` 的实体转换和输出规则，保留查询条件及查询回调，不自动开启事务或统计总数。方法结束或抛异常后清理本次查询配置。
+
+使用 `fields()` 时必须显式选中原始游标列，例如 `fields(['id', 'name', 'status'])`，不能只把游标列选为 `id AS cursor` 这样的别名；库不会为遍历悄悄扩大字段白名单。
+
+`hideFields()` 可以隐藏游标列，方法会在公开查询回调前从原始结果校验并保存游标和页大小，再转换实体或隐藏输出字段。因此隐藏游标、修改回调对象或在 `onQuery` 中改写交付数据，都不会改变翻页位置及原始页的结束判断。返回实体后持续隐藏字段仍沿用 `persistFieldLimit()` 的规则。游标缺失、为 NULL 或重复等无效结果会在该批业务回调前抛出 `UnexpectedValueException`。不要在数据库中修改用于本次遍历的游标列。
+
+查询结果必须具有唯一游标；使用 JOIN 时，也要保证连接结果中该列不重复。分组、HAVING、DISTINCT、UNION、子查询 FROM、行锁及显式总数统计不受支持。需要限制扫描范围时，可预先增加游标上界；方法本身不提供跨页的一致性快照。
+
 ### 计数和聚合
 
 ```php
@@ -585,21 +617,78 @@ $affected = User::fastDelete(function (QueryBuilder $query): void {
 
 实例 `update()` / `delete()` 用 `empty()` 检查主键值，因此值为 0 / `'0'` 的主键无法通过该检查；必要时使用带显式条件的快捷方法或底层构建器。
 
-### 批量插入
+### 批量直接写入
 
-当前实体没有 `insertAll()`。使用底层构建器：
+`fastInsertAll(iterable $rows, ?string $tableName = null, ?callable $onQuery = null, int $batchSize = 500): int|string` 把数据库格式的关联数组分批插入：
 
 ```php
-$result = FastDb::getInstance()->query(function (QueryBuilder $query): void {
-    $query->insertAll('users', [
-        ['name' => 'Alice', 'status' => 1, 'score' => 10],
-        ['name' => 'Bob', 'status' => 1, 'score' => 20],
-    ]);
-});
-$affected = $result->getAffectedRows();
+$affected = User::fastInsertAll([
+    ['name' => 'Alice', 'status' => 1, 'score' => 10],
+    ['score' => 20, 'name' => 'Bob', 'status' => 1], // 字段顺序可以不同。
+], batchSize: 500);
 ```
 
-底层批量写入不触发每个实体的钩子或属性转换，应先准备符合数据库格式的数据。
+输入可以是数组、Generator 或其他 iterable。每行必须是非空的数据库字段关联数组，全部输入跨批次也必须使用相同的字段集合；只重排键顺序可以，缺字段或多字段会报错，不会自动补 null。每行按迭代读取时的标量值进入缓冲，后续修改行内标量引用不会改写已读取的行。JSON 等属性应先转成数据库可写的值；不会对每行应用实体转换器、`Property::assignCall` / `toValue` 回调或插入钩子，也不回填自增 ID 或实体比较基准。
+
+#### 使用生成器控制批次内存
+
+```php
+function userRows(): \Generator
+{
+    for ($i = 1; $i <= 2000; $i++) {
+        yield ['name' => 'User-' . $i, 'status' => 1, 'score' => $i];
+    }
+}
+
+$affected = User::fastInsertAll(userRows(), tableName: 'users', batchSize: 500);
+```
+
+框架只缓冲当前批次，不会先把整个生成器转成数组，也不逐行创建模型。`batchSize` 按行数控制，默认 500；小于或等于 0 会抛出 `InvalidArgumentException`。参数有效的空输入返回 0，不构造模型、不执行 SQL。非空有效输入省略表名时，在首次写入前仅初始化一个模型来取得表名，这个模型自身的默认初始化与 `OnInitialize` 仍会执行；显式给出有效表名则不构造模型。
+
+#### 主键或唯一键冲突时更新
+
+`fastUpsert(iterable $rows, array $updateColumns, ?string $tableName = null, ?callable $onQuery = null, int $batchSize = 500): int|string` 使用同样的分批规则。冲突由数据库已有的主键或唯一索引决定，不会自行选择业务字段作为唯一键：
+
+```php
+$affected = User::fastUpsert([
+    ['id' => 1, 'name' => 'Alice', 'score' => 10],
+    ['id' => 2, 'name' => 'Bob', 'score' => 20],
+], ['name', 'score'], batchSize: 500);
+
+// 列表项使用本次输入的对应列；关联项使用固定值或 mysqli Expression。
+$affected = User::fastUpsert([
+    ['id' => 1, 'name' => 'Alice', 'score' => 10],
+], [
+    'name',
+    'status' => 1,
+    'score' => QueryBuilder::rawExpression('`users`.`score` + ?', [5]),
+], tableName: 'users', batchSize: 500);
+```
+
+`$updateColumns` 沿用 mysqli 的 `upsert()` 规则；列表列名需存在于每条输入行中。空更新列会抛出 `InvalidArgumentException`，即使 `$rows` 为空也不会接受。固定值及表达式应用于发生冲突的行，插入新行仍使用输入值或数据库默认值。需要逐实体转换、钩子和主键回填时，继续使用实体 `insert($updateDuplicateCols)`。
+
+返回值是各批数据库 `affectedRows` 的合计，不是输入行数或自增 ID 列表。upsert 的插入、实际更新和未改变值可能产生不同的影响行数，应按数据库语义理解；合计超出 PHP 整数范围时返回十进制字符串，保留精度。
+
+#### 回调、连接与失败处理
+
+每批使用 FastDb 统一执行入口，触发全局查询日志及传入的 `$onQuery`；该回调收到本批的 `QueryResult`，不是整次批量操作的累计结果。整次操作固定入口选中的连接；默认表名需要模型初始化时，以该初始化和表名求值后选中的连接为准。生成器或回调里切换选库的可见副作用仍保留，但不会让后续批次改写其他数据库。
+
+方法不自动开启事务，也不自动重试。后续批次的字段校验、生成器、SQL 或回调发生异常时，前面的批次可能已经成功；查询成功后的回调异常也不代表该批 SQL 已回滚。需要整次原子性时，使用同一连接的显式事务，例如：
+
+```php
+$db = FastDb::getInstance();
+$db->begin();
+$connection = $db->currentConnection();
+try {
+    $affected = User::fastInsertAll(userRows(), tableName: 'users', batchSize: 500);
+    $db->commit($connection);
+} catch (\Throwable $error) {
+    $db->rollback($connection);
+    throw $error;
+}
+```
+
+显式保存连接可以保证生成器或回调改变当前选库后，仍对实际写入连接提交或回滚；提交结果不明时仍需按事务章节说明核实。若调用前已有事务，应由该事务的拥有者决定提交或回滚。需要更多 SQL 构建选项时，仍可通过 `FastDb::query()` 使用底层 `QueryBuilder::insertAll()` / `upsert()`。
 
 ## 字段筛选与序列化
 
@@ -615,7 +704,7 @@ $entity->queryLimit()->fields(['id', 'name'], true);
 $rows = $entity->all()->list();
 ```
 
-`fields($fields = null, $returnAsArray = false)` 同时控制查询列和返回模式。`returnAsArray()` 也可单独开启数组模式；它返回数据库行，不执行实体转换回调。
+`fields($fields = null, $returnAsArray = false)` 同时控制查询列和返回模式。`returnAsArray()` 也可单独开启数组模式；未启用关联预加载时，它返回数据库行，不执行实体转换回调。显式使用 `withRelations()` 时，为读取关系方法中的父字段，会额外构造临时父模型，详见批量预加载章节；最终数组仍保留数据库原始值。
 
 ### 隐藏字段与限制传播
 
@@ -976,7 +1065,7 @@ class AuditedUser extends User
 
 ## 关联查询
 
-关联是按需执行的独立查询，不自动 eager loading，也不自动通过 JOIN 加载。
+关联默认按需执行独立查询。使用 `queryLimit()->withRelations()` 可以显式批量预加载；未声明预加载时，不会额外查询关联表。
 
 ### 定义一对一和一对多关联
 
@@ -1028,6 +1117,79 @@ if ($user !== null) {
 一对一未命中时返回 `null`；一对多未命中时返回包含空列表的 `ListResult`。不启用总数计算时，`totalCount()` 返回 `null`。一对一查询若匹配多条记录会抛出 `RuntimeError`，应让数据满足预期的一对一关系。
 
 关联查询正常执行后会清理当前实体的查询配置。下一次关联查询需要重新设置过滤、排序、分页和字段限制。
+
+### 批量预加载关联
+
+列表中需要访问多个父实体的同类关联时，在父查询上声明关系方法名：
+
+```php
+$entity = new RelatedUser();
+$entity->queryLimit()->where('status', 1)->orderBy('id', 'ASC')
+    ->withRelations(['profile', 'orders']);
+$users = $entity->all();
+
+foreach ($users as $user) {
+    $profile = $user->profile(); // 实体|null，复用本次预加载结果。
+    $orders = $user->orders();   // ListResult，复用本次预加载结果。
+}
+```
+
+`withRelations(string|array $relations)` 接受单个方法名或方法名列表，不接受闭包配置或点分嵌套路径。方法名会去重并规范为声明时的大小写；再次调用会覆盖本次声明，`withRelations([])` 清除声明。关系方法须为标注了 `#[Relate]` 的 public、非 static 方法，且不能有必填参数。未标注的普通业务方法不会被当作关系方法执行。
+
+实体模式会把结果注入各父实体的关联缓存，之后相同查询形状的关系 getter 可直接命中，即使 `Relate::cacheResult` 为 false 也有效。一对一仍返回实体或 null，匹配多条仍抛出 `RuntimeError`；一对多仍返回 `ListResult`。关系方法自己配置 `fields(..., true)` 时，继续按原有规则返回数组或包含数组的 `ListResult`。父实体的 `toArray()` 不会自动把关系变成字段，需要输出时显式调用 getter。
+
+#### 返回数组并附加关联
+
+```php
+$entity = new RelatedUser();
+$entity->queryLimit()->fields(['id', 'name'], true)->hideFields('id')
+    ->withRelations(['profile', 'orders']);
+$rows = $entity->all()->list();
+
+foreach ($rows as $row) {
+    $profileRow = $row['profile']; // 原始行数组|null。
+    $orderRows = $row['orders'];   // 原始行数组列表；没有命中时为 []，不是 ListResult。
+}
+```
+
+附加键使用关系方法的声明名；如果父数组已经有同名键，会明确报错，不覆盖原字段。数组模式下父行和关联行保持数据库表示，例如 JSON 字段仍是 JSON 字符串，不会把转换对象放进返回数组。
+
+无论返回实体还是数组，父关联键 `selfProperty` 必须以原列名被 SELECT 选中；不能只选择别名，也不会自动扩大父字段白名单。实体模式不能用 `hideFields()` 隐藏该键，因为后续 getter 需要真实父键；数组模式可以隐藏，库使用隐藏前的原始行完成关联匹配。关系方法读取的其他 `$this` 字段也应由父查询选中。目标关系的 `fields()` 不必选中 `targetProperty`：内部匹配辅助列会被移除，不进入关联输出。
+
+数组结果启用预加载时，会为每一条父行临时构造父模型，以便关系方法读取 `$this` 字段。因此会执行父模型初始化、输入赋值和相应转换；临时模型不进入返回结果。这部分开销只发生在显式 `withRelations()` 路径，未启用预加载的数组查询仍不会逐行构造实体。
+
+#### 方法内配置与查询数量
+
+关系入口前设置的 WHERE、ORDER、字段列表，以及显式传给 `relateOne()` / `relateMany()` 的 `Relate` 和表名会按实际调用捕获。例如：
+
+```php
+class PreloadUser extends RelatedUser
+{
+    #[Relate(targetEntity: Order::class, targetProperty: 'userId', selfProperty: 'id')]
+    public function activeOrders()
+    {
+        $this->queryLimit()->where('status', 1)->orderBy('id', 'DESC')
+            ->fields(['id', 'status'], true);
+        return $this->relateMany();
+    }
+}
+
+$entity = new PreloadUser();
+$entity->queryLimit()->withRelations('activeOrders');
+$users = $entity->all()->list();
+```
+
+库对每个父实体调用关系方法，在进入 `relateOne()` / `relateMany()` 时截获计划，不执行逐父关联 SQL。不会只采样第一条父记录：关系方法依赖父字段设置不同条件、目标表或连接时，会按实际计划分组。目标模型仍按普通关联规则初始化，默认 `tableName()` 或显式覆盖表名在该父对象的关联入口确定，连接名在目标初始化和表名求值后记录；支持依赖当时上下文的动态分表、分库，不会按类名跨父对象复用表名。相同连接、目标实体、关联类型、表名、条件参数、排序、字段和返回形式的计划可以合并批查。
+
+常见固定关系、每种关系不超过 250 个唯一父关联键时，通常是 1 条父查询加每种关系 1 条批查询；例如 100 个父实体同时预加载 profile 和 orders，通常为 3 条 SQL。更大的结果按每个兼容计划、每 250 个去重父键分批；相同计划还可合并。若动态条件让每个父对象都产生不同计划，关联查询仍可能达到 N 条，不保证任意关系都固定为一条批 SQL。父分页的额外总数查询、业务方法或钩子自己执行的 SQL 另计；空父列表不执行关联 SQL。
+
+方法应配置查询后直接返回关联结果，且不能捕获并吞掉关联入口异常。预加载取得的是 `relateOne()` / `relateMany()` 的原始关系结果；关系入口后的自定义结果转换不用于组装数组附加值。实体之后显式调用 getter 时，wrapper 自身的后处理仍按原方法执行。
+
+首版不支持关系方法内的 limit/page、GROUP BY、HAVING、DISTINCT、UNION、子查询 FROM、行锁或总数统计；这些形状会明确报错，不能把全部父对象共用的 LIMIT 当作每个父对象的限制。父列表本身可以分页。`all()` 预加载当前列表，`chunk()` / `chunkById()` 只预加载当前批次，在逐条业务回调前完成。
+
+预加载声明只作用于本次查询，执行后会被消费；查询模板或实体克隆会保留尚未消费的声明，并独立复制查询配置。实体缓存按连接、父键、实际 SQL、参数和返回模式匹配，更改条件、父键、目标表或实体/数组模式不会错误命中旧结果。`clearRelationCache()` 同时清除预加载结果和普通关联缓存，之后 getter 恢复查询；数组附加值已经是普通数组，不受该方法影响。`cacheResult: false` 只关闭按需查询缓存，不会禁用显式预加载的结果。缓存不会自动感知外部写入或事务结果，长生命周期实体应按需清理。
+
+`AbstractEntity::__setRelationData(RelationPlan $plan, QueryBuilder $lookup, string $connectionName, mixed $data): static` 标记为 `@internal`，由预加载器注入与查询形状绑定的结果，不是应用层赋值入口；应用通过 `withRelations()` 使用预加载，无需直接构造这些参数或调用该方法。
 
 ### 字段选择与隐藏字段
 
@@ -1114,7 +1276,7 @@ if ($user !== null) {
 
 `null` 和空列表同样会缓存；查询异常及一对一匹配多条的异常不会缓存。命中缓存时仍清理本次查询配置，但不会触发查询日志回调。不同父实体实例不共享缓存。
 
-返回的关联实体和 `ListResult` 复用同一对象，修改对象也会影响后续缓存返回值。缓存不会自动感知其他查询、关联写入、事务提交或回滚导致的数据变化；需要最新数据时调用 `clearRelationCache()`，或保持 `cacheResult: false`。长生命周期实体应按需清理缓存。
+返回的关联实体和 `ListResult` 复用同一对象，修改对象也会影响后续缓存返回值。缓存不会自动感知其他查询、关联写入、事务提交或回滚导致的数据变化；需要最新数据时调用 `clearRelationCache()`。不使用显式预加载时，也可保持 `cacheResult: false` 关闭按需查询缓存。长生命周期实体应按需清理缓存。
 
 ### 显式指定关联字段和目标表
 
@@ -1123,6 +1285,7 @@ if ($user !== null) {
 ```php
 class RelatedUser extends User
 {
+    #[Relate(targetEntity: Order::class, targetProperty: 'userId', selfProperty: 'id')]
     public function archivedOrders()
     {
         return $this->relateMany(
@@ -1139,7 +1302,7 @@ class RelatedUser extends User
 
 覆盖表名只改变查询目标表，不会切换数据库连接；目标表结构需要与目标实体字段匹配。
 
-遍历大量父实体逐一加载关联会产生多次 SQL；需要批量加载时可用底层查询或自行组织 `IN` 查询。
+遍历大量父实体逐一加载关联会产生多次 SQL；可使用上述 `withRelations()` 批量预加载，复杂的自定义汇总仍可使用底层查询。
 
 ## 事务与行锁
 
@@ -1172,6 +1335,8 @@ try {
 | `commit($client = null, $flags = TransactionCompletionFlags::NoChainNoRelease, $timeout = null)` | 默认提交当前连接；没有连接/没有事务时返回 true |
 | `rollback($client = null, $flags = TransactionCompletionFlags::NoChainNoRelease, $timeout = null)` | 默认回滚当前连接；没有连接/没有事务时返回 true |
 | `isInTransaction($connection = null)` | 读取当前或指定连接的事务状态 |
+
+上表描述手动事务入口；使用下面的 `transaction()` 回调事务时，作用域内的同连接事务边界由 helper 管理，不允许再手动调用 begin/commit/rollback。
 
 ### 指定连接、flags 和超时
 
@@ -1253,6 +1418,150 @@ InnoDB 死锁错误（1213）会自动回滚整个事务。连接在收到该错
 
 事务操作成功后先同步事务状态，再执行日志回调。日志回调异常仍向调用方传播；尤其是 `commit()` 的日志回调抛异常时，数据库已经提交，调用方不能据此认定提交失败或直接重试。
 
+### 回调事务 transaction
+
+`transaction(callable $callback, TransactionStartFlags $flags = TransactionStartFlags::None, ?float $timeout = null): mixed` 在当前连接上执行回调事务。回调接收当前 `FastDb` 实例，也可使用不声明参数的闭包；正常完成时返回回调的原始返回值，包括 false、null 或对象。
+
+```php
+$db = FastDb::getInstance();
+$updated = $db->transaction(function (FastDb $db): bool {
+    $user = User::findRecord(1, selectForUpdate: true);
+    if ($user === null) {
+        throw new RuntimeException('User not found');
+    }
+    $user->score += 10;
+    if (!$user->update()) {
+        throw new RuntimeException('Update failed');
+    }
+    return true;
+}, flags: TransactionStartFlags::ReadWrite, timeout: 1.0);
+```
+
+入口连接尚无事务时，本层拥有事务：先开始，回调正常返回后提交；回调抛异常时回滚并继续抛出原异常。回调返回严格的 `false` 也是正常返回值，仍会提交，不表示自动回滚。需要取消业务操作时应抛异常，不能靠返回 false 触发回滚。
+
+#### 同连接嵌套与 rollback-only
+
+入口连接已有事务时，`transaction()` 加入该事务，不重复发送 BEGIN，也不提前 COMMIT，不建立 savepoint。加入已有事务时只能使用默认的 `flags: TransactionStartFlags::None`、`timeout: null`；传入其他 flags 或非 null timeout 会抛出 `InvalidArgumentException`，不会重新配置外层事务。
+
+同连接内层回调抛异常时，该事务代次被标记为 rollback-only。即使业务在外层捕获该异常，最外层拥有者也会回滚并抛出明确异常，不会提交剩余写入：
+
+```php
+$db->transaction(function (FastDb $db): void {
+    try {
+        $db->transaction(function (FastDb $db): void {
+            $db->rawQuery('UPDATE users SET score = score + 1 WHERE id = 1');
+            throw new DomainException('Cancel this operation');
+        });
+    } catch (DomainException $error) {
+        // 业务可处理异常，但捕获它不会清除 rollback-only。
+    }
+}); // 外层不能提交：回滚并抛异常。
+```
+
+也可以加入作用域外手工开启的事务；成功的回调不会替手工事务提交，由原拥有者负责结束：
+
+```php
+$db->begin();
+$connection = $db->currentConnection();
+try {
+    $result = $db->transaction(function (FastDb $db): mixed {
+        return $db->rawQuery('UPDATE users SET score = score + 1 WHERE id = 1');
+    });
+    $db->commit($connection);
+} catch (Throwable $error) {
+    $db->rollback($connection);
+    throw $error;
+}
+```
+
+如果加入手工事务的回调失败，该手工事务同样变成 rollback-only。之后手工 `commit()` 会被拒绝，事务仍保持活动状态供原拥有者显式 `rollback($connection)`；不会因为 helper 已返回就允许提交。完整回滚后，下一代事务不继承这个标记。实体 `update()` 的比较基准也按现有回滚规则恢复，属性值本身不回退。
+
+#### 绑定实际连接与 A → B → A
+
+`transaction()` 固定入口的实际 Connection、事务上下文及代次，结束时始终操作该连接。回调改变选库不会让 helper 提交错误的数据库；但该方法本身不恢复选库副作用，也不会把回调中的全部 SQL 强制路由到入口连接。查询仍使用当时选中的连接，需要自动恢复选库时配合 `withConnection()`。
+
+假设 a、b 已注册，并且都拥有示例 users 表：
+
+```php
+$db->withConnection('a', function (FastDb $db): void {
+    $db->transaction(function (FastDb $db): void {
+        $db->rawQuery('UPDATE users SET score = score + 1 WHERE id = 1'); // A。
+        $db->withConnection('b', function (FastDb $db): void {
+            $db->transaction(function (FastDb $db): void {
+                $db->rawQuery('UPDATE users SET score = score + 1 WHERE id = 1'); // B。
+                $db->withConnection('a', function (FastDb $db): void {
+                    $db->transaction(function (FastDb $db): void {
+                        $db->rawQuery('UPDATE users SET score = score + 1 WHERE id = 2');
+                    }); // 回到原 A 事务，只加入，不再次开始或提前提交。
+                });
+            }); // B 独立提交。
+        });
+    }); // A 的最外层拥有者提交。
+});
+```
+
+- A → B → A 中，第二次进入 A 会找到仍活动的原 A 事务，不把它当作新事务。
+- 只发生在 B 的异常若已被 A 回调捕获，不会把 A 标为 rollback-only；B 自己回滚，A 可继续完成。
+- 如果异常来自重新加入 A 的内层回调，A 会被标记为 rollback-only，即使 B 或最外层业务捕获异常也不能提交 A。
+- B 已独立提交后，A 随后失败或回滚不会撤销 B。两个连接没有分布式事务协调，也没有自动补偿。
+
+#### flags、超时与异常
+
+新事务拥有者使用 `$flags` 开始事务，枚举与上面的手动 `begin()` 相同。`$timeout` 必须是有限的正数；null 使用配置值。它分别限制本层实际发送的开始、提交、回滚控制 SQL，每条都有自己的单次预算，不是 PHP 回调或整个事务的累计期限。回调里的业务 SQL 仍使用各自查询参数或连接配置；连接池等待也不包含在这个控制 SQL 超时中。
+
+开始事务失败时不会运行回调。回调业务异常优先于回滚清理异常；helper 不会因清理失败而用另一个错误覆盖原业务异常。若 COMMIT 已成功而查询观察回调再抛异常，不会追加 ROLLBACK，也不能把异常视为数据尚未提交。提交超时、断线等结果不明场景仍需核实实际业务状态，不自动重试。
+
+拥有者回滚失败时，会尝试关闭实际连接，仍优先抛出原业务或提交异常。如果扩展连接的 close 也无法确认结束、原事务代次仍活动，会把该作用域标记为 unusable。它与普通 rollback-only 不同：普通 rollback-only 在 helper 退出后仍允许原拥有者发送完整 ROLLBACK；unusable 表示清理结果不确定，所有后续 SQL 都被拒绝，不能隐式重连后进入自动提交。必须显式 close 成功，或通过回收使该连接对象被淘汰，再取得可用连接继续。unusable 只是当前作用域上的一个布尔状态，不维护全局失败历史。
+
+作用域内连接被关闭、被底层路径回收、服务端回滚或上下文换代时，会检测为作用域失效。后续经受保护入口的 SQL 会被阻止，helper 不会误提交重新开始的另一代事务；这不意味着能够撤回已经通过更底层接口提交的内容。
+
+活动作用域内的 `recycleContext(false)` 和 `reset()` 会在回收或重置连接前被拒绝；`checkTransaction: false` 不能跳过这层保护，避免回调重借连接后落入自动提交。协程退出时仍由 defer 清理未结束的受管会话，再进行连接回收。
+
+#### 作用域内的 SQL 边界
+
+活动 `transaction()` 作用域内，同连接的 BEGIN/START TRANSACTION、COMMIT、ROLLBACK、SAVEPOINT/RELEASE，以及会隐式提交的语句由本地 guard 拒绝，抛出 `EasySwoole\FastDb\Exception\RuntimeError`。普通调用 `FastDb::begin/commit/rollback` 或对应 Connection 事务方法也不能绕过；helper 自身的开始和结束由内部拥有者路径执行。
+
+检查采用保守的语句白名单，而不是完整的 MySQL SQL 解析器：
+
+| 语句类别 | 活动作用域内的规则 |
+| --- | --- |
+| 数据操作与读取 | 允许 SELECT、INSERT、UPDATE、DELETE、REPLACE、WITH、DO；WITH 仍需遵循数据库支持的 CTE 语法 |
+| 查询说明与元数据读取 | 允许 SHOW、DESCRIBE/DESC、EXPLAIN、VALUES、TABLE |
+| SET | 允许不涉及危险系统项的 SET；赋值左侧涉及 autocommit、transaction、password，以及 transaction_isolation / transaction_read_only / tx_isolation / tx_read_only 时拒绝，包括 SESSION/GLOBAL 等限定及引用标识符形式 |
+| SQL mode、字符集与排序规则 | 拒绝 SET sql_mode、SET NAMES / CHARACTER SET / CHARSET，以及对 character_set_client / character_set_connection / character_set_results / collation_connection 的赋值，避免在作用域中改变 SQL 识别规则 |
+| 手动事务和 savepoint | 拒绝 BEGIN、START TRANSACTION、COMMIT、ROLLBACK，包括 ROLLBACK TO SAVEPOINT，以及 SAVEPOINT、RELEASE SAVEPOINT |
+| DDL、权限和表锁 | 拒绝 CREATE、ALTER、DROP、TRUNCATE、RENAME、GRANT、REVOKE、LOCK/UNLOCK 等；即使某些 TEMPORARY 表操作不按普通 DDL 隐式提交，也不开放这个例外 |
+| 动态执行及其他管理语句 | 拒绝 CALL、PREPARE、EXECUTE、DEALLOCATE、XA，以及 FLUSH、RESET、ANALYZE、OPTIMIZE、REPAIR、INSTALL/UNINSTALL 等不在白名单内的命令 |
+
+SET 检查区分读值和赋值：`SET @saved = @@autocommit`、`SET @saved_mode = @@sql_mode` 只是读取，普通用户变量也可使用，包括 `@sql_mode`、`@names` 这样的变量名；修改对应系统项才会被拒绝。不要把会改变事务边界或 SQL 识别规则的 SQL 放进回调事务，例如建表、修改表结构、切换 autocommit、SQL mode 或字符集，应在事务外安排。
+
+SET 原文中依赖反斜杠转义引号的写法，在不同 SQL mode 下可能有不同含义，会明确报错；即使只是设置普通用户变量，也应把动态值改用绑定参数：
+
+```php
+$value = "O'Reilly";
+$query = new QueryBuilder();
+$query->raw('SET @x = ?', [$value]);
+$db->query($query);
+```
+
+这条反斜杠限制针对 SET 原文，普通 SELECT/INSERT 等语句中的字符串不会因此被额外拒绝；动态数据仍应使用参数化查询。
+
+每次只接受一条语句，允许结尾的单个分号，不允许多语句拼接。托管事务内拒绝所有 MySQL `/*! ... */` 和 MariaDB `/*M! ... */` 执行注释，因为不同服务端或版本可能跳过注释并改变实际首命令，例如 `/*!99999 SELECT */ COMMIT`。普通注释和 optimizer hint `/*+ ... */` 仍可使用；未启用托管事务时的查询行为不变。字符串中的关键字不会被当作事务命令；未闭合引号或注释会报错。
+
+外部手工事务因加入失败而被标记为普通 rollback-only、未标记 unusable 且已没有活动 helper 时，允许原拥有者发送完整 ROLLBACK 做清理；不能用 COMMIT、重新开始或 savepoint 局部回滚绕过标记。
+
+通过 `FastDb::query(QueryBuilder)` 发起的标准参数化查询仍受保护。限制的是绕过查询入口直接执行 Statement（包括进入作用域前已经准备好的 Statement），或直接使用 `mysqlClient()` 等底层协议对象；不要在作用域内使用这些逃生口。这些路径无法提供同样的发送前检查，事务作用域也不是任意 SQL 的执行沙箱；即使事后检测到事务代次改变，也不能追回已经发生的提交。
+
+### 与 invoke 的区别
+
+| 入口 | 回调参数 | 自动管理的范围 |
+| --- | --- | --- |
+| `withConnection()` | FastDb | 临时连接名，退出恢复；不借还连接，不开始或结束事务 |
+| `transaction()` | FastDb | 入口实际连接的事务；同连接嵌套加入，不恢复回调选库 |
+| `invoke()` | Connection | 仅归还本层自己借出的连接；不自动开始事务 |
+
+`invoke()` 原有行为不变，也不因为增加了两个作用域入口而改变嵌套借还规则。
+
 ## 多数据库与连接生命周期
 
 ### 注册和选择连接
@@ -1275,6 +1584,41 @@ try {
 
 连接选择按协程保存。实体没有自身绑定的连接名，所有实体查询使用 `FastDb::getInstance()` 当前选择的连接；使用局部 `new FastDb()` 不会改变实体所使用的单例。
 
+### 作用域选库 withConnection
+
+`withConnection(string $name, callable $callback): mixed` 临时选择连接名，并在 try/finally 中恢复进入前的名字：正常返回、回调抛异常、内部又切换其他连接时都恢复。回调接收该 `FastDb` 实例，也可使用无参闭包，返回值原样返回，包括 false 和 null。
+
+```php
+$db = FastDb::getInstance();
+$rows = $db->withConnection('reporting', function (FastDb $db): array {
+    return User::findAll(['status' => 1], returnAsArray: true);
+});
+// 回到调用前的连接名。
+
+$db->withConnection('primary', function (FastDb $db): void {
+    $db->withConnection('reporting', function (FastDb $db): void {
+        // 当前为 reporting。
+    });
+    // 内层退出后回到 primary。
+}); // 外层退出后回到最初的连接名。
+```
+
+`$name` 必须有已注册的配置，或当前协程已持有该名称的连接；完全未知的名字会在执行回调前被拒绝。空字符串 `''` 和 `'0'` 不是合法作用域连接名。配置存在不代表已连接或数据库一定可用；withConnection 本身不进行连接探测。
+
+该方法自己不借连接、不回收连接、不创建事务，也不提交或回滚已有事务。回调里的查询会按需使用现有连接池流程；只改变选库、不执行 SQL 的回调不会因此创建数据库连接。如果回调手工开始事务，退出选库作用域不会自动结束它；需要回调事务管理时显式调用 `transaction()`。
+
+两个作用域可以组合，例如临时选择 primary，再执行其回调事务：
+
+```php
+$value = $db->withConnection('primary', function (FastDb $db): mixed {
+    return $db->transaction(function (FastDb $db): mixed {
+        return User::fastUpdate(1, ['status' => 1]);
+    });
+});
+```
+
+新事务的拥有层正常返回时提交，加入已有事务的层不提前提交；返回 false 不表示回滚。选库作用域在事务成功或失败后都恢复原名字。其他协程的连接选择不受影响。
+
 ### 提前归还
 
 ```php
@@ -1290,13 +1634,13 @@ $rows = $db->invoke(function (Connection $connection): array {
 ```php
 $db->currentConnection(); // 当前选中连接的 Connection|null，不主动创建连接。
 $db->recycleContext(); // 先检查全部连接；存在活动事务则抛异常，且不回收任何连接。
-$db->recycleContext(false); // 跳过事务检查，回收全部连接；未提交事务由连接回收流程清理。
-$db->reset(); // 重置所有已创建连接池，清理连接池定时器。
+$db->recycleContext(false); // 作用域外可跳过普通事务检查；活动 transaction() 作用域内仍拒绝。
+$db->reset(); // 重置连接池和定时器；存在活动 transaction() 作用域时拒绝。
 ```
 
-`recycleContext()` 的事务检查覆盖当前协程的全部连接名。只要任意连接的事务尚未结束，就抛出 `RuntimeError`，不回收任何连接，也不清理上下文或查询栈。正常情况下先提交或回滚，再调用默认回收。明确需要清理未结束事务时使用 `recycleContext(checkTransaction: false)`；这只是跳过检查，连接回收流程仍会回滚未提交事务，不会把活动事务直接交给下一位使用者。
+`recycleContext()` 的事务检查覆盖当前协程的全部连接名。只要任意连接的事务尚未结束，就抛出 `RuntimeError`，不回收任何连接，也不清理上下文或查询栈。正常情况下先提交或回滚，再调用默认回收。作用域外明确需要清理未结束的手动事务时，可使用 `recycleContext(checkTransaction: false)`；它只跳过普通事务检查，连接回收流程仍会回滚未提交事务。当前协程任意连接仍被活动 `transaction()` 作用域拥有时，无论 checkTransaction 的值是什么都提前拒绝回收，不能靠强制回收重借新连接。
 
-`reset()` 用于关闭、测试或重新初始化阶段，不是正常请求结束的替代动作；应先归还上下文连接，并避免还有协程使用连接池时调用。
+`reset()` 用于关闭、测试或重新初始化阶段，不是正常请求结束的替代动作；应先归还上下文连接，并避免还有协程使用连接池时调用。它会检查该 FastDb 实例已登记的各协程连接，只要存在活动 `transaction()` 作用域，就在重置池前抛出 `RuntimeError`。
 
 ## 原始 SQL 与底层构建器
 
@@ -1564,9 +1908,12 @@ $config = ConfigModel::findRecord(
 | `update()` / `delete()` | 按对象主键更新/删除；bool |
 | `fastUpdate($limit, array $data, $tableName, $onQuery)` | 直接更新；影响行数 |
 | `fastDelete($limit, $tableName, $onQuery)` | 直接删除；影响行数 |
+| `fastInsertAll(iterable $rows, ?string $tableName = null, ?callable $onQuery = null, int $batchSize = 500)` | 分批直接插入；合计影响行数 int\|string |
+| `fastUpsert(iterable $rows, array $updateColumns, ?string $tableName = null, ?callable $onQuery = null, int $batchSize = 500)` | 主键/唯一键冲突时更新；合计影响行数 int\|string |
 | `count($field = '*', $group = null)` | 整数或多列计数数组 |
 | `sum/avg/max/min($cols, $group = null, $force = true)` | 数字或多列聚合数组 |
-| `chunk(callable $func, int $chunkSize = 10)` | OFFSET 分页逐条回调 |
+| `chunk(callable $func, int $chunkSize = 10)` | OFFSET 分页逐条回调；false 停止，不返回累计条数 |
+| `chunkById(callable $func, int $chunkSize = 10, ?string $column = null): int` | 按稳定唯一列 ASC 键集分页；返回已交付条数 |
 | `toArray(bool $filterNull = false): array` | 属性转换并筛选输出 |
 | `jsonSerialize()` | 使用 toArray 输出 |
 | `setOnQuery(?callable $call)` | 当前实体查询回调；返回实体 |
@@ -1588,6 +1935,7 @@ $config = ConfigModel::findRecord(
 | `hideFields(array\|string $fields)` | 隐藏字段 |
 | `persistFieldLimit(bool $enabled = true)` | all() 子实体输出限制传播 |
 | `getFields()` / `getHideFields()` / `isPersistFieldLimit()` | 读取限制 |
+| `withRelations(string\|array $relations): Query` | 本次 all/chunk/chunkById 批量预加载关系；空数组清除声明 |
 | `func(callable $func)` | 操作底层构建器 |
 | `selectForUpdate()` | 添加行锁查询 |
 | `returnEntity()` | 返回发起查询的实体 |
@@ -1603,18 +1951,20 @@ $config = ConfigModel::findRecord(
 | `addDb(Config $config, ?string $name = null)` | 注册配置；返回管理器 |
 | `getConfig(string $name = 'default')` | Config 或 false |
 | `selectConnection(?string $name = null)` | 设置连接名时返回管理器；省略时返回名字 |
+| `withConnection(string $name, callable $callback): mixed` | 临时选库并恢复；回调接收 FastDb，不借还连接或改变事务 |
 | `testDb(string $name = 'default')` | 检查连接，成功 true，失败异常 |
 | `query(QueryBuilder\|callable $query, ?float $timeout = null)` | 构建器查询；QueryResult |
 | `rawQuery(string $sql, ?float $timeout = null)` | 原始 SQL；QueryResult |
 | `begin(?Connection $client = null, TransactionStartFlags $flags = TransactionStartFlags::None, ?float $timeout = null)` | 开始事务；bool |
 | `commit(?Connection $client = null, TransactionCompletionFlags $flags = TransactionCompletionFlags::NoChainNoRelease, ?float $timeout = null)` | 提交事务；bool |
 | `rollback(?Connection $client = null, TransactionCompletionFlags $flags = TransactionCompletionFlags::NoChainNoRelease, ?float $timeout = null)` | 回滚事务；bool |
+| `transaction(callable $callback, TransactionStartFlags $flags = TransactionStartFlags::None, ?float $timeout = null): mixed` | 回调事务；同连接加入，异常标记 rollback-only；返回回调值 |
 | `isInTransaction(?Connection $connection = null)` | bool |
 | `invoke(callable $call)` | 执行并归还连接；返回回调值 |
 | `currentConnection()` | 当前 Connection 或 null |
-| `recycleContext(bool $checkTransaction = true)` | 默认存在活动事务时整体拒绝回收并抛异常；传 false 跳过检查 |
+| `recycleContext(bool $checkTransaction = true)` | 默认活动事务时拒绝回收；false 只跳过普通检查，活动 transaction() 作用域始终拒绝 |
 | `preConnect()` | 预热各连接池 |
-| `reset()` | 重置全部连接池 |
+| `reset()` | 重置全部连接池；存在活动 transaction() 作用域时拒绝 |
 | `setOnQuery(callable $call)` | 设置全局回调；返回管理器 |
 | `isEnableQueryStack(bool $enabled)` | 开关记录；返回管理器 |
 | `getQueryStack(?int $index = null)` | 整栈、单项或 null |
@@ -1644,6 +1994,7 @@ composer test
 
 ```bash
 php tests/run.php --filter TransactionTest --display-all-issues
+php tests/run.php --filter ScopeIntegrationTest --display-all-issues
 php tests/run.php --list-tests
 php tests/run.php --log-junit ./test-results.xml
 ```
@@ -1658,6 +2009,38 @@ php tests/run.php --log-junit ./test-results.xml
 
 `all()`、成功执行的更新/删除、聚合和关联查询会重置查询配置；`toArray()` 清理 SQL 条件，但保留字段输出限制。没有变化而直接返回的 `update()` 不重置限制。建议每次数据库操作明确设置所需条件。
 
+### `chunk()` 与 `chunkById()` 应该怎么选？
+
+只读遍历、需要保留自定义排序，且遍历期间筛选结果不会移动时，可以使用 `chunk()`。它按 OFFSET 分页；处理时会删除记录或修改筛选字段时，优先使用 `chunkById()`。深页的 OFFSET 还需要扫描并跳过前面的记录，而键集分页可以利用游标列索引从上次的位置继续。
+
+例如有 `id = 1..6` 的六条记录，起初均为 `status = 0`，每次读取两条，并在回调中把状态更新为 1。`chunk()` 的查询过程是：
+
+```sql
+-- 首批返回 1、2，处理后这两条不再满足 status = 0。
+SELECT * FROM users WHERE status = 0 ORDER BY id ASC LIMIT 0, 2;
+
+-- 现在待处理记录为 3、4、5、6；OFFSET 2 跳过 3、4，返回 5、6。
+SELECT * FROM users WHERE status = 0 ORDER BY id ASC LIMIT 2, 2;
+
+-- 最后只剩 3、4，但 OFFSET 4 已无结果，遍历结束，3、4 被漏掉。
+SELECT * FROM users WHERE status = 0 ORDER BY id ASC LIMIT 4, 2;
+```
+
+`chunkById()` 使用上一批末尾的游标，而不按当前结果集的位置跳过记录：
+
+```sql
+-- 首批返回 1、2。
+SELECT * FROM users WHERE status = 0 ORDER BY id ASC LIMIT 2;
+
+-- 1、2 的状态改变后，仍从 id > 2 继续，返回 3、4。
+SELECT * FROM users WHERE (status = 0) AND id > 2 ORDER BY id ASC LIMIT 2;
+
+-- 下一批返回 5、6。
+SELECT * FROM users WHERE (status = 0) AND id > 4 ORDER BY id ASC LIMIT 2;
+```
+
+两者都逐条回调、只保留当前批次的数据，并保留实体或数组返回模式；回调返回严格的 `false` 都会提前停止，其他返回值或没有返回值时继续。`chunk()` 使用 OFFSET 分页，保留调用方排序，不返回累计条数；`chunkById()` 固定按稳定唯一列 ASC 键集分页，并返回已交付给回调的条数，包含触发停止的那一条。游标列应建立索引、保持唯一且非 NULL，遍历过程中不要修改该列；按其他非唯一列排序或对分组结果分块，应自行设计相应查询。
+
 ### 隐藏字段会不会改变数据库写入？
 
 `insert()` 从 `toArray(true)` 构造数据，因此会受 `fields` / `hideFields` 影响。`update()` 的写入白名单是 `fields`，不会自动把 `hideFields` 当成排除写入规则。输出控制与写入规则应按实际操作分别设置。
@@ -1670,9 +2053,23 @@ php tests/run.php --log-junit ./test-results.xml
 
 不会。关联和普通实体一样使用当前选中的单例连接。目标表名可以覆盖，连接需要由调用方选择。
 
+### 列表里逐一调用关系方法，怎样避免 N+1 查询？
+
+在父查询上使用 `queryLimit()->withRelations(['profile', 'orders'])`。实体列表仍通过原有 getter 读取关系；父查询启用 `returnAsArray()` 时，会把关系数组附加到同名键。没有 `withRelations()` 时，原有按需查询行为不变。
+
+固定关系且每种关系不超过 250 个唯一父键时，通常从“1 条父查询 + 每个父对象的关联查询”变成“1 条父查询 + 每种关系 1 条批查询”。大列表会分批，动态条件不同的父对象按计划分组；不要把它理解为任何场景都只发一条关联 SQL。`chunk()` 和 `chunkById()` 会针对每个当前批次分别预加载。
+
+父关联键必须被选中；实体模式不能隐藏该键，数组模式可以隐藏，但启用预加载后会临时构造父模型来捕获真实关系计划。关系方法内的每父 limit/page、分组和总数等形状不受支持，详见批量预加载章节。需要最新关联值时调用实体的 `clearRelationCache()`。
+
 ### 原始写入为什么没有执行钩子/转换？
 
-`fastUpdate()`、`fastDelete()`、`QueryBuilder` 与原始 SQL 是直接数据库操作。需要实体转换与钩子时通过实体 `insert()` / `update()` / `delete()`。
+`fastInsertAll()`、`fastUpsert()`、`fastUpdate()`、`fastDelete()`、`QueryBuilder` 与原始 SQL 是直接数据库操作。需要实体转换与钩子时通过实体 `insert()` / `update()` / `delete()`；单实体重复键更新可使用 `insert($updateDuplicateCols)`。
+
+### 批量写入报错后，能否直接重试整个输入？
+
+`fastInsertAll()` / `fastUpsert()` 不提供自动重试或自动事务。后批校验或执行失败时，前批可能已落库；回调抛异常时，本批 SQL 也可能已经成功。先核实哪些批次已经写入，再按业务唯一键、幂等规则或显式事务处理；生成器也可能已经被部分消费。
+
+返回的合计是数据库影响行数，不能用它推断处理到第几个输入行；upsert 的更新影响行数与插入不同。需要全部成功或全部回滚时，在调用前为实际写入连接开启事务，并由事务拥有者提交或回滚。
 
 ### 如何批量查询 UUID 主键？
 
@@ -1680,11 +2077,27 @@ php tests/run.php --log-junit ./test-results.xml
 
 ### 事务中能使用 invoke() 吗？
 
-可以。`invoke()` 复用当前连接时不会归还外层连接，嵌套调用也不会提前结束外层事务。仍应由开启事务的作用域负责 `commit()` / `rollback()`；多次 `begin()` 不会创建 savepoint 或独立的嵌套事务。
+可以。`invoke()` 复用当前连接时不会归还外层连接，嵌套调用也不会提前结束外层事务。手动事务仍由原拥有者提交或回滚；使用 `transaction()` 时则由 helper 的拥有层结束，回调内不能手动调用 begin/commit/rollback。手动重复 `begin()` 不提供 savepoint，`transaction()` 的同连接嵌套也不建立独立事务。
+
+### withConnection 会自动提交或归还连接吗？
+
+不会。它只临时选库并在退出时恢复原连接名；连接借还和事务生命周期没有变化。需要回调事务时，在其中调用 `transaction()`；需要本层借用结束后归还连接时，使用原有 `invoke()`。两个新 helper 的回调参数是 FastDb，`invoke()` 的回调参数仍是 Connection。
+
+### transaction 返回 false，或者捕获了内层异常，为什么没有按预期回滚或提交？
+
+false 是正常业务返回值，不触发回滚；新事务的拥有层会提交并返回 false。业务需要回滚时应抛异常。反过来，同连接加入层已经抛过异常时，事务代次会保留 rollback-only 标记，外层捕获该异常也无法恢复提交资格；最外层拥有者将回滚并报错。这不是 savepoint 局部回滚。
+
+如果事务原本由手工 `begin()` 开启，加入失败后的 `commit()` 同样会被拒绝，但 helper 不会替原拥有者结束事务，需显式 `rollback($connection)`。只在其他连接 B 中发生、并由 A 业务捕获的异常不标记 A；若异常来自 A → B → A 中重新加入 A 的那层，则 A 仍会被标记。
+
+### transaction 抛异常，是否一定代表所有写入都没有提交？
+
+不能这样推断。正常业务异常会触发拥有者回滚，但 COMMIT 已成功后的观察回调异常、提交超时或低层接口绕过都可能留下已提交或结果不明的状态；B 独立事务已经提交的内容也不会被 A 的回滚撤销。helper 不自动重试、不协调跨库事务，也不能追回绕过保护入口的提交。
+
+在作用域内通过受保护入口手工结束事务、执行被禁止的隐式提交 SQL，会在发送前被拒绝。不要通过直接 Statement/协议调用绕过限制；数据库状态不明时应按业务记录核实，再决定恢复操作。
 
 ### 目前没有哪些功能？
 
-当前实体没有 migration/schema builder、save()、insertAll()、软删除、自动时间戳、复合主键映射、savepoint 嵌套事务、自动读写分离、自动关联预加载。需要这些能力时通过应用封装或底层 SQL 明确实现。
+当前实体没有 migration/schema builder、save()、软删除、自动时间戳、复合主键映射、savepoint 嵌套事务、自动读写分离。需要这些能力时通过应用封装或底层 SQL 明确实现。批量数据库格式写入使用 `fastInsertAll()` / `fastUpsert()`，不提供逐实体生命周期的批量保存；关联批量加载需要显式声明 `withRelations()`，不会自动开启。
 
 ## 许可证
 

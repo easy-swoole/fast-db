@@ -6,6 +6,7 @@ use EasySwoole\FastDb\Exception\RuntimeError;
 use Swoole\Coroutine;
 use EasySwoole\FastDb\Internal\TransactionSql;
 use EasySwoole\FastDb\Internal\QueryExecutor;
+use EasySwoole\FastDb\Internal\TransactionScope;
 use EasySwoole\Mysqli\Client;
 use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\Mysqli\Exception\Exception as QueryException;
@@ -22,6 +23,8 @@ class Connection extends Client implements ObjectInterface
     public bool $isForceRollback = false;
 
     private ?TransactionContext $transactionContext = null;
+    // 只在回调事务参与期间或标记 rollback-only 时持有，结束后立即释放。
+    private ?TransactionScope $transactionScope = null;
     private ?\stdClass $pendingCompletion = null;
     private ?\stdClass $deferredCountObserver = null;
     // 单调时钟记录最后一次成功通信的结束时间，归还连接时保留，关闭或失败时清除。
@@ -50,6 +53,12 @@ class Connection extends Client implements ObjectInterface
         return $this->transactionContext === $context;
     }
 
+    /** @internal */
+    final public function __getTransactionScope(): ?TransactionScope { return $this->transactionScope; }
+
+    /** @internal */
+    final public function __setTransactionScope(?TransactionScope $scope): void { $this->transactionScope = $scope; }
+
     /** @deprecated 兼容旧调用；实体基准应通过 TransactionContext 登记。 */
     public function rememberTransactionBaseline(object $entity, array $baseline, callable $restore): void
     {
@@ -64,6 +73,7 @@ class Connection extends Client implements ObjectInterface
         } else {
             $this->isInTransaction = false;
         }
+        if ($this->transactionScope?->depth === 0) { $this->transactionScope = null; }
     }
 
     public function connect(?float $timeout = null): bool
@@ -98,12 +108,14 @@ class Connection extends Client implements ObjectInterface
 
     public function query(QueryBuilder $builder, ?float $timeout = null): bool|array
     {
+        $this->transactionScope?->assertWire($this, $builder->getLastPrepareQuery());
         return $this->executeObserved($builder->getLastPrepareQuery(),
             fn () => parent::query($builder, $timeout), $builder);
     }
 
     public function rawQuery(string $query, ?float $timeout = null): bool|array
     {
+        $this->transactionScope?->assertWire($this, $query);
         $completion = $this->pendingCompletion;
         $this->pendingCompletion = null;
         return $this->executeObserved($query, fn () => parent::rawQuery($query, $timeout), null, $completion);
