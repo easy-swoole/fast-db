@@ -195,7 +195,7 @@ final class ContextReleaseTest extends TestCase
 /** 走真实连接池生命周期，不建立网络连接。 */
 class ReleaseConnection extends Connection
 {
-    public function rawQuery(string $query, ?float $timeout = null)
+    public function rawQuery(string $query, ?float $timeout = null): bool|array
     {
         $this->lastAffectRows = 0;
         $this->lastInsertId = 0;

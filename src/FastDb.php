@@ -206,9 +206,11 @@ class FastDb
     {
         $client ??= $this->getClient();
         if ($client->isInTransaction) { return true; }
-        return $this->execute($client, function () use ($client, $flags, $timeout): bool {
+        $context = $this->getTransactionContext($client);
+        $version = $context->version();
+        return $this->execute($client, function () use ($client, $context, $version, $flags, $timeout): bool {
             $ret = $client->beginTransaction($flags, $timeout);
-            if ($ret === true) { $client->isInTransaction = true; }
+            if ($ret === true && $context->version() === $version) { $client->isInTransaction = true; }
             return $ret;
         }, null, $flags->toSql())->getResult() === true;
     }
@@ -222,8 +224,10 @@ class FastDb
         return $this->execute($client, function () use ($client, $context, $version, $flags, $timeout): bool {
             $ret = $client->commitTransaction($flags, $timeout);
             if ($ret === true) {
-                if ($context->version() === $version) { $client->finishTransaction(true); }
-                $client->isInTransaction = in_array($flags, [TransactionCompletionFlags::Chain, TransactionCompletionFlags::ChainNoRelease], true);
+                if ($context->version() === $version) {
+                    $client->finishTransaction(true);
+                    $client->isInTransaction = in_array($flags, [TransactionCompletionFlags::Chain, TransactionCompletionFlags::ChainNoRelease], true);
+                }
             }
             return $ret;
         }, null, 'COMMIT' . $flags->toSqlSuffix())->getResult() === true;
@@ -238,8 +242,10 @@ class FastDb
         return $this->execute($client, function () use ($client, $context, $version, $flags, $timeout): bool {
             $ret = $client->rollbackTransaction($flags, $timeout);
             if ($ret === true) {
-                if ($context->version() === $version) { $client->finishTransaction(false); }
-                $client->isInTransaction = in_array($flags, [TransactionCompletionFlags::Chain, TransactionCompletionFlags::ChainNoRelease], true);
+                if ($context->version() === $version) {
+                    $client->finishTransaction(false);
+                    $client->isInTransaction = in_array($flags, [TransactionCompletionFlags::Chain, TransactionCompletionFlags::ChainNoRelease], true);
+                }
             }
             return $ret;
         }, null, 'ROLLBACK' . $flags->toSqlSuffix())->getResult() === true;
@@ -295,8 +301,15 @@ class FastDb
         }
         // 由连接确认借用归属，不能直接复用同名连接留下的旧登记。
         $context = $connection->getTransactionContext();
-        $this->registerContextCleanup($context->coroutineId);
-        $this->transactionContexts[$context->coroutineId][$context->connectionName] = $context;
+        $cid = $context->coroutineId;
+        $name = $context->connectionName;
+        // 归属校验仍由连接执行；相同借用无需重复登记和写入已有索引。
+        if (($this->transactionContexts[$cid][$name] ?? null) === $context
+            && ($cid < 0 || isset($this->contextCleanupRegistered[$cid]))) {
+            return $context;
+        }
+        $this->registerContextCleanup($cid);
+        $this->transactionContexts[$cid][$name] = $context;
         return $context;
     }
 

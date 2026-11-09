@@ -19,9 +19,17 @@ FastDb 是面向 Swoole 协程环境的 MySQL 数据访问库，组合连接池�
 
 `QueryResult` 和 `QueryStack` 的公开接口保持不变，测试会检查方法签名、参数名及公开属性。
 
+`Query` 仅在首次添加 SQL 条件或显式读取底层构造器时创建 `QueryBuilder`；只配置输出字段或序列化实体时无需分配 SQL 构造器。清理 SQL 条件仍生成新的 Query，外部持有的旧 Query 和构造器引用保持原有状态；克隆实体时查询所有者和可变配置继续独立。
+
 加载后的实体不允许修改主键再执行 `update()` / `delete()`，以避免定位到其他记录。需要显式修改主键时应自行构造条件明确的 SQL。实体克隆后，比较状态和查询所有者独立。
 
-普通查询与原始 SQL 都会同步协议的事务状态；原始 `START TRANSACTION` 开启的事务也受回收检查保护。日志回调中回滚当前事务后，实体不会接受已经回滚的字段基准，`update()` 返回 false；可重新开启事务后重试完整业务操作。事务令牌只随尚在执行的操作保留，不建立无限增长的历史事务表。
+实体 `update()` / `delete()` 和关联查询在最终构建 SQL 前，将全部已有 WHERE 条件整体分组，再以 AND 追加主键或关联外键条件。例如 `WHERE (status = ? OR score = ?) AND id = ?`，附加 OR 条件始终受实体范围约束。该分组也覆盖 `func()`、底层构建器和生命周期钩子添加的条件；`fastUpdate()` / `fastDelete()` 继续按调用方提供的条件批量执行。
+
+上述约束要求 `easyswoole/mysqli` 提供 `QueryBuilder::groupExistingWhere()`。升级 FastDb 前，应先安装包含该接口的 mysqli 版本；驱动缺少接口时，实体写入及关联查询会明确抛出 `RuntimeError`，不会执行缺少分组保护的 SQL。
+
+普通查询与原始 SQL 都会同步协议的事务状态；原始 `START TRANSACTION` 开启的事务也受回收检查保护。实体 `update()` 成功后、公开查询回调执行前同步字段比较基准，回调重入更新同一实体时按 SQL 实际完成顺序处理。回调中回滚当前事务后，比较基准恢复，`update()` 返回 false；可重新开启事务后重试完整业务操作。`autocommit=0` 下首条更新隐式开启的事务也会登记回滚基准。事务令牌按需创建，只随尚在执行的操作保留，不建立无限增长的历史事务表。普通查询不分配令牌；事务结束只结算已创建的令牌，下次需要时再创建。实体基准仍只登记本事务中的首次状态，恢复回调由全部实体共用且不捕获实体引用。
+
+`all()` 持有本次查询的输出配置，回调重入查询不会丢失外层的隐藏字段及字段限制；回调对当前查询配置的显式修改仍可生效。直接使用 `Connection::onQuery()` 时，成功 SQL 的事务状态在回调前同步，本次元数据不会被回调中的嵌套查询覆盖；分页总数也在底层回调前预取，主查询与总数查询的公开回调仍按原有顺序通知。`close()` 成功后清理本地未完成事务及上下文；关闭失败时保留原状态。提交超时等结果不明的场景仍需由业务核实数据库最终状态。
 
 `insert()` 不再把 `hideFields()` 当作数据库写入过滤器；写入白名单仍使用 `fields()`。没有待更新字段时也会消费本次查询配置，不会把一次性的字段限制带到下次保存。
 
@@ -43,7 +51,6 @@ FastDb 是面向 Swoole 协程环境的 MySQL 数据访问库，组合连接池�
 - [多数据库与连接生命周期](#多数据库与连接生命周期)
 - [原始 SQL 与底层构建器](#原始-sql-与底层构建器)
 - [查询日志与查询栈](#查询日志与查询栈)
-- [模型生成器](#模型生成器)
 - [API 速查](#api-速查)
 - [开发与测试](#开发与测试)
 - [使用边界与常见问题](#使用边界与常见问题)
@@ -62,7 +69,6 @@ FastDb 是面向 Swoole 协程环境的 MySQL 数据访问库，组合连接池�
 - 字段白名单、隐藏字段与可重复序列化的输出限制。
 - 插入、更新、删除、初始化钩子，以及显式一对一/一对多关联查询。
 - 全局/单次查询回调、耗时统计与协程级查询栈。
-- 基于 `easyswoole/command` 2.x 的模型生成器。
 - PHPUnit 13.4 测试入口，支持独立单元测试和真实数据库集成测试。
 
 ### 运行要求
@@ -72,7 +78,6 @@ FastDb 是面向 Swoole 协程环境的 MySQL 数据访问库，组合连接池�
 | 运行库 | PHP ≥ 8.1、Swoole ≥ 5.1；其余扩展由 Composer 按依赖检查 |
 | 数据库 | MySQL；示例表使用 InnoDB、utf8mb4 与 JSON 字段 |
 | 开发测试 | PHP ≥ 8.4.1、PHPUnit ^13.4、原生 mysqli 扩展，以及 Composer 安装的开发依赖 |
-| 命令系统 | `easyswoole/command` ^2.0 |
 
 数据库访问由 `easyswoole/mysqli` 5.x 的 Swoole 协程 Socket 协议客户端完成，生产环境不需要原生 mysqli 扩展，也不需要为数据库访问启用 runtime hooks。数据库操作应在 Swoole 协程内执行；`testDb()` 可在协程外调用，内部会创建协程调度器。原生 mysqli 仅用于开发测试中的独立观察连接。
 
@@ -261,6 +266,8 @@ use EasySwoole\Mysqli\QueryBuilder;
 | `extraConf` | 无 | 连接池提供的额外配置槽位 |
 
 连接池按进程维护，多个 worker 的连接总量需要合并计算。`intervalCheckTime=0` 只关闭定时健康检查，连接池还可能有负载维护定时器；独立 CLI 可在工作完成后调用 `reset()` 清理。
+
+连接在最近 3 秒内成功建连、执行查询或探活后，`beforeUse()` / `intervalCheck()` 跳过 `select 1`；空闲达到 3 秒时恢复探活。查询失败或连接关闭后清除活跃记录，已知断开的连接不会因近期活跃而跳过检查。
 
 ### 常用配置操作
 
@@ -470,7 +477,7 @@ $entity->chunk(function (User $user): void {
 }, 100);
 ```
 
-`chunk($callback, $chunkSize = 10)` 按 OFFSET 分页读取，每次回调接收一条记录，不是一个数组块。请提供稳定排序；遍历中删除记录或修改筛选条件可能改变后续页的偏移，不适合需要稳定游标的迁移任务。
+`chunk($callback, $chunkSize = 10)` 按 OFFSET 分页读取，每次回调接收一条记录，不是一个数组块。请提供稳定排序；遍历中删除记录或修改筛选条件可能改变后续页的偏移，不适合需要稳定游标的迁移任务。 `chunk()` 不主动请求总数统计，按本页条数判断是否继续；调用前显式开启的总数统计选项仍保留。
 
 ### 计数和聚合
 
@@ -1540,91 +1547,6 @@ $config = ConfigModel::findRecord(
 
 全局回调与实体/单次回调可以同时触发。若两处都调用同一个慢日志方法，同一次执行可能记录两条日志，应按需要选择注册范围。
 
-## 模型生成器
-
-### command 2.x 集成
-
-`ModelCommand` 继承 `EasySwoole\Command\AbstractInterface\AbstractCommand`，注册 `gen` Action，使用 `Caller::commandLine` 读取参数并通过 `Result` 返回结果。没有旧版 `CommandManager` 依赖。
-
-在 EasySwoole 框架的 `bootstrap.php` 中注册：
-
-```php
-<?php
-
-use EasySwoole\EasySwoole\Command\CommandRunner;
-use EasySwoole\FastDb\Commands\ModelCommand;
-
-// 应用初始化时注册 FastDb 数据库配置。
-// 对 model 命令，可按自己的启动流程先执行 Core::initialize()。
-CommandRunner::getInstance()->addCommand(new ModelCommand());
-```
-
-生成前需要把目标连接加入 `FastDb::getInstance()`；框架注册命令本身不会替你注册数据库。
-
-```bash
-php easyswoole.php model gen --table=users --path=App/Model
-php easyswoole.php model gen --table=users --db-connection=reporting --with-comments
-php easyswoole.php model gen --table=users --with-comments=false
-```
-
-| 参数 | 默认值 | 说明 |
-| --- | --- | --- |
-| `--table` | 必填 | 读取结构的表名 |
-| `--db-connection` | `default` | 使用哪个已注册连接读取表结构 |
-| `--path` | `App/Model` | 输出目录，需匹配项目 `composer.json` 的 PSR-4 路径 |
-| `--with-comments` | 不启用 | 添加数据库列注释；显式 false/0 关闭 |
-
-表名如 `user_profile` 生成类名 `UserProfile`。目录从当前工作目录下的 `composer.json` 推导命名空间，因此应从应用根目录运行命令。
-
-### 独立 Manager 用法
-
-```php
-use EasySwoole\Command\Bean\Caller;
-use EasySwoole\Command\Bean\ExecStatusEnum;
-use EasySwoole\Command\Manager;
-use EasySwoole\Command\Utility;
-use EasySwoole\FastDb\Commands\ModelCommand;
-
-$manager = new Manager();
-$manager->addCommand(new ModelCommand());
-$caller = new Caller('model', 'gen', Utility::parseArgv([
-    '--table=users',
-    '--path=App/Model',
-    '--with-comments',
-]));
-$result = $manager->exec($caller);
-
-if ($result->status === ExecStatusEnum::OK) {
-    echo $result->msg;
-    $class = $result->result['class'];
-    $path = $result->result['path'];
-} else {
-    echo $manager->result2HelpMsg($caller, $result);
-}
-```
-
-`GenModelAction::run(Caller $caller, Result $result): void` 支持直接调用。已有协程时在当前协程执行；无协程时创建协程执行，并在结束时回收/重置数据库连接池。生成过程不会对整个应用调用 `Timer::clearAll()`；在已有协程中也会恢复之前选择的连接。
-
-### 类型映射与生成行为
-
-| MySQL 类型 | 生成 PHP 类型 |
-| --- | --- |
-| tinyint / smallint / mediumint / int / bigint | `int` |
-| bool / boolean | `bool` |
-| float / double / real | `float` |
-| decimal、JSON、日期时间、文本及其他类型 | `string` |
-
-列允许 NULL 时使用 `?类型`。主键使用同一套类型映射，标记 `#[Property(isPrimaryKey: true)]`；支持整数和字符串主键。JSON 默认生成字符串，若需要数组或对象映射，生成后自行配置转换器。
-
-- 无主键表仍可生成模型；使用条件查询或快捷写入，不能调用依赖主键的实例更新/删除。
-- 多列复合主键返回明确错误，因为实体只支持一个主键。
-- 无表结构、未注册连接、无法映射的 PHP 属性名、目录/文件写入失败，通过失败 `Result` 反馈。
-- 列注释中的换行和注释结束符会整理，表名写入 PHP 字符串时转义。
-- 同名模型文件会被覆盖；生成前保留自己的手工修改。
-- `--db-connection` 只选择读取结构的连接，生成模型不会自动绑定该连接。
-- 生成器不会生成数据库默认值映射、自增标记、索引/关联方法或 CRUD 服务代码。
-- `bigint unsigned` 超过 PHP 整数范围时需自行使用合适的字符串映射与转换。
-
 ## API 速查
 
 ### AbstractEntity
@@ -1721,7 +1643,7 @@ composer test
 还可使用自定义 PHPUnit 选项：
 
 ```bash
-php tests/run.php --filter GenModelActionTest --display-all-issues
+php tests/run.php --filter TransactionTest --display-all-issues
 php tests/run.php --list-tests
 php tests/run.php --log-junit ./test-results.xml
 ```

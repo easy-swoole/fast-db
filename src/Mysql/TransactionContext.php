@@ -15,11 +15,12 @@ final class TransactionContext
     // 已释放的实体无需恢复，使用 WeakMap 避免仅因事务登记而延长实体生命周期。
     private ?\WeakMap $baselines = null;
     private int $generation = 0;
-    private TransactionToken $token;
+    // 令牌仅在调用方请求追踪事务结果时分配，普通查询不需要它。
+    private ?TransactionToken $token = null;
 
     /** 区分同一借用中的连续事务，避免回调结束事务后继续接受旧基准。 */
     public function version(): int { return $this->generation; }
-    public function token(): TransactionToken { return $this->token; }
+    public function token(): TransactionToken { return $this->token ??= new TransactionToken(); }
 
     public function __construct(
         Connection $connection,
@@ -27,7 +28,6 @@ final class TransactionContext
         public readonly string $connectionName,
     ) {
         $this->connection = \WeakReference::create($connection);
-        $this->token = new TransactionToken();
     }
 
     /** 检查实际连接实例，不能仅凭相同的连接名判断归属。 */
@@ -64,8 +64,8 @@ final class TransactionContext
      */
     public function finish(bool $committed): void
     {
-        $this->token->complete($committed);
-        $this->token = new TransactionToken();
+        $this->token?->complete($committed);
+        $this->token = null;
         $this->generation++;
         $connection = $this->connection->get();
         if ($connection !== null && $connection->ownsTransactionContext($this)) {

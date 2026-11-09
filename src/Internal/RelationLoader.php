@@ -40,7 +40,8 @@ final class RelationLoader
         $fields = $selection['fields'] ?? null;
         $returnAsArray = $selection['returnAsArray'] ?? false;
         $value = $entity->{$relate->selfProperty} ?? null;
-        $query->where($relate->targetProperty, $value)->get($tableName ?: $target->tableName(), $kind === 'one' ? 2 : null, $fields);
+        $entity->queryLimit()->whereRequired($relate->targetProperty, $value);
+        $query->get($tableName ?: $target->tableName(), $kind === 'one' ? 2 : null, $fields);
         return [$target, $query, $returnAsArray, $this->cacheKey($relate, $query, $kind, $returnAsArray)];
     }
 

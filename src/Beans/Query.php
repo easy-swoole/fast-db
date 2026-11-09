@@ -4,11 +4,12 @@ namespace EasySwoole\FastDb\Beans;
 
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Internal\FieldSelection;
+use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\Mysqli\QueryBuilder;
 
 class Query
 {
-    private QueryBuilder $queryBuilder;
+    private ?QueryBuilder $queryBuilder = null;
 
     // SQL 条件由 QueryBuilder 管理，输出筛选规则单独保存。
     private FieldSelection $selection;
@@ -16,8 +17,13 @@ class Query
     public function __construct(
         private readonly AbstractEntity $entity
     ){
-        $this->queryBuilder = new QueryBuilder();
         $this->selection = new FieldSelection();
+    }
+
+    /** 字段输出配置不需要 SQL 构造器，首次添加 SQL 条件或显式访问时再创建。 */
+    private function builder(): QueryBuilder
+    {
+        return $this->queryBuilder ??= new QueryBuilder();
     }
 
     function limit(int $num,bool $withTotalCount = false):Query
@@ -39,10 +45,14 @@ class Query
 
     function page(?int $page,bool $withTotalCount = false,int $pageSize = 10):Query
     {
-        $page = new Page($page,$withTotalCount,$pageSize);
-        $this->queryBuilder->limit(...$page->toLimitArray());
+        $builder = $this->builder();
+        if($page >= 1){
+            $builder->limit(($page - 1) * $pageSize, $pageSize);
+        }else{
+            $builder->limit($pageSize);
+        }
         if($withTotalCount){
-            $this->queryBuilder->withTotalCount();
+            $builder->withTotalCount();
         }
         return $this;
     }
@@ -90,43 +100,54 @@ class Query
 
     function groupBy(string $groupByField):Query
     {
-        $this->queryBuilder->groupBy($groupByField);
+        $this->builder()->groupBy($groupByField);
         return $this;
     }
 
     function orderBy($orderByField, $orderbyDirection = "DESC", $customFieldsOrRegExp = null):Query
     {
-        $this->queryBuilder->orderBy($orderByField, $orderbyDirection, $customFieldsOrRegExp);
+        $this->builder()->orderBy($orderByField, $orderbyDirection, $customFieldsOrRegExp);
         return $this;
     }
 
     function where(string $col, mixed $whereValue, $operator = '=', $cond = 'AND'):Query
     {
-        $this->queryBuilder->where($col,$whereValue,$operator,$cond);
+        $this->builder()->where($col,$whereValue,$operator,$cond);
+        return $this;
+    }
+
+    /** @internal 构建 SQL 前调用，使已有条件始终与主键或关联外键约束共同成立。 */
+    function whereRequired(string $col, mixed $whereValue): Query
+    {
+        $builder = $this->builder();
+        if (!method_exists($builder, 'groupExistingWhere')) {
+            throw new RuntimeError('Required WHERE constraints need an easyswoole/mysqli version with QueryBuilder::groupExistingWhere(); upgrade the driver before using entity writes or relations');
+        }
+        $builder->groupExistingWhere()->where($col, $whereValue, '=', 'AND');
         return $this;
     }
 
     function orWhere(string $col, mixed $whereValue, $operator = '='):Query
     {
-        $this->queryBuilder->orWhere($col,$whereValue,$operator,"OR");
+        $this->builder()->orWhere($col,$whereValue,$operator,"OR");
         return $this;
     }
 
     function join($joinTable, $joinCondition, $joinType = ''):Query
     {
-        $this->queryBuilder->join($joinTable,$joinCondition,$joinType);
+        $this->builder()->join($joinTable,$joinCondition,$joinType);
         return $this;
     }
 
     function func(callable $func):Query
     {
-        call_user_func($func,$this->queryBuilder);
+        call_user_func($func,$this->builder());
         return $this;
     }
 
     function selectForUpdate():Query
     {
-        $this->queryBuilder->selectForUpdate();
+        $this->builder()->selectForUpdate();
         return $this;
     }
 
@@ -137,7 +158,7 @@ class Query
 
     function __getQueryBuilder():QueryBuilder
     {
-        return $this->queryBuilder;
+        return $this->builder();
     }
 
     /** 清理 SQL 条件但保留输出配置，供序列化及插入后的兼容清理使用。 */
@@ -152,7 +173,7 @@ class Query
     public function forEntity(AbstractEntity $entity): Query
     {
         $copy = new Query($entity);
-        $copy->queryBuilder = clone $this->queryBuilder;
+        $copy->queryBuilder = $this->queryBuilder === null ? null : clone $this->queryBuilder;
         $copy->selection = clone $this->selection;
         return $copy;
     }
@@ -160,7 +181,7 @@ class Query
     function __clone()
     {
         //chunk 的时候，复用query builder
-        $this->queryBuilder = clone $this->queryBuilder;
+        $this->queryBuilder = $this->queryBuilder === null ? null : clone $this->queryBuilder;
         $this->selection = clone $this->selection;
     }
 }

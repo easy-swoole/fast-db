@@ -31,8 +31,7 @@ class Call
         foreach($this->params as $param){
             if($param === self::PARAM_PROPERTY_VALUE){
                 $param = $propertyVal;
-            }
-            if($param === self::PARAM_CURRENT_ENTITY){
+            } elseif($param === self::PARAM_CURRENT_ENTITY){
                 $param = $entity;
             }
             $temp[] = $param;

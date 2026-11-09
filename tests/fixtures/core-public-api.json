@@ -1,0 +1,655 @@
+{
+    "EasySwoole\\FastDb\\AbstractInterface\\AbstractEntity": {
+        "methods": {
+            "__clone": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[]},
+            "__construct": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"data","type":"?array","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "all": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\Beans\\ListResult","returnsReference":false,"params":[{"name":"selectForUpdate","type":"bool","byReference":false,"variadic":false,"hasDefault":true,"default":false}]},
+            "avg": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array|int|float","returnsReference":false,"params":[{"name":"cols","type":"array|string","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"group","type":"?string","byReference":false,"variadic":false,"hasDefault":true,"default":null},{"name":"force","type":"bool","byReference":false,"variadic":false,"hasDefault":true,"default":true}]},
+            "callHook": {"visibility":"protected","static":false,"final":false,"abstract":false,"return":"mixed","returnsReference":false,"params":[{"name":"callback","type":"EasySwoole\\FastDb\\Attributes\\Hook\\Call","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "chunk": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"func","type":"callable","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"chunkSize","type":"int","byReference":false,"variadic":false,"hasDefault":true,"default":10}]},
+            "clearRelationCache": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"static","returnsReference":false,"params":[]},
+            "count": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array|int","returnsReference":false,"params":[{"name":"field","type":"?string","byReference":false,"variadic":false,"hasDefault":true,"default":"*"},{"name":"group","type":"?string","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "delete": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[]},
+            "fastDelete": {"visibility":"public","static":true,"final":false,"abstract":false,"return":"string|int|null","returnsReference":false,"params":[{"name":"deleteLimit","type":"callable|array|string|int","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"tableName","type":"?string","byReference":false,"variadic":false,"hasDefault":true,"default":null},{"name":"onQuery","type":"?callable","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "fastUpdate": {"visibility":"public","static":true,"final":false,"abstract":false,"return":"string|int|bool","returnsReference":false,"params":[{"name":"updateLimit","type":"callable|array|string|int","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"data","type":"array","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"tableName","type":"?string","byReference":false,"variadic":false,"hasDefault":true,"default":null},{"name":"onQuery","type":"?callable","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "findAll": {"visibility":"public","static":true,"final":false,"abstract":false,"return":"mixed","returnsReference":false,"params":[{"name":"queryLimit","type":"callable|array|string|null","byReference":false,"variadic":false,"hasDefault":true,"default":null},{"name":"tableName","type":"?string","byReference":false,"variadic":false,"hasDefault":true,"default":null},{"name":"returnAsArray","type":"bool","byReference":false,"variadic":false,"hasDefault":true,"default":false},{"name":"selectForUpdate","type":"bool","byReference":false,"variadic":false,"hasDefault":true,"default":false},{"name":"onQuery","type":"?callable","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "findRecord": {"visibility":"public","static":true,"final":false,"abstract":false,"return":"?static","returnsReference":false,"params":[{"name":"queryLimit","type":"callable|array|string|int","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"tableName","type":"?string","byReference":false,"variadic":false,"hasDefault":true,"default":null},{"name":"selectForUpdate","type":"bool","byReference":false,"variadic":false,"hasDefault":true,"default":false},{"name":"onQuery","type":"?callable","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "insert": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"updateDuplicateCols","type":"?array","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "jsonSerialize": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"mixed","returnsReference":false,"params":[]},
+            "max": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array|int|float","returnsReference":false,"params":[{"name":"cols","type":"array|string","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"group","type":"?string","byReference":false,"variadic":false,"hasDefault":true,"default":null},{"name":"force","type":"bool","byReference":false,"variadic":false,"hasDefault":true,"default":true}]},
+            "min": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array|int|float","returnsReference":false,"params":[{"name":"cols","type":"array|string","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"group","type":"?string","byReference":false,"variadic":false,"hasDefault":true,"default":null},{"name":"force","type":"bool","byReference":false,"variadic":false,"hasDefault":true,"default":true}]},
+            "queryLimit": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\Beans\\Query","returnsReference":false,"params":[]},
+            "relateMany": {"visibility":"protected","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"relate","type":"?EasySwoole\\FastDb\\Attributes\\Relate","byReference":false,"variadic":false,"hasDefault":true,"default":null},{"name":"tableName","type":"?string","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "relateOne": {"visibility":"protected","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\AbstractInterface\\AbstractEntity|array|null","returnsReference":false,"params":[{"name":"relate","type":"?EasySwoole\\FastDb\\Attributes\\Relate","byReference":false,"variadic":false,"hasDefault":true,"default":null},{"name":"tableName","type":"?string","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "setData": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"static","returnsReference":false,"params":[{"name":"data","type":"array","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"mergeCompare","type":"bool","byReference":false,"variadic":false,"hasDefault":true,"default":false}]},
+            "setOnQuery": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"static","returnsReference":false,"params":[{"name":"call","type":"?callable","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "sum": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array|int|float","returnsReference":false,"params":[{"name":"cols","type":"array|string","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"group","type":"?string","byReference":false,"variadic":false,"hasDefault":true,"default":null},{"name":"force","type":"bool","byReference":false,"variadic":false,"hasDefault":true,"default":true}]},
+            "tableName": {"visibility":"public","static":false,"final":false,"abstract":true,"return":"string","returnsReference":false,"params":[]},
+            "toArray": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array","returnsReference":false,"params":[{"name":"filterNull","type":"bool","byReference":false,"variadic":false,"hasDefault":true,"default":false}]},
+            "update": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[]}
+        },
+        "properties": []
+    },
+    "EasySwoole\\FastDb\\AbstractInterface\\ConvertBean": {
+        "methods": {
+            "__construct": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"data","type":"?array","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "__toString": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"string","returnsReference":false,"params":[]},
+            "allProperty": {"visibility":"public","static":false,"final":true,"abstract":false,"return":"array","returnsReference":false,"params":[{"name":"data","type":"?array","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "getProperty": {"visibility":"public","static":false,"final":true,"abstract":false,"return":"mixed","returnsReference":false,"params":[{"name":"name","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "initialize": {"visibility":"protected","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[]},
+            "jsonSerialize": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array","returnsReference":false,"params":[]},
+            "restore": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"static","returnsReference":false,"params":[{"name":"data","type":"array","byReference":false,"variadic":false,"hasDefault":true,"default":[]}]},
+            "toArray": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array","returnsReference":false,"params":[{"name":"filter","type":"callable|int|null","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "toObject": {"visibility":"public","static":true,"final":false,"abstract":false,"return":"static","returnsReference":false,"params":[{"name":"data","type":"mixed","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "toValue": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[]}
+        },
+        "properties": []
+    },
+    "EasySwoole\\FastDb\\AbstractInterface\\ConvertDateTime": {
+        "methods": {
+            "__construct": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"datetime","type":"string","byReference":false,"variadic":false,"hasDefault":true,"default":"now"},{"name":"timezone","type":"?DateTimeZone","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "__serialize": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array","returnsReference":false,"params":[]},
+            "__set_state": {"visibility":"public","static":true,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"array","type":"array","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "__unserialize": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"data","type":"array","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "__wakeup": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[]},
+            "add": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"interval","type":"DateInterval","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "createFromFormat": {"visibility":"public","static":true,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"format","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"datetime","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"timezone","type":"?DateTimeZone","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "createFromImmutable": {"visibility":"public","static":true,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"object","type":"DateTimeImmutable","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "createFromInterface": {"visibility":"public","static":true,"final":false,"abstract":false,"return":"DateTime","returnsReference":false,"params":[{"name":"object","type":"DateTimeInterface","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "createFromTimestamp": {"visibility":"public","static":true,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"timestamp","type":"int|float","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "diff": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"targetObject","type":"DateTimeInterface","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"absolute","type":"bool","byReference":false,"variadic":false,"hasDefault":true,"default":false}]},
+            "format": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"format","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "getLastErrors": {"visibility":"public","static":true,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[]},
+            "getMicrosecond": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"int","returnsReference":false,"params":[]},
+            "getOffset": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[]},
+            "getTimestamp": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[]},
+            "getTimezone": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[]},
+            "modify": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"modifier","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setDate": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"year","type":"int","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"month","type":"int","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"day","type":"int","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setISODate": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"year","type":"int","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"week","type":"int","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"dayOfWeek","type":"int","byReference":false,"variadic":false,"hasDefault":true,"default":1}]},
+            "setMicrosecond": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"static","returnsReference":false,"params":[{"name":"microsecond","type":"int","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setTime": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"hour","type":"int","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"minute","type":"int","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"second","type":"int","byReference":false,"variadic":false,"hasDefault":true,"default":0},{"name":"microsecond","type":"int","byReference":false,"variadic":false,"hasDefault":true,"default":0}]},
+            "setTimestamp": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"timestamp","type":"int","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setTimezone": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"timezone","type":"DateTimeZone","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "sub": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"interval","type":"DateInterval","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "toObject": {"visibility":"public","static":true,"final":false,"abstract":false,"return":"static","returnsReference":false,"params":[{"name":"data","type":"mixed","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "toValue": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"string","returnsReference":false,"params":[]}
+        },
+        "properties": []
+    },
+    "EasySwoole\\FastDb\\AbstractInterface\\ConvertList": {
+        "methods": {
+            "__construct": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"list","type":"array","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "append": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"item","type":"mixed","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "first": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"mixed","returnsReference":false,"params":[]},
+            "has": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"bool","returnsReference":false,"params":[{"name":"item","type":"mixed","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"strict","type":"bool","byReference":false,"variadic":false,"hasDefault":true,"default":false}]},
+            "itemClass": {"visibility":"protected","static":true,"final":false,"abstract":false,"return":"?string","returnsReference":false,"params":[]},
+            "length": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"int","returnsReference":false,"params":[]},
+            "remove": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"item","type":"mixed","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"strict","type":"bool","byReference":false,"variadic":false,"hasDefault":true,"default":false}]},
+            "toArray": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array","returnsReference":false,"params":[]},
+            "toObject": {"visibility":"public","static":true,"final":false,"abstract":false,"return":"static","returnsReference":false,"params":[{"name":"data","type":"mixed","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "toValue": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"string","returnsReference":false,"params":[]}
+        },
+        "properties": {
+            "list": {"visibility":"protected","static":false,"readonly":false,"type":"array","hasDefault":true,"default":[]}
+        }
+    },
+    "EasySwoole\\FastDb\\AbstractInterface\\ConvertObjectInterface": {
+        "methods": {
+            "toObject": {"visibility":"public","static":true,"final":false,"abstract":true,"return":"object","returnsReference":false,"params":[{"name":"data","type":"mixed","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "toValue": {"visibility":"public","static":false,"final":false,"abstract":true,"return":"","returnsReference":false,"params":[]}
+        },
+        "properties": []
+    },
+    "EasySwoole\\FastDb\\Attributes\\Hook\\Call": {
+        "methods": {
+            "__construct": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"callback","type":"callable|string","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"params","type":"?array","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "buildEntityHookRuntimeParams": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array","returnsReference":false,"params":[{"name":"entity","type":"?EasySwoole\\FastDb\\AbstractInterface\\AbstractEntity","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "buildPropertyRuntimeParams": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array","returnsReference":false,"params":[{"name":"propertyVal","type":"mixed","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"entity","type":"?EasySwoole\\FastDb\\AbstractInterface\\AbstractEntity","byReference":false,"variadic":false,"hasDefault":true,"default":null}]}
+        },
+        "properties": {
+            "callback": {"visibility":"public","static":false,"readonly":false,"type":"mixed","hasDefault":false,"default":null},
+            "params": {"visibility":"public","static":false,"readonly":false,"type":"?array","hasDefault":false,"default":null}
+        }
+    },
+    "EasySwoole\\FastDb\\Attributes\\Hook\\OnDelete": {
+        "methods": {
+            "__construct": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"callback","type":"callable|string","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"params","type":"?array","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "buildEntityHookRuntimeParams": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array","returnsReference":false,"params":[{"name":"entity","type":"?EasySwoole\\FastDb\\AbstractInterface\\AbstractEntity","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "buildPropertyRuntimeParams": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array","returnsReference":false,"params":[{"name":"propertyVal","type":"mixed","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"entity","type":"?EasySwoole\\FastDb\\AbstractInterface\\AbstractEntity","byReference":false,"variadic":false,"hasDefault":true,"default":null}]}
+        },
+        "properties": {
+            "callback": {"visibility":"public","static":false,"readonly":false,"type":"mixed","hasDefault":false,"default":null},
+            "params": {"visibility":"public","static":false,"readonly":false,"type":"?array","hasDefault":false,"default":null}
+        }
+    },
+    "EasySwoole\\FastDb\\Attributes\\Hook\\OnInitialize": {
+        "methods": {
+            "__construct": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"callback","type":"callable|string","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"params","type":"?array","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "buildEntityHookRuntimeParams": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array","returnsReference":false,"params":[{"name":"entity","type":"?EasySwoole\\FastDb\\AbstractInterface\\AbstractEntity","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "buildPropertyRuntimeParams": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array","returnsReference":false,"params":[{"name":"propertyVal","type":"mixed","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"entity","type":"?EasySwoole\\FastDb\\AbstractInterface\\AbstractEntity","byReference":false,"variadic":false,"hasDefault":true,"default":null}]}
+        },
+        "properties": {
+            "callback": {"visibility":"public","static":false,"readonly":false,"type":"mixed","hasDefault":false,"default":null},
+            "params": {"visibility":"public","static":false,"readonly":false,"type":"?array","hasDefault":false,"default":null}
+        }
+    },
+    "EasySwoole\\FastDb\\Attributes\\Hook\\OnInsert": {
+        "methods": {
+            "__construct": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"callback","type":"callable|string","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"params","type":"?array","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "buildEntityHookRuntimeParams": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array","returnsReference":false,"params":[{"name":"entity","type":"?EasySwoole\\FastDb\\AbstractInterface\\AbstractEntity","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "buildPropertyRuntimeParams": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array","returnsReference":false,"params":[{"name":"propertyVal","type":"mixed","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"entity","type":"?EasySwoole\\FastDb\\AbstractInterface\\AbstractEntity","byReference":false,"variadic":false,"hasDefault":true,"default":null}]}
+        },
+        "properties": {
+            "callback": {"visibility":"public","static":false,"readonly":false,"type":"mixed","hasDefault":false,"default":null},
+            "params": {"visibility":"public","static":false,"readonly":false,"type":"?array","hasDefault":false,"default":null}
+        }
+    },
+    "EasySwoole\\FastDb\\Attributes\\Hook\\OnUpdate": {
+        "methods": {
+            "__construct": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"callback","type":"callable|string","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"params","type":"?array","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "buildEntityHookRuntimeParams": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array","returnsReference":false,"params":[{"name":"entity","type":"?EasySwoole\\FastDb\\AbstractInterface\\AbstractEntity","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "buildPropertyRuntimeParams": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array","returnsReference":false,"params":[{"name":"propertyVal","type":"mixed","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"entity","type":"?EasySwoole\\FastDb\\AbstractInterface\\AbstractEntity","byReference":false,"variadic":false,"hasDefault":true,"default":null}]}
+        },
+        "properties": {
+            "callback": {"visibility":"public","static":false,"readonly":false,"type":"mixed","hasDefault":false,"default":null},
+            "params": {"visibility":"public","static":false,"readonly":false,"type":"?array","hasDefault":false,"default":null}
+        }
+    },
+    "EasySwoole\\FastDb\\Attributes\\Property": {
+        "methods": {
+            "__construct": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"isPrimaryKey","type":"bool","byReference":false,"variadic":false,"hasDefault":true,"default":false},{"name":"defaultValue","type":"mixed","byReference":false,"variadic":false,"hasDefault":true,"default":null},{"name":"convertObject","type":"?string","byReference":false,"variadic":false,"hasDefault":true,"default":null},{"name":"assignCall","type":"?EasySwoole\\FastDb\\Attributes\\Hook\\Call","byReference":false,"variadic":false,"hasDefault":true,"default":null},{"name":"toValue","type":"?EasySwoole\\FastDb\\Attributes\\Hook\\Call","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "__setName": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"name","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null}]}
+        },
+        "properties": {
+            "allowNull": {"visibility":"public","static":false,"readonly":false,"type":"bool","hasDefault":true,"default":false},
+            "assignCall": {"visibility":"public","static":false,"readonly":false,"type":"?EasySwoole\\FastDb\\Attributes\\Hook\\Call","hasDefault":false,"default":null},
+            "convertObject": {"visibility":"public","static":false,"readonly":true,"type":"?string","hasDefault":false,"default":null},
+            "defaultValue": {"visibility":"public","static":false,"readonly":false,"type":"mixed","hasDefault":false,"default":null},
+            "isPrimaryKey": {"visibility":"public","static":false,"readonly":true,"type":"bool","hasDefault":false,"default":null},
+            "name": {"visibility":"public","static":false,"readonly":true,"type":"string","hasDefault":false,"default":null},
+            "toValue": {"visibility":"public","static":false,"readonly":false,"type":"?EasySwoole\\FastDb\\Attributes\\Hook\\Call","hasDefault":false,"default":null}
+        }
+    },
+    "EasySwoole\\FastDb\\Attributes\\Relate": {
+        "methods": {
+            "__construct": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"targetEntity","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"targetProperty","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"selfProperty","type":"?string","byReference":false,"variadic":false,"hasDefault":true,"default":null},{"name":"cacheResult","type":"bool","byReference":false,"variadic":false,"hasDefault":true,"default":false}]}
+        },
+        "properties": {
+            "cacheResult": {"visibility":"public","static":false,"readonly":false,"type":"bool","hasDefault":false,"default":null},
+            "selfProperty": {"visibility":"public","static":false,"readonly":false,"type":"?string","hasDefault":false,"default":null},
+            "targetEntity": {"visibility":"public","static":false,"readonly":false,"type":"string","hasDefault":false,"default":null},
+            "targetProperty": {"visibility":"public","static":false,"readonly":false,"type":"string","hasDefault":false,"default":null}
+        }
+    },
+    "EasySwoole\\FastDb\\Beans\\ArrayList": {
+        "methods": {
+            "__construct": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"data","type":"array","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "count": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"int","returnsReference":false,"params":[]},
+            "current": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"mixed","returnsReference":false,"params":[]},
+            "first": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\AbstractInterface\\AbstractEntity|array|null","returnsReference":false,"params":[]},
+            "jsonSerialize": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array","returnsReference":false,"params":[]},
+            "key": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"mixed","returnsReference":false,"params":[]},
+            "list": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array","returnsReference":false,"params":[]},
+            "next": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[]},
+            "offsetExists": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"bool","returnsReference":false,"params":[{"name":"offset","type":"mixed","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "offsetGet": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"mixed","returnsReference":false,"params":[{"name":"offset","type":"mixed","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "offsetSet": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"offset","type":"mixed","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"value","type":"mixed","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "offsetUnset": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"offset","type":"mixed","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "remove": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"indexOrEntity","type":"EasySwoole\\FastDb\\AbstractInterface\\AbstractEntity|int","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "rewind": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[]},
+            "toArray": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array","returnsReference":false,"params":[]},
+            "valid": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"bool","returnsReference":false,"params":[]}
+        },
+        "properties": []
+    },
+    "EasySwoole\\FastDb\\Beans\\EntityReflection": {
+        "methods": {
+            "__construct": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"entityClass","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "addProperty": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"property","type":"EasySwoole\\FastDb\\Attributes\\Property","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "allProperties": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array","returnsReference":false,"params":[]},
+            "getOnDelete": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"?EasySwoole\\FastDb\\Attributes\\Hook\\OnDelete","returnsReference":false,"params":[]},
+            "getOnInitialize": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"?EasySwoole\\FastDb\\Attributes\\Hook\\OnInitialize","returnsReference":false,"params":[]},
+            "getOnInsert": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"?EasySwoole\\FastDb\\Attributes\\Hook\\OnInsert","returnsReference":false,"params":[]},
+            "getOnUpdate": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"?EasySwoole\\FastDb\\Attributes\\Hook\\OnUpdate","returnsReference":false,"params":[]},
+            "getPrimaryKey": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"?string","returnsReference":false,"params":[]},
+            "setOnDelete": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"onDelete","type":"?EasySwoole\\FastDb\\Attributes\\Hook\\OnDelete","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setOnInitialize": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"onInitialize","type":"?EasySwoole\\FastDb\\Attributes\\Hook\\OnInitialize","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setOnInsert": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"onInsert","type":"?EasySwoole\\FastDb\\Attributes\\Hook\\OnInsert","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setOnUpdate": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"onUpdate","type":"?EasySwoole\\FastDb\\Attributes\\Hook\\OnUpdate","byReference":false,"variadic":false,"hasDefault":false,"default":null}]}
+        },
+        "properties": {
+            "entityClass": {"visibility":"public","static":false,"readonly":true,"type":"string","hasDefault":false,"default":null}
+        }
+    },
+    "EasySwoole\\FastDb\\Beans\\ListResult": {
+        "methods": {
+            "__construct": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"data","type":"array","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"totalCount","type":"?int","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "count": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"int","returnsReference":false,"params":[]},
+            "current": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"mixed","returnsReference":false,"params":[]},
+            "first": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\AbstractInterface\\AbstractEntity|array|null","returnsReference":false,"params":[]},
+            "jsonSerialize": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array","returnsReference":false,"params":[]},
+            "key": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"mixed","returnsReference":false,"params":[]},
+            "list": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array","returnsReference":false,"params":[]},
+            "next": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[]},
+            "offsetExists": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"bool","returnsReference":false,"params":[{"name":"offset","type":"mixed","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "offsetGet": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"mixed","returnsReference":false,"params":[{"name":"offset","type":"mixed","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "offsetSet": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"offset","type":"mixed","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"value","type":"mixed","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "offsetUnset": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"offset","type":"mixed","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "remove": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"indexOrEntity","type":"EasySwoole\\FastDb\\AbstractInterface\\AbstractEntity|int","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "rewind": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[]},
+            "toArray": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array","returnsReference":false,"params":[]},
+            "totalCount": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"?int","returnsReference":false,"params":[]},
+            "valid": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"bool","returnsReference":false,"params":[]}
+        },
+        "properties": []
+    },
+    "EasySwoole\\FastDb\\Beans\\Page": {
+        "methods": {
+            "__construct": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"page","type":"?int","byReference":false,"variadic":false,"hasDefault":true,"default":null},{"name":"withTotalCount","type":"bool","byReference":false,"variadic":false,"hasDefault":true,"default":false},{"name":"pageSize","type":"int","byReference":false,"variadic":false,"hasDefault":true,"default":10}]},
+            "getPage": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"?int","returnsReference":false,"params":[]},
+            "getPageSize": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"int","returnsReference":false,"params":[]},
+            "isWithTotalCount": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"bool","returnsReference":false,"params":[]},
+            "toLimitArray": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array","returnsReference":false,"params":[]}
+        },
+        "properties": []
+    },
+    "EasySwoole\\FastDb\\Beans\\Query": {
+        "methods": {
+            "__clone": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[]},
+            "__construct": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"entity","type":"EasySwoole\\FastDb\\AbstractInterface\\AbstractEntity","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "__getQueryBuilder": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\Mysqli\\QueryBuilder","returnsReference":false,"params":[]},
+            "fields": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\Beans\\Query","returnsReference":false,"params":[{"name":"fields","type":"?array","byReference":false,"variadic":false,"hasDefault":true,"default":null},{"name":"returnAsArray","type":"bool","byReference":false,"variadic":false,"hasDefault":true,"default":false}]},
+            "forEntity": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\Beans\\Query","returnsReference":false,"params":[{"name":"entity","type":"EasySwoole\\FastDb\\AbstractInterface\\AbstractEntity","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "func": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\Beans\\Query","returnsReference":false,"params":[{"name":"func","type":"callable","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "getFields": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"?array","returnsReference":false,"params":[]},
+            "getHideFields": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"?array","returnsReference":false,"params":[]},
+            "groupBy": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\Beans\\Query","returnsReference":false,"params":[{"name":"groupByField","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "hideFields": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\Beans\\Query","returnsReference":false,"params":[{"name":"hideFields","type":"array|string","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "isPersistFieldLimit": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"bool","returnsReference":false,"params":[]},
+            "join": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\Beans\\Query","returnsReference":false,"params":[{"name":"joinTable","type":"","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"joinCondition","type":"","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"joinType","type":"","byReference":false,"variadic":false,"hasDefault":true,"default":""}]},
+            "limit": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\Beans\\Query","returnsReference":false,"params":[{"name":"num","type":"int","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"withTotalCount","type":"bool","byReference":false,"variadic":false,"hasDefault":true,"default":false}]},
+            "orWhere": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\Beans\\Query","returnsReference":false,"params":[{"name":"col","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"whereValue","type":"mixed","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"operator","type":"","byReference":false,"variadic":false,"hasDefault":true,"default":"="}]},
+            "orderBy": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\Beans\\Query","returnsReference":false,"params":[{"name":"orderByField","type":"","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"orderbyDirection","type":"","byReference":false,"variadic":false,"hasDefault":true,"default":"DESC"},{"name":"customFieldsOrRegExp","type":"","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "page": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\Beans\\Query","returnsReference":false,"params":[{"name":"page","type":"?int","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"withTotalCount","type":"bool","byReference":false,"variadic":false,"hasDefault":true,"default":false},{"name":"pageSize","type":"int","byReference":false,"variadic":false,"hasDefault":true,"default":10}]},
+            "persistFieldLimit": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\Beans\\Query","returnsReference":false,"params":[{"name":"persistFieldLimit","type":"bool","byReference":false,"variadic":false,"hasDefault":true,"default":true}]},
+            "returnAsArray": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\Beans\\Query","returnsReference":false,"params":[]},
+            "returnEntity": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\AbstractInterface\\AbstractEntity","returnsReference":false,"params":[]},
+            "selectForUpdate": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\Beans\\Query","returnsReference":false,"params":[]},
+            "where": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\Beans\\Query","returnsReference":false,"params":[{"name":"col","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"whereValue","type":"mixed","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"operator","type":"","byReference":false,"variadic":false,"hasDefault":true,"default":"="},{"name":"cond","type":"","byReference":false,"variadic":false,"hasDefault":true,"default":"AND"}]},
+            "whereRequired": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\Beans\\Query","returnsReference":false,"params":[{"name":"col","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"whereValue","type":"mixed","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "withoutSqlConditions": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\Beans\\Query","returnsReference":false,"params":[]}
+        },
+        "properties": []
+    },
+    "EasySwoole\\FastDb\\Beans\\QueryStack": {
+        "methods": [],
+        "properties": {
+            "connectionName": {"visibility":"public","static":false,"readonly":false,"type":"string","hasDefault":false,"default":null},
+            "duration": {"visibility":"public","static":false,"readonly":false,"type":"float","hasDefault":true,"default":0.0},
+            "endTime": {"visibility":"public","static":false,"readonly":false,"type":"float","hasDefault":false,"default":null},
+            "query": {"visibility":"public","static":false,"readonly":false,"type":"?EasySwoole\\Mysqli\\QueryBuilder","hasDefault":false,"default":null},
+            "rawQuery": {"visibility":"public","static":false,"readonly":false,"type":"?string","hasDefault":false,"default":null},
+            "startTime": {"visibility":"public","static":false,"readonly":false,"type":"float","hasDefault":false,"default":null}
+        }
+    },
+    "EasySwoole\\FastDb\\Config": {
+        "methods": {
+            "__construct": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"data","type":"?array","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "__toString": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"string","returnsReference":false,"params":[]},
+            "allProperty": {"visibility":"public","static":false,"final":true,"abstract":false,"return":"array","returnsReference":false,"params":[{"name":"data","type":"?array","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "getAutoPing": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"int","returnsReference":false,"params":[]},
+            "getCharset": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"string","returnsReference":false,"params":[]},
+            "getDatabase": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"string","returnsReference":false,"params":[]},
+            "getExtraConf": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"mixed","returnsReference":false,"params":[]},
+            "getGetObjectTimeout": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"float","returnsReference":false,"params":[]},
+            "getHost": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"string","returnsReference":false,"params":[]},
+            "getIntervalCheckBatchSize": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"int","returnsReference":false,"params":[]},
+            "getIntervalCheckTime": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"int","returnsReference":false,"params":[]},
+            "getMaxConnectTime": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"float","returnsReference":false,"params":[]},
+            "getMaxObjectNum": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"int","returnsReference":false,"params":[]},
+            "getMinObjectNum": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"int","returnsReference":false,"params":[]},
+            "getName": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"string","returnsReference":false,"params":[]},
+            "getPassword": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"string","returnsReference":false,"params":[]},
+            "getPort": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"int","returnsReference":false,"params":[]},
+            "getProperty": {"visibility":"public","static":false,"final":true,"abstract":false,"return":"mixed","returnsReference":false,"params":[{"name":"name","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "getTimeout": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"float","returnsReference":false,"params":[]},
+            "getUser": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"string","returnsReference":false,"params":[]},
+            "getWaitLoadAverageTime": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"float","returnsReference":false,"params":[]},
+            "initialize": {"visibility":"protected","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[]},
+            "isCompress": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"bool","returnsReference":false,"params":[]},
+            "isIsForceRollback": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"bool","returnsReference":false,"params":[]},
+            "jsonSerialize": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array","returnsReference":false,"params":[]},
+            "restore": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"static","returnsReference":false,"params":[{"name":"data","type":"array","byReference":false,"variadic":false,"hasDefault":true,"default":[]}]},
+            "setAutoPing": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"autoPing","type":"int","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setCharset": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"charset","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setCompress": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"compress","type":"bool","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setDatabase": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"database","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setExtraConf": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\Pool\\Config","returnsReference":false,"params":[{"name":"extraConf","type":"mixed","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setGetObjectTimeout": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\Pool\\Config","returnsReference":false,"params":[{"name":"getObjectTimeout","type":"float","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setHost": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"host","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setIntervalCheckBatchSize": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\Pool\\Config","returnsReference":false,"params":[{"name":"intervalCheckBatchSize","type":"int","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setIntervalCheckTime": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\Pool\\Config","returnsReference":false,"params":[{"name":"intervalCheckTime","type":"","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setIsForceRollback": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"isForceRollback","type":"bool","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setMaxConnectTime": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"timeout","type":"float","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setMaxObjectNum": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\Pool\\Config","returnsReference":false,"params":[{"name":"maxObjectNum","type":"int","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setMinObjectNum": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\Pool\\Config","returnsReference":false,"params":[{"name":"minObjectNum","type":"int","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setName": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"name","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setPassword": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"password","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setPort": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"port","type":"int","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setTimeout": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"timeout","type":"float","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setUser": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"user","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setWaitLoadAverageTime": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\Pool\\Config","returnsReference":false,"params":[{"name":"waitLoadAverageTime","type":"float","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "toArray": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array","returnsReference":false,"params":[{"name":"filter","type":"callable|int|null","byReference":false,"variadic":false,"hasDefault":true,"default":null}]}
+        },
+        "properties": {
+            "autoPing": {"visibility":"protected","static":false,"readonly":false,"type":"int","hasDefault":true,"default":5},
+            "charset": {"visibility":"protected","static":false,"readonly":false,"type":"string","hasDefault":true,"default":"utf8mb4"},
+            "compress": {"visibility":"protected","static":false,"readonly":false,"type":"bool","hasDefault":true,"default":false},
+            "database": {"visibility":"protected","static":false,"readonly":false,"type":"string","hasDefault":true,"default":""},
+            "extraConf": {"visibility":"protected","static":false,"readonly":false,"type":"mixed","hasDefault":false,"default":null},
+            "getObjectTimeout": {"visibility":"protected","static":false,"readonly":false,"type":"float","hasDefault":true,"default":3.0},
+            "host": {"visibility":"protected","static":false,"readonly":false,"type":"string","hasDefault":true,"default":"127.0.0.1"},
+            "intervalCheckBatchSize": {"visibility":"protected","static":false,"readonly":false,"type":"int","hasDefault":true,"default":8},
+            "intervalCheckTime": {"visibility":"protected","static":false,"readonly":false,"type":"int","hasDefault":true,"default":5000},
+            "isForceRollback": {"visibility":"protected","static":false,"readonly":false,"type":"bool","hasDefault":true,"default":false},
+            "maxConnectTime": {"visibility":"protected","static":false,"readonly":false,"type":"float","hasDefault":true,"default":5.0},
+            "maxObjectNum": {"visibility":"protected","static":false,"readonly":false,"type":"int","hasDefault":true,"default":16},
+            "minObjectNum": {"visibility":"protected","static":false,"readonly":false,"type":"int","hasDefault":true,"default":8},
+            "name": {"visibility":"protected","static":false,"readonly":false,"type":"string","hasDefault":true,"default":"default"},
+            "password": {"visibility":"protected","static":false,"readonly":false,"type":"string","hasDefault":true,"default":""},
+            "port": {"visibility":"protected","static":false,"readonly":false,"type":"int","hasDefault":true,"default":3306},
+            "timeout": {"visibility":"protected","static":false,"readonly":false,"type":"float","hasDefault":true,"default":3.0},
+            "user": {"visibility":"protected","static":false,"readonly":false,"type":"string","hasDefault":true,"default":""},
+            "waitLoadAverageTime": {"visibility":"protected","static":false,"readonly":false,"type":"float","hasDefault":true,"default":0.001}
+        }
+    },
+    "EasySwoole\\FastDb\\Exception\\Exception": {
+        "methods": {
+            "__construct": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"message","type":"string","byReference":false,"variadic":false,"hasDefault":true,"default":""},{"name":"code","type":"int","byReference":false,"variadic":false,"hasDefault":true,"default":0},{"name":"previous","type":"?Throwable","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "__toString": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"string","returnsReference":false,"params":[]},
+            "__wakeup": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[]},
+            "getCode": {"visibility":"public","static":false,"final":true,"abstract":false,"return":"","returnsReference":false,"params":[]},
+            "getFile": {"visibility":"public","static":false,"final":true,"abstract":false,"return":"string","returnsReference":false,"params":[]},
+            "getLine": {"visibility":"public","static":false,"final":true,"abstract":false,"return":"int","returnsReference":false,"params":[]},
+            "getMessage": {"visibility":"public","static":false,"final":true,"abstract":false,"return":"string","returnsReference":false,"params":[]},
+            "getPrevious": {"visibility":"public","static":false,"final":true,"abstract":false,"return":"?Throwable","returnsReference":false,"params":[]},
+            "getTrace": {"visibility":"public","static":false,"final":true,"abstract":false,"return":"array","returnsReference":false,"params":[]},
+            "getTraceAsString": {"visibility":"public","static":false,"final":true,"abstract":false,"return":"string","returnsReference":false,"params":[]}
+        },
+        "properties": {
+            "code": {"visibility":"protected","static":false,"readonly":false,"type":"","hasDefault":true,"default":0},
+            "file": {"visibility":"protected","static":false,"readonly":false,"type":"string","hasDefault":true,"default":""},
+            "line": {"visibility":"protected","static":false,"readonly":false,"type":"int","hasDefault":true,"default":0},
+            "message": {"visibility":"protected","static":false,"readonly":false,"type":"","hasDefault":true,"default":""}
+        }
+    },
+    "EasySwoole\\FastDb\\Exception\\RuntimeError": {
+        "methods": {
+            "__construct": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"message","type":"string","byReference":false,"variadic":false,"hasDefault":true,"default":""},{"name":"code","type":"int","byReference":false,"variadic":false,"hasDefault":true,"default":0},{"name":"previous","type":"?Throwable","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "__toString": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"string","returnsReference":false,"params":[]},
+            "__wakeup": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[]},
+            "getCode": {"visibility":"public","static":false,"final":true,"abstract":false,"return":"","returnsReference":false,"params":[]},
+            "getFile": {"visibility":"public","static":false,"final":true,"abstract":false,"return":"string","returnsReference":false,"params":[]},
+            "getLine": {"visibility":"public","static":false,"final":true,"abstract":false,"return":"int","returnsReference":false,"params":[]},
+            "getMessage": {"visibility":"public","static":false,"final":true,"abstract":false,"return":"string","returnsReference":false,"params":[]},
+            "getPrevious": {"visibility":"public","static":false,"final":true,"abstract":false,"return":"?Throwable","returnsReference":false,"params":[]},
+            "getTrace": {"visibility":"public","static":false,"final":true,"abstract":false,"return":"array","returnsReference":false,"params":[]},
+            "getTraceAsString": {"visibility":"public","static":false,"final":true,"abstract":false,"return":"string","returnsReference":false,"params":[]}
+        },
+        "properties": {
+            "code": {"visibility":"protected","static":false,"readonly":false,"type":"","hasDefault":true,"default":0},
+            "file": {"visibility":"protected","static":false,"readonly":false,"type":"string","hasDefault":true,"default":""},
+            "line": {"visibility":"protected","static":false,"readonly":false,"type":"int","hasDefault":true,"default":0},
+            "message": {"visibility":"protected","static":false,"readonly":false,"type":"","hasDefault":true,"default":""}
+        }
+    },
+    "EasySwoole\\FastDb\\Exception\\TimeoutException": {
+        "methods": {
+            "__construct": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"message","type":"string","byReference":false,"variadic":false,"hasDefault":true,"default":""},{"name":"code","type":"int","byReference":false,"variadic":false,"hasDefault":true,"default":0},{"name":"previous","type":"?Throwable","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "__toString": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"string","returnsReference":false,"params":[]},
+            "__wakeup": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[]},
+            "getCode": {"visibility":"public","static":false,"final":true,"abstract":false,"return":"","returnsReference":false,"params":[]},
+            "getFile": {"visibility":"public","static":false,"final":true,"abstract":false,"return":"string","returnsReference":false,"params":[]},
+            "getLine": {"visibility":"public","static":false,"final":true,"abstract":false,"return":"int","returnsReference":false,"params":[]},
+            "getMessage": {"visibility":"public","static":false,"final":true,"abstract":false,"return":"string","returnsReference":false,"params":[]},
+            "getPrevious": {"visibility":"public","static":false,"final":true,"abstract":false,"return":"?Throwable","returnsReference":false,"params":[]},
+            "getQueryBuilder": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"?EasySwoole\\Mysqli\\QueryBuilder","returnsReference":false,"params":[]},
+            "getRawSql": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"?string","returnsReference":false,"params":[]},
+            "getTrace": {"visibility":"public","static":false,"final":true,"abstract":false,"return":"array","returnsReference":false,"params":[]},
+            "getTraceAsString": {"visibility":"public","static":false,"final":true,"abstract":false,"return":"string","returnsReference":false,"params":[]}
+        },
+        "properties": {
+            "code": {"visibility":"protected","static":false,"readonly":false,"type":"","hasDefault":true,"default":0},
+            "file": {"visibility":"protected","static":false,"readonly":false,"type":"string","hasDefault":true,"default":""},
+            "line": {"visibility":"protected","static":false,"readonly":false,"type":"int","hasDefault":true,"default":0},
+            "message": {"visibility":"protected","static":false,"readonly":false,"type":"","hasDefault":true,"default":""},
+            "queryBuilder": {"visibility":"public","static":false,"readonly":false,"type":"?EasySwoole\\Mysqli\\QueryBuilder","hasDefault":true,"default":null},
+            "rawSql": {"visibility":"public","static":false,"readonly":false,"type":"?string","hasDefault":true,"default":null}
+        }
+    },
+    "EasySwoole\\FastDb\\FastDb": {
+        "methods": {
+            "addDb": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"static","returnsReference":false,"params":[{"name":"config","type":"EasySwoole\\FastDb\\Config","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"name","type":"?string","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "begin": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"bool","returnsReference":false,"params":[{"name":"client","type":"?EasySwoole\\FastDb\\Mysql\\Connection","byReference":false,"variadic":false,"hasDefault":true,"default":null},{"name":"flags","type":"EasySwoole\\Mysqli\\Transaction\\TransactionStartFlags","byReference":false,"variadic":false,"hasDefault":true,"default":{"enum":"EasySwoole\\Mysqli\\Transaction\\TransactionStartFlags::None"}},{"name":"timeout","type":"?float","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "commit": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"bool","returnsReference":false,"params":[{"name":"client","type":"?EasySwoole\\FastDb\\Mysql\\Connection","byReference":false,"variadic":false,"hasDefault":true,"default":null},{"name":"flags","type":"EasySwoole\\Mysqli\\Transaction\\TransactionCompletionFlags","byReference":false,"variadic":false,"hasDefault":true,"default":{"enum":"EasySwoole\\Mysqli\\Transaction\\TransactionCompletionFlags::NoChainNoRelease"}},{"name":"timeout","type":"?float","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "currentConnection": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"?EasySwoole\\FastDb\\Mysql\\Connection","returnsReference":false,"params":[]},
+            "getConfig": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\Config|bool","returnsReference":false,"params":[{"name":"name","type":"string","byReference":false,"variadic":false,"hasDefault":true,"default":"default"}]},
+            "getInstance": {"visibility":"public","static":true,"final":false,"abstract":false,"return":"static","returnsReference":false,"params":[{"name":"args","type":"mixed","byReference":false,"variadic":true,"hasDefault":false,"default":null}]},
+            "getQueryStack": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\Beans\\QueryStack|array|null","returnsReference":false,"params":[{"name":"index","type":"?int","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "getTotalCount": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"?int","returnsReference":false,"params":[{"name":"result","type":"EasySwoole\\FastDb\\Mysql\\QueryResult","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "getTotalResult": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"?EasySwoole\\FastDb\\Mysql\\QueryResult","returnsReference":false,"params":[{"name":"result","type":"EasySwoole\\FastDb\\Mysql\\QueryResult","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "getTransactionContext": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"?EasySwoole\\FastDb\\Mysql\\TransactionContext","returnsReference":false,"params":[{"name":"connection","type":"?EasySwoole\\FastDb\\Mysql\\Connection","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "invoke": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"call","type":"callable","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "isEnableQueryStack": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"static","returnsReference":false,"params":[{"name":"bool","type":"bool","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "isInTransaction": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"bool","returnsReference":false,"params":[{"name":"connection","type":"?EasySwoole\\FastDb\\Mysql\\Connection","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "logStack": {"visibility":"protected","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"result","type":"EasySwoole\\FastDb\\Mysql\\QueryResult","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "preConnect": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[]},
+            "query": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\Mysql\\QueryResult","returnsReference":false,"params":[{"name":"queryBuilder","type":"EasySwoole\\Mysqli\\QueryBuilder|callable","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"timeout","type":"?float","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "rawQuery": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\Mysql\\QueryResult","returnsReference":false,"params":[{"name":"sql","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"timeout","type":"?float","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "recycleContext": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"checkTransaction","type":"bool","byReference":false,"variadic":false,"hasDefault":true,"default":true}]},
+            "reset": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[]},
+            "rollback": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"bool","returnsReference":false,"params":[{"name":"client","type":"?EasySwoole\\FastDb\\Mysql\\Connection","byReference":false,"variadic":false,"hasDefault":true,"default":null},{"name":"flags","type":"EasySwoole\\Mysqli\\Transaction\\TransactionCompletionFlags","byReference":false,"variadic":false,"hasDefault":true,"default":{"enum":"EasySwoole\\Mysqli\\Transaction\\TransactionCompletionFlags::NoChainNoRelease"}},{"name":"timeout","type":"?float","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "selectConnection": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"static|string","returnsReference":false,"params":[{"name":"name","type":"?string","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "setOnQuery": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"static","returnsReference":false,"params":[{"name":"call","type":"callable","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "testDb": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"connectionName","type":"string","byReference":false,"variadic":false,"hasDefault":true,"default":"default"}]}
+        },
+        "properties": {
+            "configs": {"visibility":"protected","static":false,"readonly":false,"type":"array","hasDefault":true,"default":[]},
+            "currentConnection": {"visibility":"protected","static":false,"readonly":false,"type":"array","hasDefault":true,"default":[]},
+            "enableQueryStack": {"visibility":"protected","static":false,"readonly":false,"type":"bool","hasDefault":true,"default":false},
+            "onQuery": {"visibility":"protected","static":false,"readonly":false,"type":"mixed","hasDefault":true,"default":null},
+            "pools": {"visibility":"protected","static":false,"readonly":false,"type":"array","hasDefault":true,"default":[]},
+            "queryStack": {"visibility":"protected","static":false,"readonly":false,"type":"array","hasDefault":true,"default":[]},
+            "selectConnection": {"visibility":"protected","static":false,"readonly":false,"type":"array","hasDefault":true,"default":[]},
+            "transactionContexts": {"visibility":"protected","static":false,"readonly":false,"type":"array","hasDefault":true,"default":[]}
+        }
+    },
+    "EasySwoole\\FastDb\\Internal\\EntityState": {
+        "methods": {
+            "accept": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"changes","type":"array","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "changes": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array","returnsReference":false,"params":[{"name":"entity","type":"EasySwoole\\FastDb\\AbstractInterface\\AbstractEntity","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"properties","type":"array","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "primaryKey": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"mixed","returnsReference":false,"params":[{"name":"entity","type":"EasySwoole\\FastDb\\AbstractInterface\\AbstractEntity","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"key","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "restore": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"baseline","type":"array","byReference":false,"variadic":false,"hasDefault":false,"default":null}]}
+        },
+        "properties": {
+            "baseline": {"visibility":"public","static":false,"readonly":false,"type":"array","hasDefault":true,"default":[]}
+        }
+    },
+    "EasySwoole\\FastDb\\Internal\\FieldCodec": {
+        "methods": {
+            "assign": {"visibility":"public","static":true,"final":false,"abstract":false,"return":"mixed","returnsReference":false,"params":[{"name":"entity","type":"EasySwoole\\FastDb\\AbstractInterface\\AbstractEntity","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"property","type":"EasySwoole\\FastDb\\Attributes\\Property","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"value","type":"mixed","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "compare": {"visibility":"public","static":true,"final":false,"abstract":false,"return":"mixed","returnsReference":false,"params":[{"name":"value","type":"mixed","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "encode": {"visibility":"public","static":true,"final":false,"abstract":false,"return":"mixed","returnsReference":false,"params":[{"name":"entity","type":"EasySwoole\\FastDb\\AbstractInterface\\AbstractEntity","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"property","type":"EasySwoole\\FastDb\\Attributes\\Property","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"value","type":"mixed","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "values": {"visibility":"public","static":true,"final":false,"abstract":false,"return":"array","returnsReference":false,"params":[{"name":"entity","type":"EasySwoole\\FastDb\\AbstractInterface\\AbstractEntity","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"properties","type":"array","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"filterNull","type":"bool","byReference":false,"variadic":false,"hasDefault":false,"default":null}]}
+        },
+        "properties": []
+    },
+    "EasySwoole\\FastDb\\Internal\\FieldSelection": {
+        "methods": [],
+        "properties": {
+            "fields": {"visibility":"public","static":false,"readonly":false,"type":"?array","hasDefault":true,"default":null},
+            "hideFields": {"visibility":"public","static":false,"readonly":false,"type":"?array","hasDefault":true,"default":null},
+            "persistFieldLimit": {"visibility":"public","static":false,"readonly":false,"type":"bool","hasDefault":true,"default":false}
+        }
+    },
+    "EasySwoole\\FastDb\\Internal\\QueryExecutor": {
+        "methods": {
+            "execute": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\Mysql\\QueryResult","returnsReference":false,"params":[{"name":"client","type":"EasySwoole\\FastDb\\Mysql\\Connection","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"name","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"operation","type":"callable","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"notify","type":"callable","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"builder","type":"?EasySwoole\\Mysqli\\QueryBuilder","byReference":false,"variadic":false,"hasDefault":true,"default":null},{"name":"sql","type":"?string","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "total": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"?int","returnsReference":false,"params":[{"name":"result","type":"EasySwoole\\FastDb\\Mysql\\QueryResult","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "totalResult": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"?EasySwoole\\FastDb\\Mysql\\QueryResult","returnsReference":false,"params":[{"name":"result","type":"EasySwoole\\FastDb\\Mysql\\QueryResult","byReference":false,"variadic":false,"hasDefault":false,"default":null}]}
+        },
+        "properties": []
+    },
+    "EasySwoole\\FastDb\\Internal\\RelationLoader": {
+        "methods": {
+            "clear": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[]},
+            "many": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\Beans\\ListResult","returnsReference":false,"params":[{"name":"entity","type":"EasySwoole\\FastDb\\AbstractInterface\\AbstractEntity","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"relate","type":"EasySwoole\\FastDb\\Attributes\\Relate","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"tableName","type":"?string","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"execute","type":"callable","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"reset","type":"callable","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"readTotal","type":"callable","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "one": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\AbstractInterface\\AbstractEntity|array|null","returnsReference":false,"params":[{"name":"entity","type":"EasySwoole\\FastDb\\AbstractInterface\\AbstractEntity","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"relate","type":"EasySwoole\\FastDb\\Attributes\\Relate","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"tableName","type":"?string","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"execute","type":"callable","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"reset","type":"callable","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"readTotal","type":"callable","byReference":false,"variadic":false,"hasDefault":false,"default":null}]}
+        },
+        "properties": []
+    },
+    "EasySwoole\\FastDb\\Internal\\TransactionSql": {
+        "methods": {
+            "completion": {"visibility":"public","static":true,"final":false,"abstract":false,"return":"?bool","returnsReference":false,"params":[{"name":"sql","type":"?string","byReference":false,"variadic":false,"hasDefault":false,"default":null}]}
+        },
+        "properties": []
+    },
+    "EasySwoole\\FastDb\\Internal\\TransactionToken": {
+        "methods": {
+            "complete": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"committed","type":"bool","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "wasRolledBack": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"bool","returnsReference":false,"params":[]}
+        },
+        "properties": []
+    },
+    "EasySwoole\\FastDb\\Mysql\\Connection": {
+        "methods": {
+            "__construct": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"config","type":"EasySwoole\\Mysqli\\Config","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "__destruct": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[]},
+            "beforeUse": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"bool","returnsReference":false,"params":[]},
+            "beginTransaction": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"bool","returnsReference":false,"params":[{"name":"flags","type":"EasySwoole\\Mysqli\\Transaction\\TransactionStartFlags","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"timeout","type":"?float","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "chunkById": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"int","returnsReference":false,"params":[{"name":"query","type":"EasySwoole\\Mysqli\\QueryBuilder","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"table","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"column","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"callback","type":"callable","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"size","type":"int","byReference":false,"variadic":false,"hasDefault":true,"default":1000},{"name":"timeout","type":"?float","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "close": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"bool","returnsReference":false,"params":[]},
+            "commitTransaction": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"bool","returnsReference":false,"params":[{"name":"flags","type":"EasySwoole\\Mysqli\\Transaction\\TransactionCompletionFlags","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"timeout","type":"?float","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "connect": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"bool","returnsReference":false,"params":[{"name":"timeout","type":"?float","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "finishTransaction": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"committed","type":"bool","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "gc": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[]},
+            "getLastAffectRows": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"string|int|null","returnsReference":false,"params":[]},
+            "getLastInsertId": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"string|int|null","returnsReference":false,"params":[]},
+            "getTransactionContext": {"visibility":"public","static":false,"final":true,"abstract":false,"return":"EasySwoole\\FastDb\\Mysql\\TransactionContext","returnsReference":false,"params":[]},
+            "intervalCheck": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"bool","returnsReference":false,"params":[]},
+            "iterate": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\Mysqli\\Protocol\\ResultStream","returnsReference":false,"params":[{"name":"builder","type":"EasySwoole\\Mysqli\\QueryBuilder","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"timeout","type":"?float","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "mysqlClient": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"?EasySwoole\\Mysqli\\Protocol\\Connection","returnsReference":false,"params":[]},
+            "objectRestore": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[]},
+            "onQuery": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"static","returnsReference":false,"params":[{"name":"callback","type":"callable","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "ownsTransactionContext": {"visibility":"public","static":false,"final":true,"abstract":false,"return":"bool","returnsReference":false,"params":[{"name":"context","type":"EasySwoole\\FastDb\\Mysql\\TransactionContext","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "paginate": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array","returnsReference":false,"params":[{"name":"query","type":"EasySwoole\\Mysqli\\QueryBuilder","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"table","type":"?string","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"perPage","type":"int","byReference":false,"variadic":false,"hasDefault":true,"default":20},{"name":"page","type":"int","byReference":false,"variadic":false,"hasDefault":true,"default":1},{"name":"timeout","type":"?float","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "ping": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"bool","returnsReference":false,"params":[]},
+            "prepare": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\Mysqli\\Protocol\\Statement","returnsReference":false,"params":[{"name":"sql","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"timeout","type":"?float","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "query": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array|bool","returnsReference":false,"params":[{"name":"builder","type":"EasySwoole\\Mysqli\\QueryBuilder","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"timeout","type":"?float","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "rawIterate": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\Mysqli\\Protocol\\ResultStream","returnsReference":false,"params":[{"name":"query","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"timeout","type":"?float","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "rawQuery": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array|bool","returnsReference":false,"params":[{"name":"query","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"timeout","type":"?float","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "rememberTransactionBaseline": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"entity","type":"object","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"baseline","type":"array","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"restore","type":"callable","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "rollbackTransaction": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"bool","returnsReference":false,"params":[{"name":"flags","type":"EasySwoole\\Mysqli\\Transaction\\TransactionCompletionFlags","byReference":false,"variadic":false,"hasDefault":true,"default":{"enum":"EasySwoole\\Mysqli\\Transaction\\TransactionCompletionFlags::NoChainNoRelease"}},{"name":"timeout","type":"?float","byReference":false,"variadic":false,"hasDefault":true,"default":null}]}
+        },
+        "properties": {
+            "config": {"visibility":"protected","static":false,"readonly":false,"type":"EasySwoole\\Mysqli\\Config","hasDefault":false,"default":null},
+            "connectionName": {"visibility":"public","static":false,"readonly":false,"type":"string","hasDefault":false,"default":null},
+            "isForceRollback": {"visibility":"public","static":false,"readonly":false,"type":"bool","hasDefault":true,"default":false},
+            "isInTransaction": {"visibility":"public","static":false,"readonly":false,"type":"bool","hasDefault":true,"default":false},
+            "lastAffectRows": {"visibility":"protected","static":false,"readonly":false,"type":"string|int|null","hasDefault":true,"default":null},
+            "lastInsertId": {"visibility":"protected","static":false,"readonly":false,"type":"string|int|null","hasDefault":true,"default":null},
+            "mysqlClient": {"visibility":"protected","static":false,"readonly":false,"type":"?EasySwoole\\Mysqli\\Protocol\\Connection","hasDefault":true,"default":null},
+            "onQuery": {"visibility":"protected","static":false,"readonly":false,"type":"mixed","hasDefault":true,"default":null}
+        }
+    },
+    "EasySwoole\\FastDb\\Mysql\\Pool": {
+        "methods": {
+            "__clone": {"visibility":"public","static":false,"final":true,"abstract":false,"return":"","returnsReference":false,"params":[]},
+            "__construct": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"conf","type":"EasySwoole\\Pool\\Config","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "createObject": {"visibility":"protected","static":false,"final":false,"abstract":false,"return":"EasySwoole\\Pool\\ObjectInterface","returnsReference":false,"params":[]},
+            "defer": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\Pool\\ObjectInterface","returnsReference":false,"params":[{"name":"timeout","type":"?float","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "destroy": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[]},
+            "getConfig": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\Pool\\Config","returnsReference":false,"params":[]},
+            "getLoadAverageTime": {"visibility":"protected","static":false,"final":false,"abstract":false,"return":"float","returnsReference":false,"params":[]},
+            "getObj": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"?EasySwoole\\Pool\\ObjectInterface","returnsReference":false,"params":[{"name":"timeout","type":"?float","byReference":false,"variadic":false,"hasDefault":true,"default":null},{"name":"tryTimes","type":"int","byReference":false,"variadic":false,"hasDefault":true,"default":3}]},
+            "initObject": {"visibility":"protected","static":false,"final":false,"abstract":false,"return":"?EasySwoole\\Pool\\ObjectInterface","returnsReference":false,"params":[]},
+            "intervalCheck": {"visibility":"protected","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[]},
+            "invoke": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"call","type":"callable","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"timeout","type":"?float","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "isInPool": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"bool","returnsReference":false,"params":[{"name":"obj","type":"","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "isPoolObject": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"bool","returnsReference":false,"params":[{"name":"obj","type":"","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "keepMin": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"int","returnsReference":false,"params":[{"name":"num","type":"?int","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "recycleObj": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"bool","returnsReference":false,"params":[{"name":"obj","type":"","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "reset": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\Pool\\AbstractPool","returnsReference":false,"params":[]},
+            "status": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"array","returnsReference":false,"params":[]},
+            "unsetObj": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"bool","returnsReference":false,"params":[{"name":"obj","type":"","byReference":false,"variadic":false,"hasDefault":false,"default":null}]}
+        },
+        "properties": {
+            "conf": {"visibility":"protected","static":false,"readonly":false,"type":"EasySwoole\\Pool\\Config","hasDefault":false,"default":null},
+            "createdNum": {"visibility":"protected","static":false,"readonly":false,"type":"int","hasDefault":true,"default":0}
+        }
+    },
+    "EasySwoole\\FastDb\\Mysql\\QueryResult": {
+        "methods": {
+            "__construct": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"startTime","type":"float","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"startTick","type":"int|float|null","byReference":false,"variadic":false,"hasDefault":true,"default":null}]},
+            "finishTiming": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[]},
+            "getAffectedRows": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"string|int|null","returnsReference":false,"params":[]},
+            "getConnectionName": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"string","returnsReference":false,"params":[]},
+            "getDuration": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"float","returnsReference":false,"params":[]},
+            "getEndTime": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"float","returnsReference":false,"params":[]},
+            "getException": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"?Throwable","returnsReference":false,"params":[]},
+            "getInsertId": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"string|int|null","returnsReference":false,"params":[]},
+            "getQueryBuilder": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"?EasySwoole\\Mysqli\\QueryBuilder","returnsReference":false,"params":[]},
+            "getRawSql": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"?string","returnsReference":false,"params":[]},
+            "getResult": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"mixed","returnsReference":false,"params":[]},
+            "getResultOne": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"mixed","returnsReference":false,"params":[]},
+            "getStartTime": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"float","returnsReference":false,"params":[]},
+            "setAffectedRows": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"affectedRows","type":"string|int|null","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setConnectionName": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"connectionName","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setEndTime": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"endTime","type":"float","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setException": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"exception","type":"?Throwable","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setInsertId": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"insertId","type":"string|int|null","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setQueryBuilder": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"queryBuilder","type":"?EasySwoole\\Mysqli\\QueryBuilder","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setRawSql": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"rawSql","type":"?string","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setResult": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"result","type":"mixed","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "setStartTime": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"startTime","type":"float","byReference":false,"variadic":false,"hasDefault":false,"default":null}]}
+        },
+        "properties": {
+            "affectedRows": {"visibility":"protected","static":false,"readonly":false,"type":"string|int|null","hasDefault":true,"default":null},
+            "connectionName": {"visibility":"protected","static":false,"readonly":false,"type":"string","hasDefault":false,"default":null},
+            "duration": {"visibility":"protected","static":false,"readonly":false,"type":"float","hasDefault":true,"default":0.0},
+            "endTime": {"visibility":"protected","static":false,"readonly":false,"type":"float","hasDefault":false,"default":null},
+            "exception": {"visibility":"protected","static":false,"readonly":false,"type":"?Throwable","hasDefault":true,"default":null},
+            "insertId": {"visibility":"protected","static":false,"readonly":false,"type":"string|int|null","hasDefault":true,"default":null},
+            "queryBuilder": {"visibility":"protected","static":false,"readonly":false,"type":"?EasySwoole\\Mysqli\\QueryBuilder","hasDefault":true,"default":null},
+            "rawSql": {"visibility":"protected","static":false,"readonly":false,"type":"?string","hasDefault":true,"default":null},
+            "result": {"visibility":"protected","static":false,"readonly":false,"type":"mixed","hasDefault":true,"default":null},
+            "startTick": {"visibility":"protected","static":false,"readonly":false,"type":"int|float","hasDefault":false,"default":null},
+            "startTime": {"visibility":"protected","static":false,"readonly":false,"type":"float","hasDefault":false,"default":null}
+        }
+    },
+    "EasySwoole\\FastDb\\Mysql\\TransactionContext": {
+        "methods": {
+            "__construct": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"connection","type":"EasySwoole\\FastDb\\Mysql\\Connection","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"coroutineId","type":"int","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"connectionName","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "belongsTo": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"bool","returnsReference":false,"params":[{"name":"connection","type":"EasySwoole\\FastDb\\Mysql\\Connection","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "finish": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"committed","type":"bool","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "isActive": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"bool","returnsReference":false,"params":[]},
+            "rememberBaseline": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"void","returnsReference":false,"params":[{"name":"entity","type":"object","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"baseline","type":"array","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"restore","type":"callable","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "token": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\Internal\\TransactionToken","returnsReference":false,"params":[]},
+            "version": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"int","returnsReference":false,"params":[]}
+        },
+        "properties": {
+            "connectionName": {"visibility":"public","static":false,"readonly":true,"type":"string","hasDefault":false,"default":null},
+            "coroutineId": {"visibility":"public","static":false,"readonly":true,"type":"int","hasDefault":false,"default":null}
+        }
+    },
+    "EasySwoole\\FastDb\\Utility\\ReflectionCache": {
+        "methods": {
+            "getInstance": {"visibility":"public","static":true,"final":false,"abstract":false,"return":"static","returnsReference":false,"params":[{"name":"args","type":"mixed","byReference":false,"variadic":true,"hasDefault":false,"default":null}]},
+            "parseClassTag": {"visibility":"protected","static":false,"final":false,"abstract":false,"return":"","returnsReference":false,"params":[{"name":"targetTag","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"ref","type":"ReflectionClass","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "parseEntity": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\Beans\\EntityReflection","returnsReference":false,"params":[{"name":"entityClass","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null}]},
+            "parseRelation": {"visibility":"public","static":false,"final":false,"abstract":false,"return":"EasySwoole\\FastDb\\Attributes\\Relate","returnsReference":false,"params":[{"name":"entityClass","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null},{"name":"method","type":"string","byReference":false,"variadic":false,"hasDefault":false,"default":null}]}
+        },
+        "properties": []
+    }
+}

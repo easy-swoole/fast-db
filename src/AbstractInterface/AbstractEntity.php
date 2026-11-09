@@ -11,7 +11,9 @@ use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Internal\EntityState;
 use EasySwoole\FastDb\Internal\FieldCodec;
+use EasySwoole\FastDb\Internal\QueryExecutor;
 use EasySwoole\FastDb\Internal\RelationLoader;
+use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\FastDb\Utility\ReflectionCache;
 use EasySwoole\Mysqli\QueryBuilder;
@@ -64,25 +66,30 @@ abstract class AbstractEntity implements \JsonSerializable
         // 通过缓存的属性元数据初始化字段，并建立默认值的比较基准。
         /** @var Property $property */
         foreach ($entityRef->allProperties() as $property){
+            $defaultValue = $property->defaultValue;
+            // 默认对象按自身 __clone 语义复制，避免实体修改反射缓存中的共享实例；枚举保持原值。
+            if (is_object($defaultValue) && !($defaultValue instanceof \UnitEnum)) {
+                $defaultValue = clone $defaultValue;
+            }
             if($property->convertObject){
                 // 非空字段即使默认值为 null，也交给转换器生成有效对象；可空字段保留 null。
-                if((!$property->allowNull) || ($property->defaultValue !== null)){
-                    // 已经是目标类型的默认值直接保留，避免枚举实例被重复转换成其他枚举值。
+                if((!$property->allowNull) || ($defaultValue !== null)){
+                    // 已经是目标类型的默认值不再转换，避免枚举实例被转换成其他枚举值。
                     /** @var ConvertObjectInterface $object */
-                    $object = $property->defaultValue instanceof $property->convertObject
-                        ? $property->defaultValue
-                        : call_user_func([$property->convertObject,'toObject'],$property->defaultValue);
+                    $object = $defaultValue instanceof $property->convertObject
+                        ? $defaultValue
+                        : call_user_func([$property->convertObject,'toObject'],$defaultValue);
                     $this->{$property->name} = $object;
                     $this->entityState->baseline[$property->name] = $object->toValue();
                 }else{
                     $this->{$property->name} = null;
-                    $this->entityState->baseline[$property->name] = $property->defaultValue;
+                    $this->entityState->baseline[$property->name] = $defaultValue;
                 }
             }else{
-                if(($property->defaultValue !== null) || $property->allowNull){
-                    $this->{$property->name} = $property->defaultValue;
+                if(($defaultValue !== null) || $property->allowNull){
+                    $this->{$property->name} = $defaultValue;
                 }
-                $this->entityState->baseline[$property->name] = $property->defaultValue;
+                $this->entityState->baseline[$property->name] = $defaultValue;
             }
         }
         if($entityRef->getOnInitialize()){
@@ -115,13 +122,15 @@ abstract class AbstractEntity implements \JsonSerializable
     function all( bool $selectForUpdate = false ):ListResult
     {
         try {
-            $query = $this->queryLimit()->__getQueryBuilder();
+            // 保留本次 Query 的身份；回调仍可修改其配置，重入查询的 reset 不应丢失它。
+            $selection = $this->queryLimit();
+            $query = $selection->__getQueryBuilder();
 
             $fields = null;
             $returnAsArray = false;
-            if(!empty($this->queryLimit()->getFields())){
-                $fields = $this->queryLimit()->getFields()['fields'];
-                $returnAsArray = $this->queryLimit()->getFields()['returnAsArray'];
+            if(!empty($selection->getFields())){
+                $fields = $selection->getFields()['fields'];
+                $returnAsArray = $selection->getFields()['returnAsArray'];
             }
 
             if($selectForUpdate){
@@ -137,14 +146,19 @@ abstract class AbstractEntity implements \JsonSerializable
             }
             $list = [];
 
-            $hideFields = $this->queryLimit()->getHideFields() ?:[];
+            $hideFields = $selection->getHideFields() ?:[];
 
             if($returnAsArray){
-                foreach ($ret->getResult() as $item){
-                    foreach ($hideFields as $field){
-                        unset($item[$field]);
+                if ($hideFields === []) {
+                    // 按值重建列表，保留重编号、解引用和初始迭代位置的既有语义。
+                    foreach ($ret->getResult() as $item) { $list[] = $item; }
+                } else {
+                    foreach ($ret->getResult() as $item){
+                        foreach ($hideFields as $field){
+                            unset($item[$field]);
+                        }
+                        $list[] = $item;
                     }
-                    $list[] = $item;
                 }
             }else{
                 foreach ($ret->getResult() as $item){
@@ -153,10 +167,10 @@ abstract class AbstractEntity implements \JsonSerializable
                     }
                     // 构造实体时完成字段转换，并将查询结果作为后续更新的比较基准。
                     $t = new static($item);
-                    if($this->queryLimit()->isPersistFieldLimit()){
+                    if($selection->isPersistFieldLimit()){
                         $t->queryLimit()->hideFields($hideFields);
-                        if(!empty($this->queryLimit()->getFields())){
-                            $t->queryLimit()->fields(...$this->queryLimit()->getFields());
+                        if(!empty($selection->getFields())){
+                            $t->queryLimit()->fields(...$selection->getFields());
                         }
                     }
                     $list[] = $t;
@@ -189,7 +203,8 @@ abstract class AbstractEntity implements \JsonSerializable
         try {
             $page = 1;
             while (true){
-                $this->queryLimit()->page($page,true,$chunkSize);
+                // 仅按本页数量判断是否结束，不为每一页额外查询总数。
+                $this->queryLimit()->page($page,false,$chunkSize);
                 // all() 会清理查询状态，因此先保存条件供下一页继续使用。
                 $builder = clone $this->queryBuilder;
                 $list = $this->all()->list();
@@ -216,7 +231,7 @@ abstract class AbstractEntity implements \JsonSerializable
         $hideFields = $this->queryLimit()->getHideFields() ?:[];
         $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
         $temp = FieldCodec::values($this, $entityRef->allProperties(), $filterNull);
-        $temp = array_diff_key($temp, array_flip($hideFields));
+        if ($hideFields !== []) { $temp = array_diff_key($temp, array_flip($hideFields)); }
 
         $fields = $this->queryLimit()->getFields();
         if(!empty($fields['fields'])){
@@ -371,7 +386,7 @@ abstract class AbstractEntity implements \JsonSerializable
             }
             // 实体删除必须带有有效主键，附加查询条件与主键条件共同生效。
             $pk = $this->primaryKeyCheck('delete');
-            $this->queryLimit()->where($pk,$this->entityState->primaryKey($this, $pk));
+            $this->queryLimit()->whereRequired($pk,$this->entityState->primaryKey($this, $pk));
             $query = $this->queryLimit()->__getQueryBuilder();
             $query->delete($this->tableName());
             $ret = static::callQuery($query,$this->onQuery);
@@ -461,29 +476,38 @@ abstract class AbstractEntity implements \JsonSerializable
                 return true;
             }
             $pk = $this->primaryKeyCheck('update');
-            $this->queryLimit()->where($pk,$this->entityState->primaryKey($this, $pk));
+            $this->queryLimit()->whereRequired($pk,$this->entityState->primaryKey($this, $pk));
             $query = $this->queryLimit()->__getQueryBuilder();
             $query->update($this->tableName(),$data);
-            // 登记必须早于外部回调，并校验事务代次，避免回调回滚后仍接受旧写入。
-            $transactionContext = FastDb::getInstance()->getTransactionContext();
-            $active = $transactionContext?->isActive() ?? false;
-            $token = $transactionContext?->token();
-            if ($active) {
-                $transactionContext->rememberBaseline($this, $this->entityState->baseline,
-                    static function (self $entity, array $baseline): void { $entity->entityState->restore($baseline); });
-            }
-            $ret = static::callQuery($query,$this->onQuery);
+            $token = null;
+            // 按 SQL 成功顺序接受基准，再通知观察回调；重入保存可据此写回原值。
+            // 也在此处识别 autocommit=0 的首次写入刚开启的事务。
+            $ret = static::callQuery($query,$this->onQuery,
+                function (QueryResult $result, ?Connection $connection) use ($data, $compareValues, &$token): void {
+                    if ($result->getException() !== null || !($result->getAffectedRows() > 0)) { return; }
+                    $context = FastDb::getInstance()->getTransactionContext($connection);
+                    if ($context?->isActive()) {
+                        $token = $context->token();
+                        $context->rememberBaseline($this, $this->entityState->baseline,
+                            self::baselineRestorer());
+                    }
+                    $this->entityState->accept(array_intersect_key($compareValues, $data));
+                });
             $this->reset();
-            $success = $ret->getAffectedRows() > 0
-                && (!$active || !$token->wasRolledBack());
-            if ($success) {
-                $this->entityState->accept(array_intersect_key($compareValues, $data));
-            }
-            return $success;
+            return $ret->getAffectedRows() > 0 && !($token?->wasRolledBack() ?? false);
         } finally {
             // 成功、失败或提前返回均消费本次查询配置，实体数据及比较基准不受影响。
             $this->reset();
         }
+    }
+
+    /** 全部事务登记共用无捕获回调，避免每个实体分别保留一份闭包。 */
+    private static function baselineRestorer(): \Closure
+    {
+        static $restore = null;
+        return $restore ??= static function (self $entity, array $baseline): void {
+            $entity->entityState->restore($baseline);
+        };
     }
 
     /** 直接写入给定数据，不执行实体的字段转换、变更检测或 OnUpdate 钩子。 */
@@ -782,7 +806,7 @@ abstract class AbstractEntity implements \JsonSerializable
     }
 
     /** 统一执行模型查询，并在成功或异常时通知本次查询回调。 */
-    private static function callQuery(QueryBuilder|string $query,?callable $onQuery = null):QueryResult
+    private static function callQuery(QueryBuilder|string $query,?callable $onQuery = null,?callable $onComplete = null):QueryResult
     {
         $startTick = hrtime(true);
         $startTime = microtime(true);
@@ -790,16 +814,26 @@ abstract class AbstractEntity implements \JsonSerializable
         $db = FastDb::getInstance();
         $connectionName = $db->currentConnection()?->connectionName ?? $db->selectConnection();
         $queryException = null;
+        $completed = false;
+        $complete = $onComplete === null ? null : static function (QueryResult $result, ?Connection $connection) use ($onComplete, &$completed): void {
+            $completed = true;
+            $onComplete($result, $connection);
+        };
+        $cancel = $query instanceof QueryBuilder && $complete !== null
+            ? QueryExecutor::onComplete($query, $complete) : null;
         try {
             if($query instanceof QueryBuilder){
                 $ret = FastDb::getInstance()->query($query);
             }else{
                 $ret = FastDb::getInstance()->rawQuery($query);
             }
+            // 保留替换 FastDb::query() 的扩展与测试桩；正常执行器已在公开回调前完成。
+            if ($complete !== null && !$completed) { $complete($ret, $db->currentConnection()); }
         }catch (\Throwable $exception){
             $queryException = $exception;
             throw $exception;
         }finally{
+            if ($cancel !== null) { $cancel(); }
             if(is_callable($onQuery)){
                 if(empty($ret)){
                     // 执行失败时也构造查询结果，保留原始异常及 SQL/构造器，便于回调定位错误。

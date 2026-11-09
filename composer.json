@@ -21,8 +21,7 @@
         "php": ">=8.1",
         "easyswoole/mysqli": "^5.0",
         "easyswoole/pool": "^3.0",
-        "easyswoole/spl": "^2.1",
-        "easyswoole/command": "^2.0"
+        "easyswoole/spl": "^2.1"
     },
     "require-dev": {
         "ext-mysqli": "*",

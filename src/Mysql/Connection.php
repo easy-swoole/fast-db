@@ -5,6 +5,7 @@ namespace EasySwoole\FastDb\Mysql;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use Swoole\Coroutine;
 use EasySwoole\FastDb\Internal\TransactionSql;
+use EasySwoole\FastDb\Internal\QueryExecutor;
 use EasySwoole\Mysqli\Client;
 use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\Mysqli\Exception\Exception as QueryException;
@@ -21,6 +22,11 @@ class Connection extends Client implements ObjectInterface
     public bool $isForceRollback = false;
 
     private ?TransactionContext $transactionContext = null;
+    private ?\stdClass $pendingCompletion = null;
+    private ?\stdClass $deferredCountObserver = null;
+    // 单调时钟记录最后一次成功通信的结束时间，归还连接时保留，关闭或失败时清除。
+    private int|float|null $lastActiveTick = null;
+    private const HEALTH_CHECK_IDLE_NANOSECONDS = 3_000_000_000;
 
     /** 按当前协程及连接名取得上下文，禁止把未结束事务迁移到其他归属。 */
     final public function getTransactionContext(): TransactionContext
@@ -60,31 +66,141 @@ class Connection extends Client implements ObjectInterface
         }
     }
 
+    public function connect(?float $timeout = null): bool
+    {
+        $alreadyConnected = $this->mysqlClient()?->isConnected() ?? false;
+        try {
+            $connected = parent::connect($timeout);
+            if ($connected && !$alreadyConnected) {
+                $this->lastActiveTick = hrtime(true);
+            }
+            return $connected;
+        } catch (\Throwable $error) {
+            $this->lastActiveTick = null;
+            throw $error;
+        }
+    }
+
+    public function close(): bool
+    {
+        $closed = parent::close();
+        if ($closed) {
+            $this->lastActiveTick = null;
+            try {
+                if ($this->isInTransaction) { $this->finishTransaction(false); }
+            } finally {
+                $this->isInTransaction = false;
+                $this->transactionContext = null;
+            }
+        }
+        return $closed;
+    }
+
     public function query(QueryBuilder $builder, ?float $timeout = null): bool|array
     {
-        try {
-            $result = parent::query($builder, $timeout);
-            $this->synchronizeTransaction($builder->getLastPrepareQuery());
-            return $result;
-        } catch (\Throwable $error) {
-            $this->restoreDeadlockedTransaction($error);
-            throw $this->withTimeoutContext($error, $builder->getLastPrepareQuery(), $builder);
-        }
+        return $this->executeObserved($builder->getLastPrepareQuery(),
+            fn () => parent::query($builder, $timeout), $builder);
     }
 
-    public function rawQuery(string $query, ?float $timeout = null)
+    public function rawQuery(string $query, ?float $timeout = null): bool|array
     {
+        $completion = $this->pendingCompletion;
+        $this->pendingCompletion = null;
+        return $this->executeObserved($query, fn () => parent::rawQuery($query, $timeout), null, $completion);
+    }
+
+    /** Synchronize successful SQL before observers, then restore its metadata after nested queries. */
+    private function executeObserved(?string $sql, callable $operation, ?QueryBuilder $builder = null,
+        ?\stdClass $completion = null): bool|array
+    {
+        $observer = $this->onQuery;
+        $completed = false;
+        $wrapped = function (bool|array $result, Client $client, float $startedAt) use ($observer, $sql, $builder, $completion, &$completed): void {
+            // Nested operations must see the real observer rather than this operation's wrapper.
+            $this->onQuery = $observer;
+            $completed = true;
+            $this->lastActiveTick = $result === false ? null : hrtime(true);
+            $this->synchronizeTransaction($sql);
+            $affectedRows = $this->lastAffectRows;
+            $insertId = $this->lastInsertId;
+            try {
+                if ($result === true && $completion !== null) {
+                    $completion->completed = true;
+                    if ($completion->flags->releasesConnection()) { $this->close(); }
+                }
+                $deferred = [];
+                $deferCountObserver = null;
+                if ($builder !== null && in_array('SQL_CALC_FOUND_ROWS', $builder->getLastQueryOptions(), true)) {
+                    $deferCountObserver = function (callable $read, callable $failure) use (&$deferred): void {
+                        $previous = $this->deferredCountObserver;
+                        $frame = (object) ['notifications' => [], 'failure' => $failure];
+                        $deferred[] = $frame;
+                        $this->deferredCountObserver = $frame;
+                        try { $read(); }
+                        finally { $this->deferredCountObserver = $previous; }
+                    };
+                }
+                $completionError = null;
+                try {
+                    if ($builder !== null) { QueryExecutor::complete($builder, $result, $this, $startedAt, $deferCountObserver); }
+                } catch (\Throwable $error) { $completionError = $error; }
+                $this->lastAffectRows = $affectedRows;
+                $this->lastInsertId = $insertId;
+                if ($this->deferredCountObserver !== null) {
+                    $this->deferredCountObserver->notifications[] = [$result, $startedAt, $affectedRows, $insertId];
+                } else {
+                    try {
+                        if ($observer !== null) { $observer($result, $client, $startedAt); }
+                    } catch (\Throwable $error) {
+                        // The main observer originally precedes COUNT; discard its postponed notifications on failure.
+                        foreach ($deferred as $frame) { ($frame->failure)(null); }
+                        throw $error;
+                    }
+                    if ($completionError !== null) { throw $completionError; }
+                    foreach ($deferred as $frame) {
+                        foreach ($frame->notifications as [$countResult, $countStarted, $countAffected, $countInsert]) {
+                            $this->lastAffectRows = $countAffected;
+                            $this->lastInsertId = $countInsert;
+                            try {
+                                // The main observer may have replaced the observer for the following COUNT.
+                                if ($this->onQuery !== null) { ($this->onQuery)($countResult, $this, $countStarted); }
+                            } catch (\Throwable $error) {
+                                ($frame->failure)($error);
+                                throw $error;
+                            } finally {
+                                $this->lastAffectRows = $affectedRows;
+                                $this->lastInsertId = $insertId;
+                            }
+                        }
+                    }
+                }
+                if ($completionError !== null) { throw $completionError; }
+            } finally {
+                $this->lastAffectRows = $affectedRows;
+                $this->lastInsertId = $insertId;
+            }
+        };
+        $this->onQuery = $wrapped;
         try {
-            $result = parent::rawQuery($query, $timeout);
-            $this->synchronizeTransaction($query);
+            $result = $operation();
+            if (!$completed) {
+                $this->lastActiveTick = $result === false ? null : hrtime(true);
+                $this->synchronizeTransaction($sql);
+            }
             return $result;
         } catch (\Throwable $error) {
-            $this->restoreDeadlockedTransaction($error);
-            throw $this->withTimeoutContext($error, $query);
+            $this->lastActiveTick = null;
+            // Observer errors may follow a nested transaction; they are not errors of this SQL.
+            if (!$completed) {
+                $this->restoreDeadlockedTransaction($error);
+                throw $this->withTimeoutContext($error, $sql, $builder);
+            }
+            throw $error;
+        } finally {
+            if ($this->onQuery === $wrapped) { $this->onQuery = $observer; }
         }
     }
 
-    /** 仅包装驱动超时异常，保留原异常链，并复制构建器用于事后定位 SQL。 */
     /** 以协议状态同步原始事务 SQL、DDL 隐式提交及普通事务入口。 */
     private function synchronizeTransaction(?string $sql): void
     {
@@ -128,12 +244,22 @@ class Connection extends Client implements ObjectInterface
     {
         $context = $this->getTransactionContext();
         $version = $context->version();
-        $success = $this->rawQuery($command . $flags->toSqlSuffix(), $timeout) === true;
+        $protocol = $this->mysqlClient();
+        $previousCompletion = $this->pendingCompletion;
+        $completion = (object) ['flags' => $flags, 'completed' => false];
+        $this->pendingCompletion = $completion;
+        try {
+            $success = $this->rawQuery($command . $flags->toSqlSuffix(), $timeout) === true;
+        } finally {
+            $this->pendingCompletion = $previousCompletion;
+        }
         if ($success) {
-            // CHAIN 结束旧事务后立即开始新事务，协议的布尔状态不足以表达此边界。
-            if ($context->version() === $version) { $this->finishTransaction($command === 'COMMIT'); }
-            $this->isInTransaction = in_array($flags, [TransactionCompletionFlags::Chain, TransactionCompletionFlags::ChainNoRelease], true);
-            if ($flags->releasesConnection()) { $this->close(); }
+            // Only custom/rawQuery overrides need this fallback; observers may have started a new transaction.
+            if (!$completion->completed && $this->ownsTransactionContext($context) && $context->version() === $version) {
+                $this->finishTransaction($command === 'COMMIT');
+                $this->isInTransaction = in_array($flags, [TransactionCompletionFlags::Chain, TransactionCompletionFlags::ChainNoRelease], true);
+            }
+            if (!$completion->completed && $flags->releasesConnection() && $this->mysqlClient() === $protocol) { $this->close(); }
         }
         return $success;
     }
@@ -202,21 +328,30 @@ class Connection extends Client implements ObjectInterface
 
     function beforeUse(): bool
     {
-        try{
-            $this->mysqlClient()->query('select 1');
+        $protocol = $this->mysqlClient();
+        if ($protocol === null || !$protocol->isConnected()) {
+            $this->lastActiveTick = null;
+            return false;
+        }
+        if ($this->lastActiveTick !== null
+            && hrtime(true) - $this->lastActiveTick < self::HEALTH_CHECK_IDLE_NANOSECONDS) {
             return true;
-        }catch (\Throwable $throwable){
+        }
+        try {
+            if ($protocol->query('select 1') === false) {
+                $this->lastActiveTick = null;
+                return false;
+            }
+            $this->lastActiveTick = hrtime(true);
+            return true;
+        } catch (\Throwable $throwable) {
+            $this->lastActiveTick = null;
             return false;
         }
     }
 
     function intervalCheck(): bool
     {
-        try{
-            $this->mysqlClient()->query('select 1');
-            return true;
-        }catch (\Throwable $throwable){
-            return false;
-        }
+        return $this->beforeUse();
     }
 }
