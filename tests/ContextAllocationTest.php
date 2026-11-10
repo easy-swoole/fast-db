@@ -9,14 +9,13 @@ use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\Pool;
-use EasySwoole\FastDb\Mysql\TransactionContext;
 use EasySwoole\Mysqli\Config as DriverConfig;
 use PHPUnit\Framework\TestCase;
 use Swoole\Coroutine;
 
 final class ContextAllocationTest extends TestCase
 {
-    public function testPlainQueriesPreserveRegistrationWithoutCreatingAToken(): void
+    public function testPlainQueriesReuseTheContextOwnedByTheirActualConnection(): void
     {
         $connection = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()->onlyMethods(['rawQuery'])->getMock();
         $connection->connectionName = 'default'; $connection->expects($this->exactly(2))->method('rawQuery')->willReturn([['value' => 1]]);
@@ -26,26 +25,23 @@ final class ContextAllocationTest extends TestCase
             $db->rawQuery('SELECT 1'); $context = $db->getTransactionContext();
             $db->rawQuery('SELECT 1');
             $this->assertSame($context, $db->getTransactionContext());
-            $this->assertNull($this->tokenValue($context));
-            $this->assertSame($context, $this->get($db, 'transactionContexts')[$cid]['default']);
-            $this->assertArrayHasKey($cid, $this->get($db, 'contextCleanupRegistered'));
+            $this->assertSame($context, $connection->getTransactionContext());
+            $this->assertTrue($context->belongsTo($connection));
+            $this->assertFalse($context->isActive());
         } finally { $this->set($db, 'currentConnection', []); }
     }
 
     public function testTokensAreStableWithinAGenerationAndRetainTheirOriginalOutcome(): void
     {
         $connection = $this->connection(); $context = $connection->getTransactionContext();
-        $this->assertNull($this->tokenValue($context));
         $version = $context->version(); $context->finish(true);
         $this->assertSame($version + 1, $context->version());
-        $this->assertNull($this->tokenValue($context));
         $first = $context->token(); $this->assertSame($first, $context->token());
-        $context->finish(true); $this->assertNull($this->tokenValue($context));
+        $context->finish(true);
         $second = $context->token(); $this->assertNotSame($first, $second);
         $context->finish(false);
         $this->assertFalse($first->wasRolledBack());
         $this->assertTrue($second->wasRolledBack());
-        $this->assertNull($this->tokenValue($context));
         $this->assertNotSame($second, $context->token());
     }
 
@@ -54,30 +50,30 @@ final class ContextAllocationTest extends TestCase
         $connection = $this->connection(); $connection->isInTransaction = true;
         $context = $connection->getTransactionContext(); $entity = (object) ['value' => 7];
         $context->rememberBaseline($entity, ['value' => 0], static function ($entity, $baseline): void { $entity->value = $baseline['value']; });
-        $this->assertNull($this->tokenValue($context));
         $connection->finishTransaction(false);
         $this->assertSame(0, $entity->value);
-        $this->assertNull($this->tokenValue($context));
         $this->assertFalse($connection->isInTransaction);
     }
 
-    public function testMatchingRegistrationStillCreatesMissingCleanupAndAllowsOwnershipUpgrade(): void
+    public function testExternalContextCanLaterBeBorrowedAndReleasedByTheFacade(): void
     {
-        $cid = Coroutine::getCid(); $connection = $this->connection(); $context = $connection->getTransactionContext();
+        $connection = $this->connection(); $context = $connection->getTransactionContext();
         $db = (new FastDb())->addDb(new Config());
-        $this->set($db, 'transactionContexts', [$cid => ['default' => $context]]);
         $pool = $this->getMockBuilder(Pool::class)->disableOriginalConstructor()->onlyMethods(['getObj', 'recycleObj'])->getMock();
         $pool->expects($this->once())->method('getObj')->willReturn($connection);
-        $pool->expects($this->once())->method('recycleObj')->with($connection)->willReturn(true);
+        $pool->expects($this->once())->method('recycleObj')->with($connection)->willReturnCallback(static function (Connection $client): bool {
+            $client->objectRestore();
+            return true;
+        });
         $this->set($db, 'pools', ['default' => $pool]);
         $this->assertSame($context, $db->getTransactionContext($connection));
-        $this->assertSame(false, $this->get($db, 'contextCleanupRegistered')[$cid]);
         $this->assertSame($context, $db->getTransactionContext($connection));
-        $db->invoke(function (Connection $borrowed) use ($db, $cid, $context): void {
+        $db->invoke(function (Connection $borrowed) use ($db, $context, $connection): void {
+            $this->assertSame($connection, $borrowed);
             $this->assertSame($context, $db->getTransactionContext($borrowed));
-            $this->assertSame(true, $this->get($db, 'contextCleanupRegistered')[$cid]);
         });
-        $this->assertArrayNotHasKey('default', $this->get($db, 'transactionContexts')[$cid]);
+        $this->assertNull($db->currentConnection());
+        $this->assertNotSame($context, $db->getTransactionContext($connection));
     }
 
     public function testRepeatedRegistrationStillValidatesActiveTransactionOwnership(): void
@@ -94,18 +90,18 @@ final class ContextAllocationTest extends TestCase
         $connection->finishTransaction(true);
     }
 
-    public function testSameNameReplacementConnectionReplacesTheProtectedRegistration(): void
+    public function testSameNameConnectionsKeepIndependentContextsAndRestoringOneDoesNotAffectTheOther(): void
     {
-        $db = new FastDb(); $first = $db->getTransactionContext($this->connection());
+        $db = new FastDb(); $firstConnection = $this->connection(); $first = $db->getTransactionContext($firstConnection);
         $secondConnection = $this->connection(); $second = $db->getTransactionContext($secondConnection);
         $this->assertNotSame($first, $second);
-        $this->assertSame($second, $this->get($db, 'transactionContexts')[Coroutine::getCid()]['default']);
+        $this->assertSame($first, $db->getTransactionContext($firstConnection));
+        $this->assertSame($second, $db->getTransactionContext($secondConnection));
         $secondConnection->objectRestore();
         $this->assertNotSame($second, $db->getTransactionContext($secondConnection));
+        $this->assertSame($first, $db->getTransactionContext($firstConnection));
     }
 
     private function connection(): Connection { $connection = new Connection(new DriverConfig()); $connection->connectionName = 'default'; return $connection; }
-    private function tokenValue(TransactionContext $context): mixed { return (new \ReflectionProperty(TransactionContext::class, 'token'))->getValue($context); }
     private function set(FastDb $db, string $name, array $value): void { (new \ReflectionProperty(FastDb::class, $name))->setValue($db, $value); }
-    private function get(FastDb $db, string $name): array { return (new \ReflectionProperty(FastDb::class, $name))->getValue($db); }
 }

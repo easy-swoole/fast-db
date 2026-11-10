@@ -6,20 +6,21 @@ namespace EasySwoole\FastDb\Tests;
 
 use EasySwoole\FastDb\Tests\Model\User;
 use EasySwoole\FastDb\FastDb;
-use EasySwoole\FastDb\Mysql\QueryResult;
+use EasySwoole\FastDb\Mysql\Connection;
 use PHPUnit\Framework\TestCase;
 
 final class SerializationTest extends TestCase
 {
     public function testPaginatedListKeepsHiddenFieldsInJson(): void
     {
-        $rows = new QueryResult(microtime(true));
-        $rows->setResult([['id' => 1, 'name' => 'secret', 'email' => 'public@example.com']]);
-        $count = new QueryResult(microtime(true));
-        $count->setResult([['count' => 1]]);
-        $db = $this->getMockBuilder(FastDb::class)->onlyMethods(['query', 'rawQuery'])->getMock();
-        $db->expects($this->once())->method('query')->willReturn($rows);
-        $db->expects($this->once())->method('rawQuery')->willReturn($count);
+        $client = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()
+            ->onlyMethods(['query', 'rawQuery', 'getLastAffectRows', 'getLastInsertId'])->getMock();
+        $client->method('getLastAffectRows')->willReturn(0);
+        $client->method('getLastInsertId')->willReturn(0);
+        $client->expects($this->once())->method('query')->willReturn([['id' => 1, 'name' => 'secret', 'email' => 'public@example.com']]);
+        $client->expects($this->once())->method('rawQuery')->with('SELECT FOUND_ROWS() as count')->willReturn([['count' => 1]]);
+        $db = new FastDb();
+        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $client]]);
         $instance = new \ReflectionProperty(FastDb::class, 'instance');
         $original = $instance->getValue();
         $instance->setValue(null, $db);

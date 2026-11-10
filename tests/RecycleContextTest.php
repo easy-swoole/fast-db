@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace EasySwoole\FastDb\Tests;
 
 use EasySwoole\FastDb\Exception\RuntimeError;
+use EasySwoole\FastDb\Config;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\Pool;
+use EasySwoole\Mysqli\Config as DriverConfig;
 use PHPUnit\Framework\TestCase;
 use Swoole\Coroutine;
 
@@ -18,14 +20,9 @@ final class RecycleContextTest extends TestCase
         (new \ReflectionProperty(FastDb::class, $name))->setValue($db, $value);
     }
 
-    private function get(FastDb $db, string $name): array
-    {
-        return (new \ReflectionProperty(FastDb::class, $name))->getValue($db);
-    }
-
     private function connection(bool $transaction): Connection
     {
-        $connection = $this->createStub(Connection::class);
+        $connection = new RecycleContextConnection(new DriverConfig());
         $connection->isInTransaction = $transaction;
         return $connection;
     }
@@ -36,7 +33,6 @@ final class RecycleContextTest extends TestCase
         $idle = $this->connection(false);
         $active = $this->connection(true);
         $connections = [Coroutine::getCid() => ['idle' => $idle, 'active' => $active]];
-        $stack = [Coroutine::getCid() => ['original log']];
         $pools = [];
         foreach(['idle', 'active'] as $name){
             $pool = $this->getMockBuilder(Pool::class)->disableOriginalConstructor()->onlyMethods(['recycleObj'])->getMock();
@@ -44,8 +40,10 @@ final class RecycleContextTest extends TestCase
             $pools[$name] = $pool;
         }
         $this->set($db, 'currentConnection', $connections);
-        $this->set($db, 'queryStack', $stack);
         $this->set($db, 'pools', $pools);
+        $db->isEnableQueryStack(true)->selectConnection('idle');
+        $db->rawQuery('SELECT original_log');
+        $stack = $db->getQueryStack();
         try {
             $db->recycleContext();
             $this->fail('Expected active transaction to prevent recycling');
@@ -53,8 +51,10 @@ final class RecycleContextTest extends TestCase
             $this->assertStringContainsString('active transaction', $error->getMessage());
             $this->assertStringContainsString('connection active', $error->getMessage());
         }
-        $this->assertSame($connections, $this->get($db, 'currentConnection'));
-        $this->assertSame($stack, $this->get($db, 'queryStack'));
+        $this->assertSame($idle, $db->currentConnection());
+        $db->selectConnection('active');
+        $this->assertSame($active, $db->currentConnection());
+        $this->assertSame($stack, $db->getQueryStack());
         $this->assertTrue($active->isInTransaction);
     }
 
@@ -71,27 +71,53 @@ final class RecycleContextTest extends TestCase
         }
         $this->set($db, 'currentConnection', [Coroutine::getCid() => ['active' => $active, 'idle' => $idle]]);
         $this->set($db, 'pools', $pools);
-        $this->set($db, 'queryStack', [Coroutine::getCid() => ['original log']]);
+        $db->isEnableQueryStack(true)->selectConnection('idle');
+        $db->rawQuery('SELECT original_log');
         $db->recycleContext(checkTransaction: false);
-        $this->assertSame([], $this->get($db, 'currentConnection'));
-        $this->assertSame([], $this->get($db, 'queryStack'));
+        $this->assertNull($db->currentConnection());
+        $db->selectConnection('active');
+        $this->assertNull($db->currentConnection());
+        $this->assertNull($db->getQueryStack());
     }
 
     public function testIdleContextRecyclesWithoutCheckingOtherCoroutines(): void
     {
-        $db = new FastDb();
+        $db = (new FastDb())->addDb(new Config())->isEnableQueryStack(true);
         $idle = $this->connection(false);
-        $other = $this->connection(true);
-        $cid = Coroutine::getCid();
-        $otherCid = $cid + 1000;
-        $pool = $this->getMockBuilder(Pool::class)->disableOriginalConstructor()->onlyMethods(['recycleObj'])->getMock();
-        $pool->expects($this->once())->method('recycleObj')->with($idle)->willReturn(true);
+        $other = $this->connection(false);
+        $pool = $this->getMockBuilder(Pool::class)->disableOriginalConstructor()->onlyMethods(['getObj', 'recycleObj'])->getMock();
+        $pool->expects($this->exactly(2))->method('getObj')->willReturnOnConsecutiveCalls($idle, $other);
+        $pool->expects($this->exactly(2))->method('recycleObj')->willReturnCallback(static function (Connection $client): bool {
+            $client->objectRestore();
+            return true;
+        });
         $this->set($db, 'pools', ['default' => $pool]);
-        $this->set($db, 'currentConnection', [$cid => ['default' => $idle], $otherCid => ['default' => $other]]);
-        $this->set($db, 'queryStack', [$cid => ['current'], $otherCid => ['other']]);
+        $db->rawQuery('SELECT parent');
+        $ready = new Coroutine\Channel(1);
+        $resume = new Coroutine\Channel(1);
+        $finished = new Coroutine\Channel(1);
+        $result = null;
+        Coroutine::create(function () use ($db, $ready, $resume, $finished, $other, &$result): void {
+            Coroutine::defer(static fn() => $finished->push(true));
+            try {
+                $db->begin();
+                $db->rawQuery('SELECT child');
+                $ready->push(true);
+                $resume->pop(2);
+                $this->assertSame($other, $db->currentConnection());
+                $this->assertTrue($db->isInTransaction());
+                $this->assertSame('SELECT child', $db->getQueryStack(-1)->rawQuery);
+            } catch (\Throwable $error) { $result = $error; $ready->push(false); }
+        });
+        $this->assertTrue($ready->pop(2));
         $db->recycleContext(checkTransaction: true);
-        $this->assertSame([$otherCid => ['default' => $other]], $this->get($db, 'currentConnection'));
-        $this->assertSame([$otherCid => ['other']], $this->get($db, 'queryStack'));
+        $this->assertNull($db->currentConnection());
+        $this->assertNull($db->getQueryStack());
+        $this->assertTrue($other->isInTransaction);
+        $resume->push(true);
+        $this->assertTrue($finished->pop(2));
+        $this->assertNull($result);
+        $this->assertFalse($other->isInTransaction);
     }
 
     public function testEmptyContextIsSafe(): void
@@ -99,6 +125,16 @@ final class RecycleContextTest extends TestCase
         $db = new FastDb();
         $db->recycleContext();
         $db->recycleContext(false);
-        $this->assertSame([], $this->get($db, 'currentConnection'));
+        $this->assertNull($db->currentConnection());
+        $this->assertNull($db->getQueryStack());
+    }
+}
+
+class RecycleContextConnection extends Connection
+{
+    public function rawQuery(string $query, ?float $timeout = null): bool|array
+    {
+        $this->lastAffectRows = $this->lastInsertId = 0;
+        return true;
     }
 }

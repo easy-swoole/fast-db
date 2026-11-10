@@ -12,7 +12,6 @@ use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Internal\EntityState;
 use EasySwoole\FastDb\Internal\BatchWriter;
 use EasySwoole\FastDb\Internal\FieldCodec;
-use EasySwoole\FastDb\Internal\QueryExecutor;
 use EasySwoole\FastDb\Internal\RelationLoader;
 use EasySwoole\FastDb\Internal\RelationPlan;
 use EasySwoole\FastDb\Internal\RelationPreloader;
@@ -1021,45 +1020,27 @@ abstract class AbstractEntity implements \JsonSerializable
         $startTime = microtime(true);
         // 失败时的实体回调也使用发起查询时的连接名，而不是异常回调修改后的选中连接。
         $db = FastDb::getInstance();
-        $connectionName = $connection ?? ($db->currentConnection()?->connectionName ?? $db->selectConnection());
+        $connectionName = $connection ?? $db->selectConnection();
         $queryException = null;
-        $completed = false;
-        $complete = $onComplete === null ? null : static function (QueryResult $result, ?Connection $connection) use ($onComplete, &$completed): void {
-            $completed = true;
-            $onComplete($result, $connection);
-        };
-        $cancel = $query instanceof QueryBuilder && $complete !== null
-            ? QueryExecutor::onComplete($query, $complete) : null;
-        try {
-            if ($connection !== null && $query instanceof QueryBuilder) {
-                $visible = $db->selectConnection();
-                $restored = false;
-                $db->selectConnection($connection);
-                try {
-                    // FastDb 先取得目标 client，再运行工厂；恢复可见选库后仍在该 client 上执行。
-                    $ret = $db->query(static function (QueryBuilder $builder) use ($db, $visible, &$restored, $query): void {
-                        $db->selectConnection($visible);
-                        $restored = true;
-                        $builder->raw($query->getLastPrepareQuery(), $query->getLastBindParams());
-                    });
-                } finally {
-                    if (!$restored) { $db->selectConnection($visible); }
-                }
-            } elseif($query instanceof QueryBuilder){
-                $ret = FastDb::getInstance()->query($query);
-            }else{
-                $ret = FastDb::getInstance()->rawQuery($query);
+        $ret = null;
+        $complete = $onQuery === null && $onComplete === null ? null : static function (QueryResult $result, Connection $connection) use ($onComplete, &$ret): void {
+            // 即使执行或公开观察回调抛错，也保留本次执行器已经冻结的真实结果。
+            $ret = $result;
+            if ($result->getException() === null && $onComplete !== null) {
+                $onComplete($result, $connection);
             }
-            // 保留替换 FastDb::query() 的扩展与测试桩；正常执行器已在公开回调前完成。
-            if ($complete !== null && !$completed) { $complete($ret, $db->currentConnection()); }
+        };
+        try {
+            $ret = $query instanceof QueryBuilder
+                ? $db->query($query, null, $complete, $connection)
+                : $db->rawQuery($query, null, $complete, $connection);
         }catch (\Throwable $exception){
             $queryException = $exception;
             throw $exception;
         }finally{
-            if ($cancel !== null) { $cancel(); }
             if(is_callable($onQuery)){
-                if(empty($ret)){
-                    // 执行失败时也构造查询结果，保留原始异常及 SQL/构造器，便于回调定位错误。
+                if($ret === null){
+                    // 借用失败等尚未进入执行器的路径仍提供替代结果，供实体回调定位错误。
                     $ret = new QueryResult($startTime, $startTick);
                     $ret->setConnectionName($connectionName);
                     $ret->finishTiming();

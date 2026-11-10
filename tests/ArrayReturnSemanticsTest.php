@@ -9,17 +9,20 @@ use EasySwoole\FastDb\Attributes\Hook\Call;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Beans\ListResult;
 use EasySwoole\FastDb\FastDb;
-use EasySwoole\FastDb\Mysql\QueryResult;
+use EasySwoole\FastDb\Mysql\Connection;
 use PHPUnit\Framework\TestCase;
 
 final class ArrayReturnSemanticsTest extends TestCase
 {
     private function all(array $rows, ?array $hidden = null): ListResult
     {
-        $result = new QueryResult(microtime(true));
-        $result->setResult($rows);
-        $db = $this->getMockBuilder(FastDb::class)->onlyMethods(['query'])->getMock();
-        $db->expects($this->once())->method('query')->willReturn($result);
+        $client = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()
+            ->onlyMethods(['query', 'getLastAffectRows', 'getLastInsertId'])->getMock();
+        $client->method('getLastAffectRows')->willReturn(0);
+        $client->method('getLastInsertId')->willReturn(0);
+        $client->expects($this->once())->method('query')->willReturn($rows);
+        $db = new FastDb();
+        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $client]]);
         $singleton = new \ReflectionProperty(FastDb::class, 'instance');
         $original = $singleton->getValue();
         $singleton->setValue(null, $db);

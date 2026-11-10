@@ -9,7 +9,6 @@ use EasySwoole\FastDb\AbstractInterface\ConvertList;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
-use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\FastDb\Tests\Model\SexEnum;
 use PHPUnit\Framework\TestCase;
@@ -45,19 +44,20 @@ final class NullableConvertTest extends TestCase
 
     public function testClearedValueIsWrittenAsSqlNull(): void
     {
-        $connection = $this->createStub(Connection::class);
+        $connection = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()
+            ->onlyMethods(['query', 'getLastAffectRows', 'getLastInsertId'])->getMock();
         $connection->method('getLastAffectRows')->willReturn(1);
-        $result = new QueryResult(microtime(true));
-        $result->setAffectedRows(1);
-        $db = $this->getMockBuilder(FastDb::class)->onlyMethods(['query'])->getMock();
-        $db->expects($this->once())->method('query')
+        $connection->method('getLastInsertId')->willReturn(0);
+        $connection->expects($this->once())->method('query')
             ->with($this->callback(function (QueryBuilder $query): bool {
                 $this->assertMatchesRegularExpression('/`tags`\s*=\s*\?/', $query->getLastPrepareQuery());
                 $params = $query->getLastBindParams();
                 $this->assertArrayHasKey(0, $params);
                 $this->assertNull($params[0]);
                 return true;
-            }))->willReturn($result);
+            }))->willReturn(true);
+        $db = new FastDb();
+        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $connection]]);
         $instance = new \ReflectionProperty(FastDb::class, 'instance');
         $original = $instance->getValue();
         $instance->setValue(null, $db);
@@ -72,8 +72,10 @@ final class NullableConvertTest extends TestCase
 
     public function testMergeCompareAcceptsNullAsUnchangedBaseline(): void
     {
-        $db = $this->getMockBuilder(FastDb::class)->onlyMethods(['query'])->getMock();
-        $db->expects($this->never())->method('query');
+        $connection = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()->onlyMethods(['query'])->getMock();
+        $connection->expects($this->never())->method('query');
+        $db = new FastDb();
+        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $connection]]);
         $instance = new \ReflectionProperty(FastDb::class, 'instance');
         $original = $instance->getValue();
         $instance->setValue(null, $db);

@@ -3,141 +3,118 @@
 namespace EasySwoole\FastDb;
 
 use EasySwoole\Component\Singleton;
-use EasySwoole\FastDb\Internal\QueryExecutor;
-use EasySwoole\FastDb\Internal\TransactionScope;
 use EasySwoole\FastDb\Beans\QueryStack;
 use EasySwoole\FastDb\Exception\RuntimeError;
+use EasySwoole\FastDb\Internal\QueryDiagnostics;
+use EasySwoole\FastDb\Internal\ExecutionFrame;
+use EasySwoole\FastDb\Internal\TransactionRunner;
 use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\Pool;
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\FastDb\Mysql\TransactionContext;
 use EasySwoole\Mysqli\Client;
+use EasySwoole\Mysqli\Config as MysqliConfig;
 use EasySwoole\Mysqli\QueryBuilder;
-use EasySwoole\Mysqli\Transaction\TransactionStartFlags;
 use EasySwoole\Mysqli\Transaction\TransactionCompletionFlags;
-use EasySwoole\Pool\Exception\Exception;
+use EasySwoole\Mysqli\Transaction\TransactionStartFlags;
 use EasySwoole\Pool\Exception\PoolEmpty;
 use Swoole\Coroutine;
 use Swoole\Coroutine\Scheduler;
-use EasySwoole\Mysqli\Config as MysqliConfig;
 
+/** 管理配置、协程连接借用与执行入口；执行状态和诊断各有唯一拥有者。 */
 class FastDb
 {
     use Singleton;
 
-    private ?QueryExecutor $executor = null;
+    private ?QueryDiagnostics $diagnostics = null;
 
     protected array $configs = [];
     protected array $pools = [];
     protected array $currentConnection = [];
     protected array $selectConnection = [];
-    protected mixed $onQuery = null;
-    protected bool $enableQueryStack = false;
 
-    protected array $queryStack = [];
-    /**
-     * 以协程 ID 和连接名索引事务上下文；实际连接及借用归属由上下文本身校验。
-     * @var array<int, array<string, TransactionContext>>
-     */
-    protected array $transactionContexts = [];
-    // 每个协程只登记一次退出清理；值表示本实例是否还负责归还自行借出的连接。
-    // 提前回收不能清除此标记，否则反复借还会重复登记 defer。
+    // 每个协程只登记一次退出清理；提前回收后仍保留登记，防止 defer 累积。
+    // false 表示只登记了外部连接/选库，本实例尚未承担池连接的归还责任。
     private array $contextCleanupRegistered = [];
 
-    function isEnableQueryStack(bool $bool):static
+    public function __clone()
     {
-        $this->enableQueryStack = $bool;
+        $selected = $this->selectConnection();
+        foreach ($this->configs as $name => $config) { $this->configs[$name] = clone $config; }
+        // 借用、池和 defer 归属不能随配置复制到另一个管理器。
+        $this->pools = [];
+        $this->currentConnection = [];
+        $this->selectConnection = [];
+        $this->contextCleanupRegistered = [];
+        if ($this->diagnostics !== null) { $this->diagnostics = clone $this->diagnostics; }
+        $this->selectConnection($selected);
+    }
+
+    public function isEnableQueryStack(bool $bool, int $maxStackSize = 256): static
+    {
+        ($this->diagnostics ??= new QueryDiagnostics())->configure($bool, $maxStackSize);
         return $this;
     }
 
-    function getQueryStack(?int $index = null):null|array|QueryStack
+    public function getQueryStack(?int $index = null): null|array|QueryStack
     {
-        $cid = Coroutine::getCid();
-        if(isset($this->queryStack[$cid])){
-            if($index === null){
-                return $this->queryStack[$cid];
-            }
-            $data = $this->queryStack[$cid];
-            if($index < 0){
-                $index = count($data) + $index;
-            }
-            if(isset($data[$index])){
-                return $data[$index];
-            }
-        }
-        return null;
+        return $this->diagnostics?->stack(Coroutine::getCid(), $index);
     }
 
-
-
-    function addDb(Config $config,?string $name = null):static
+    public function setOnQuery(callable $call): static
     {
-        if($name != null){
-            $config->setName($name);
-        }
+        ($this->diagnostics ??= new QueryDiagnostics())->setOnQuery($call);
+        return $this;
+    }
+
+    public function addDb(Config $config, ?string $name = null): static
+    {
+        if ($name !== null) { $config->setName($name); }
         $this->configs[$config->getName()] = $config;
         return $this;
     }
 
-    function testDb(string $connectionName = "default")
+    public function getConfig(string $name = 'default'): bool|Config
     {
-        if(!isset($this->configs[$connectionName])){
-            throw new RuntimeError("connection {$connectionName} no register yet");
-        }
-        /** @var Config $config */
-        $config = $this->configs[$connectionName];
+        return $this->configs[$name] ?? false;
+    }
 
-        $error = null;
+    public function testDb(string $connectionName = 'default'): bool
+    {
+        $config = $this->getConfig($connectionName);
+        if ($config === false) { throw new RuntimeError("connection {$connectionName} no register yet"); }
         $client = new Client(new MysqliConfig($config->toArray()));
+        $error = null;
         $connect = static function () use ($client, &$error): void {
             try {
-                if (!$client->connect()) {
-                    throw new RuntimeError('Database connection failed');
-                }
+                if (!$client->connect()) { throw new RuntimeError('Database connection failed'); }
             } catch (\Throwable $failure) {
                 $error = $failure;
             } finally {
                 $client->close();
             }
         };
-        if (Coroutine::getCid() >= 0) {
-            $connect();
-        } else {
+        if (Coroutine::getCid() >= 0) { $connect(); }
+        else {
             $scheduler = new Scheduler();
             $scheduler->add($connect);
             $scheduler->start();
         }
-        if ($error !== null) {
-            throw new RuntimeError($error->getMessage(), (int) $error->getCode(), $error);
-        }
+        if ($error !== null) { throw new RuntimeError($error->getMessage(), (int) $error->getCode(), $error); }
         return true;
     }
 
-    function setOnQuery(callable $call):static
-    {
-        $this->onQuery = $call;
-        return $this;
-    }
-
-    function selectConnection(?string $name = null):static|string
+    public function selectConnection(?string $name = null): static|string
     {
         $cid = Coroutine::getCid();
-        if(!empty($name)){
-            if(!isset($this->selectConnection[$cid])){
-                Coroutine::defer(function ()use($cid){
-                    unset($this->selectConnection[$cid]);
-                });
-            }
+        if (!empty($name)) {
+            $this->registerContextCleanup($cid);
             $this->selectConnection[$cid] = $name;
             return $this;
         }
-        if(isset($this->selectConnection[$cid])){
-            return $this->selectConnection[$cid];
-        }
-        return 'default';
+        return $this->selectConnection[$cid] ?? 'default';
     }
 
-    /** 临时选择连接；仅管理选库，回调接收 FastDb，不借还连接或改变事务。 */
     public function withConnection(string $name, callable $callback): mixed
     {
         if ($name === '' || $name === '0') { throw new \InvalidArgumentException('Connection name must be non-empty and cannot be "0"'); }
@@ -151,306 +128,189 @@ class FastDb
         finally { $this->selectConnection($previous); }
     }
 
-    /** 绑定当前实际连接的回调事务；同连接嵌套加入原事务，不创建 savepoint。 */
+    public function currentConnection(): ?Connection
+    {
+        return $this->currentConnection[Coroutine::getCid()][$this->selectConnection()] ?? null;
+    }
+
     public function transaction(callable $callback, TransactionStartFlags $flags = TransactionStartFlags::None,
         ?float $timeout = null): mixed
     {
         if ($timeout !== null && (!is_finite($timeout) || $timeout <= 0)) {
             throw new \InvalidArgumentException('Transaction timeout must be finite and greater than zero');
         }
-        $client = $this->getClient();
-        $context = $this->getTransactionContext($client);
-        $scope = $client->__getTransactionScope();
-        if ($scope !== null && !$scope->isCurrent($client, false)) {
-            if ($scope->depth > 0) { throw new RuntimeError('The managed transaction connection or generation has changed'); }
-            $client->__setTransactionScope(null);
-            $scope = null;
-        }
-        $owner = !$client->isInTransaction;
-        if (!$owner && ($flags !== TransactionStartFlags::None || $timeout !== null)) {
-            throw new \InvalidArgumentException('A joined transaction cannot change start flags or timeout');
-        }
-        $scope ??= new TransactionScope($context);
-        if ($scope->unusable) { throw new RuntimeError('Transaction cleanup failed; close or recycle the connection before reuse'); }
-        if ($scope->rollbackOnly) { throw new RuntimeError('Transaction is marked rollback-only'); }
-        $client->__setTransactionScope($scope);
-        $scope->depth++;
-        $left = false;
-        try {
-            if ($owner) {
-                $scope->authorizeBegin($flags->toSql());
-                try {
-                    if (!$this->begin($client, $flags, $timeout)) { throw new RuntimeError('Failed to begin scoped transaction'); }
-                } finally { $scope->clearPermit(); }
-            }
-            if (!$scope->isCurrent($client)) { throw new RuntimeError('The scoped transaction is no longer active'); }
-            if ($scope->rollbackOnly) { throw new RuntimeError('Transaction is marked rollback-only'); }
-            $value = $callback($this);
-            if (!$scope->isCurrent($client)) { throw new RuntimeError('The scoped transaction connection or generation changed during the callback'); }
-            if ($scope->rollbackOnly) { throw new RuntimeError('Transaction is marked rollback-only by an inner scope'); }
-            // 回调已经退出；结束 owner 后旧 scope 不再限制提交观察回调的新事务。
-            $scope->depth--;
-            $left = true;
-            if ($owner) {
-                if (!$this->commit($client, TransactionCompletionFlags::NoChainNoRelease, $timeout)) {
-                    throw new RuntimeError('Failed to commit scoped transaction');
-                }
-                if ($scope->isCurrent($client)) { throw new RuntimeError('The scoped transaction was not completed by commit'); }
-            }
-            return $value;
-        } catch (\Throwable $error) {
-            $scope->rollbackOnly = true;
-            if (!$left) { $scope->depth--; $left = true; }
-            if ($owner) { $this->rollbackOwnedScope($client, $scope, $timeout); }
-            throw $error;
-        } finally {
-            if (!$left) { $scope->depth--; }
-            if ($client->__getTransactionScope() === $scope && $scope->depth === 0
-                && (!$scope->rollbackOnly || !$scope->isCurrent($client))) {
-                $client->__setTransactionScope(null);
-            }
-        }
+        return TransactionRunner::run($this, $this->getClient(), $callback, $flags, $timeout);
     }
 
-    /** 清理仍属于原代次的事务，保留业务/提交异常，绝不回滚观察回调开启的新事务。 */
-    private function rollbackOwnedScope(Connection $client, TransactionScope $scope, ?float $timeout): void
-    {
-        if (!$scope->isCurrent($client)) { return; }
-        try {
-            if (!$this->rollback($client, TransactionCompletionFlags::NoChainNoRelease, $timeout)) {
-                throw new RuntimeError('Failed to rollback scoped transaction');
-            }
-        } catch (\Throwable) {
-            if ($scope->isCurrent($client)) {
-                try { $client->close(); } catch (\Throwable) {}
-                if ($scope->isCurrent($client)) { $scope->unusable = true; }
-            }
-        }
-    }
-
-    /**
-     * @throws RuntimeError
-     * @throws Exception
-     */
-    function invoke(callable $call)
-    {
-        $client = null;
-        $selectDb = null;
-        // 只有本层新借出的连接才由本层归还，避免嵌套调用提前结束外层事务。
-        $ownsConnection = $this->currentConnection() === null;
-        try{
-            $client = $this->getClient();
-            $selectDb = $client->connectionName;
-            return call_user_func($call,$client);
-        }catch (\Throwable $throwable){
-            throw $throwable;
-        } finally {
-            if($client && $ownsConnection){
-                $pool = $this->pools[$selectDb];
-                try {
-                    $pool->recycleObj($client);
-                }catch (\Throwable $throwable){
-                    trigger_error($throwable->getMessage());
-                }
-                $cid = Coroutine::getCid();
-                if(($this->currentConnection[$cid][$selectDb] ?? null) === $client){
-                    unset($this->currentConnection[$cid][$selectDb]);
-                    unset($this->transactionContexts[$cid][$selectDb]);
-                }
-            }
-        }
-    }
-
-    /**
-     * @throws RuntimeError 启用检查且当前协程任一连接仍有活动事务时抛出。
-     */
-    function recycleContext(bool $checkTransaction = true):void
-    {
-        $cid = Coroutine::getCid();
-        if(isset($this->currentConnection[$cid])){
-            foreach ($this->currentConnection[$cid] as $client) {
-                if (($client->__getTransactionScope()?->depth ?? 0) > 0) {
-                    throw new RuntimeError('Cannot recycle a connection owned by an active transaction() scope');
-                }
-            }
-            // 先检查全部连接再开始回收，确保拒绝回收时连接、查询栈均保持原样。
-            if($checkTransaction){
-                foreach ($this->currentConnection[$cid] as $selectDb => $client){
-                    if($client->isInTransaction){
-                        throw new RuntimeError("Cannot recycle context: connection {$selectDb} has an active transaction");
-                    }
-                }
-            }
-            foreach ($this->currentConnection[$cid] as $selectDb => $client){
-                $pool = $this->pools[$selectDb];
-                try {
-                    $pool->recycleObj($client);
-                }catch (\Throwable $throwable){
-                    trigger_error($throwable->getMessage());
-                }
-            }
-            unset($this->currentConnection[$cid]);
-            unset($this->transactionContexts[$cid]);
-            unset($this->queryStack[$cid]);
-        }
-    }
-
-    /**
-     * @throws RuntimeError
-     * @throws Exception
-     */
-    function begin(?Connection $client = null, TransactionStartFlags $flags = TransactionStartFlags::None, ?float $timeout = null): bool
+    public function begin(?Connection $client = null, TransactionStartFlags $flags = TransactionStartFlags::None,
+        ?float $timeout = null): bool
     {
         $client ??= $this->getClient();
         $client->__getTransactionScope()?->assertControl($client, $flags->toSql());
         if ($client->isInTransaction) { return true; }
-        $context = $this->getTransactionContext($client);
-        $version = $context->version();
-        return $this->execute($client, function () use ($client, $context, $version, $flags, $timeout): bool {
-            $ret = $client->beginTransaction($flags, $timeout);
-            if ($ret === true && $context->version() === $version) { $client->isInTransaction = true; }
-            return $ret;
-        }, null, $flags->toSql())->getResult() === true;
+        return $this->execute($client, static fn () => $client->beginTransaction($flags, $timeout),
+            null, $flags->toSql())->getResult() === true;
     }
 
-    function commit(?Connection $client = null, TransactionCompletionFlags $flags = TransactionCompletionFlags::NoChainNoRelease, ?float $timeout = null):bool
+    public function commit(?Connection $client = null,
+        TransactionCompletionFlags $flags = TransactionCompletionFlags::NoChainNoRelease, ?float $timeout = null): bool
+    {
+        return $this->completeTransaction(false, $client, $flags, $timeout);
+    }
+
+    public function rollback(?Connection $client = null,
+        TransactionCompletionFlags $flags = TransactionCompletionFlags::NoChainNoRelease, ?float $timeout = null): bool
+    {
+        return $this->completeTransaction(true, $client, $flags, $timeout);
+    }
+
+    private function completeTransaction(bool $rollback, ?Connection $client,
+        TransactionCompletionFlags $flags, ?float $timeout): bool
     {
         $client ??= $this->currentConnection();
-        $client?->__getTransactionScope()?->assertControl($client, 'COMMIT' . $flags->toSqlSuffix());
+        $sql = ($rollback ? 'ROLLBACK' : 'COMMIT') . $flags->toSqlSuffix();
+        $client?->__getTransactionScope()?->assertControl($client, $sql);
         if ($client === null || !$client->isInTransaction) { return true; }
-        $context = $this->getTransactionContext($client);
-        $version = $context->version();
-        return $this->execute($client, function () use ($client, $context, $version, $flags, $timeout): bool {
-            $ret = $client->commitTransaction($flags, $timeout);
-            if ($ret === true) {
-                if ($context->version() === $version) {
-                    $client->finishTransaction(true);
-                    $client->isInTransaction = in_array($flags, [TransactionCompletionFlags::Chain, TransactionCompletionFlags::ChainNoRelease], true);
-                }
-            }
-            return $ret;
-        }, null, 'COMMIT' . $flags->toSqlSuffix())->getResult() === true;
+        return $this->execute($client, static fn () => $rollback
+            ? $client->rollbackTransaction($flags, $timeout) : $client->commitTransaction($flags, $timeout),
+            null, $sql)->getResult() === true;
     }
 
-    function rollback(?Connection $client = null, TransactionCompletionFlags $flags = TransactionCompletionFlags::NoChainNoRelease, ?float $timeout = null):bool
+    public function isInTransaction(?Connection $connection = null): bool
     {
-        $client ??= $this->currentConnection();
-        $client?->__getTransactionScope()?->assertControl($client, 'ROLLBACK' . $flags->toSqlSuffix());
-        if ($client === null || !$client->isInTransaction) { return true; }
-        $context = $this->getTransactionContext($client);
-        $version = $context->version();
-        return $this->execute($client, function () use ($client, $context, $version, $flags, $timeout): bool {
-            $ret = $client->rollbackTransaction($flags, $timeout);
-            if ($ret === true) {
-                if ($context->version() === $version) {
-                    $client->finishTransaction(false);
-                    $client->isInTransaction = in_array($flags, [TransactionCompletionFlags::Chain, TransactionCompletionFlags::ChainNoRelease], true);
-                }
-            }
-            return $ret;
-        }, null, 'ROLLBACK' . $flags->toSqlSuffix())->getResult() === true;
+        return ($connection ?? $this->currentConnection())?->isInTransaction ?? false;
     }
 
-    function query(QueryBuilder|callable $queryBuilder,float|null $timeout = null):QueryResult
+    /** completion 直接属于本次执行；指定连接不会改变回调可见的选库。 */
+    public function query(QueryBuilder|callable $queryBuilder, ?float $timeout = null,
+        ?callable $onComplete = null, ?string $connection = null): QueryResult
     {
-        $client = $this->getClient();
+        $client = $this->getClient($connection);
         $build = is_callable($queryBuilder) ? $queryBuilder : null;
         $builder = $build === null ? $queryBuilder : new QueryBuilder();
-        return $this->execute($client, static function () use ($client, $builder, $build, $timeout) {
+        return $this->execute($client, static function (ExecutionFrame $execution) use ($client, $builder, $build, $timeout) {
             if ($build !== null) { $build($builder); }
             $scope = $client->__getTransactionScope();
-            if ($scope === null) { return $client->query($builder, $timeout); }
+            if ($scope === null) {
+                $execution->start();
+                return $client->query($builder, $timeout);
+            }
             $frame = $scope->enterExecution($client, $builder->getLastPrepareQuery());
-            try { return $client->query($builder, $timeout); }
+            try {
+                $execution->start();
+                return $client->query($builder, $timeout);
+            }
             finally { $scope->leaveExecution($frame); }
-        }, $builder);
+        }, $builder, null, $onComplete);
     }
 
-    function rawQuery(string $sql, ?float $timeout = null):QueryResult
+    public function rawQuery(string $sql, ?float $timeout = null, ?callable $onComplete = null,
+        ?string $connection = null): QueryResult
     {
-        $client = $this->getClient();
-        return $this->execute($client, static fn () => $client->rawQuery($sql, $timeout), null, $sql);
+        $client = $this->getClient($connection);
+        return $this->execute($client, static fn () => $client->rawQuery($sql, $timeout), null, $sql, $onComplete);
     }
 
-    /** 内部统一执行入口，结果及查询栈的对外接口保持不变。 */
-    private function execute(Connection $client, callable $operation, ?QueryBuilder $builder = null, ?string $sql = null): QueryResult
+    private function execute(Connection $client, callable $operation, ?QueryBuilder $builder = null,
+        ?string $sql = null, ?callable $onComplete = null): QueryResult
     {
         $this->getTransactionContext($client);
-        $this->executor ??= new QueryExecutor();
         if ($sql !== null && $client->__getTransactionScope() !== null) {
             $original = $operation;
-            $operation = fn () => $this->runScopedOperation($client, $sql, $original);
+            $operation = static function (ExecutionFrame $execution) use ($client, $sql, $original) {
+                $scope = $client->__getTransactionScope();
+                if ($scope === null) { return $original($execution); }
+                $frame = $scope->enterExecution($client, $sql);
+                try { return $original($execution); }
+                finally { $scope->leaveExecution($frame); }
+            };
         }
-        return $this->executor->execute($client, $client->connectionName ?? $this->selectConnection(),
-            $operation, fn (QueryResult $result) => $this->notifyQuery($result), $builder, $sql);
+        $frame = new ExecutionFrame($builder, $sql, $onComplete, true);
+        $frame->result->setConnectionName($client->connectionName ?? 'default');
+        if ($builder === null) { $frame->start(); }
+        try {
+            return $client->runFrame($frame, $operation);
+        } finally {
+            try {
+                // 工厂或低层回调中首次启用诊断，也适用于本次已完成的 SQL。
+                $this->diagnostics?->notify($frame->result);
+                if ($frame->count !== null) { $this->diagnostics?->notify($frame->count->result); }
+            } catch (\Throwable $error) {
+                if ($frame->failure === null) { throw $error; }
+            }
+        }
     }
 
-    /** Facade 捕获工厂构建后的实际 SQL，Connection 再于发送前检查，许可只可消费一次。 */
-    private function runScopedOperation(Connection $client, ?string $sql, callable $operation): mixed
-    {
-        $scope = $client->__getTransactionScope();
-        if ($scope === null) { return $operation(); }
-        $frame = $scope->enterExecution($client, $sql);
-        try { return $operation(); }
-        finally { $scope->leaveExecution($frame); }
-    }
-
-    /** 分页执行器预先读取的总数，不在 QueryResult 上增加接口。 */
     public function getTotalCount(QueryResult $result): ?int
     {
-        return $this->executor?->total($result);
+        return $result->getTotalCount();
     }
 
-    /** 内部分页结果，供实体级回调复用，避免再次执行 FOUND_ROWS。 */
     public function getTotalResult(QueryResult $result): ?QueryResult
     {
-        return $this->executor?->totalResult($result);
+        return $result->getTotalResult();
     }
 
-    /**
-     * 登记当前协程中指定连接的事务上下文；未传连接时使用当前选中连接。
-     * 没有已借出的连接时返回 null，不会为查询上下文而主动建立数据库连接。
-     */
     public function getTransactionContext(?Connection $connection = null): ?TransactionContext
     {
         $connection ??= $this->currentConnection();
-        if ($connection === null) {
-            return null;
-        }
-        // 由连接确认借用归属，不能直接复用同名连接留下的旧登记。
-        $context = $connection->getTransactionContext();
-        $cid = $context->coroutineId;
-        $name = $context->connectionName;
-        // 归属校验仍由连接执行；相同借用无需重复登记和写入已有索引。
-        if (($this->transactionContexts[$cid][$name] ?? null) === $context
-            && ($cid < 0 || isset($this->contextCleanupRegistered[$cid]))) {
-            return $context;
-        }
-        $this->registerContextCleanup($cid);
-        $this->transactionContexts[$cid][$name] = $context;
-        return $context;
+        if ($connection === null) { return null; }
+        $this->registerContextCleanup(Coroutine::getCid());
+        return $connection->getTransactionContext();
     }
 
-    /**
-     * 延迟回调仅捕获协程 ID，通过当前 FastDb 实例读取最新登记，不捕获历史连接和上下文。
-     * 显式回收后仍保留登记标记，避免长生命周期协程反复借还时累积 defer。
-     */
+    public function invoke(callable $call): mixed
+    {
+        $ownsConnection = $this->currentConnection() === null;
+        $client = $this->getClient();
+        $name = $client->connectionName;
+        try { return $call($client); }
+        finally {
+            if ($ownsConnection) {
+                $this->returnConnection($name, $client);
+                $cid = Coroutine::getCid();
+                if (($this->currentConnection[$cid][$name] ?? null) === $client) {
+                    unset($this->currentConnection[$cid][$name]);
+                }
+            }
+        }
+    }
+
+    public function recycleContext(bool $checkTransaction = true): void
+    {
+        $cid = Coroutine::getCid();
+        $connections = $this->currentConnection[$cid] ?? [];
+        // 在产生回收副作用之前检查全部连接，失败时查询栈和借用均保持原状。
+        foreach ($connections as $name => $client) {
+            if (($client->__getTransactionScope()?->depth ?? 0) > 0) {
+                throw new RuntimeError('Cannot recycle a connection owned by an active transaction() scope');
+            }
+            if ($checkTransaction && $client->isInTransaction) {
+                throw new RuntimeError("Cannot recycle context: connection {$name} has an active transaction");
+            }
+        }
+        foreach ($connections as $name => $client) { $this->returnConnection($name, $client); }
+        unset($this->currentConnection[$cid]);
+        $this->diagnostics?->clear($cid);
+    }
+
+    private function returnConnection(string $name, Connection $client): void
+    {
+        try { $this->pools[$name]->recycleObj($client); }
+        catch (\Throwable $error) { trigger_error($error->getMessage()); }
+    }
+
     private function registerContextCleanup(int $cid, bool $recycleConnections = false): void
     {
-        if ($cid < 0) {
-            return;
-        }
+        if ($cid < 0) { return; }
         if (isset($this->contextCleanupRegistered[$cid])) {
-            // 仅登记外部连接时不取得回收权；之后自行借出连接时才升级为负责回收。
             $this->contextCleanupRegistered[$cid] = $this->contextCleanupRegistered[$cid] || $recycleConnections;
             return;
         }
         $this->contextCleanupRegistered[$cid] = $recycleConnections;
         Coroutine::defer(function () use ($cid): void {
             try {
-                // 协程已结束，必须清理未完成事务，不能使用默认的拒绝回收检查。
                 if ($this->contextCleanupRegistered[$cid]) {
-                    // 硬退出协程可能跳过业务 finally；先关闭仍被作用域持有的会话，避免重借窗口。
                     foreach ($this->currentConnection[$cid] ?? [] as $client) {
                         $scope = $client->__getTransactionScope();
                         if (($scope?->depth ?? 0) > 0) {
@@ -461,68 +321,49 @@ class FastDb
                     $this->recycleContext(false);
                 }
             } finally {
-                unset($this->currentConnection[$cid], $this->transactionContexts[$cid],
-                    $this->queryStack[$cid], $this->contextCleanupRegistered[$cid]);
+                unset($this->currentConnection[$cid], $this->selectConnection[$cid], $this->contextCleanupRegistered[$cid]);
+                $this->diagnostics?->clear($cid);
             }
         });
     }
 
-    function currentConnection():?Connection
+    private function getClient(?string $name = null): Connection
     {
         $cid = Coroutine::getCid();
-        if(isset($this->currentConnection[$cid][$this->selectConnection()])){
-            return $this->currentConnection[$cid][$this->selectConnection()];
-        }
-        return null;
-    }
-
-    /**
-     * @throws RuntimeError
-     * @throws Exception
-     */
-    private function getClient():Connection
-    {
-        $cid = Coroutine::getCid();
-        $name = $this->selectConnection();
-        if(isset($this->currentConnection[$cid][$name])){
-            return $this->currentConnection[$cid][$name];
-        }
-
+        $name ??= $this->selectConnection();
+        if (isset($this->currentConnection[$cid][$name])) { return $this->currentConnection[$cid][$name]; }
         $this->registerContextCleanup($cid, true);
-        if(!isset($this->configs[$name])){
-            throw new RuntimeError("connection {$name} not register yet");
+        $config = $this->getConfig($name);
+        if ($config === false) { throw new RuntimeError("connection {$name} not register yet"); }
+        $pool = $this->pools[$name] ??= new Pool($config);
+        // 仅在借用入口已开启 trace 时计时；计时值始终在本方法内消费。
+        $trace = $this->diagnostics?->enabled() ?? false;
+        $startTime = $trace ? microtime(true) : 0.0;
+        $startTick = $trace ? hrtime(true) : 0;
+        $error = null;
+        try {
+            try { $client = $pool->getObj(); }
+            catch (\Throwable $cause) {
+                $message = $cause instanceof PoolEmpty ? 'pool empty' : $cause->getMessage();
+                throw new RuntimeError("connection {$name} error case " . $message, (int) $cause->getCode(), $cause);
+            }
+            if ($client === null) { throw new RuntimeError("connection {$name} error case pool empty"); }
+        } catch (\Throwable $failure) {
+            $error = $failure;
+            throw $failure;
+        } finally {
+            if ($trace) {
+                $duration = (hrtime(true) - $startTick) / 1_000_000_000;
+                $this->diagnostics?->recordAcquire($name, $startTime, microtime(true), $duration, $error);
+            }
         }
-        /** @var Config $dbConfig */
-        $dbConfig = $this->configs[$name];
-        if(!isset($this->pools[$name])){
-            $pool = new Pool($dbConfig);
-            $this->pools[$name] = $pool;
-        }else{
-            /** @var Pool $pool */
-            $pool = $this->pools[$name];
-        }
-        try{
-            // 统一由 FastDb 的协程级清理归还连接，避免 Pool::defer 重复登记回调。
-            $obj = $pool->getObj();
-        }catch (\Throwable $throwable){
-            $message = $throwable instanceof PoolEmpty
-                ? 'pool empty'
-                : $throwable->getMessage();
-            throw new RuntimeError("connection {$name} error case ".$message, (int) $throwable->getCode(), $throwable);
-        }
-
-        if($obj == null){
-            throw new RuntimeError("connection {$name} error case pool empty");
-        }
-        /** @var Connection $obj */
-        $obj->connectionName = $name;
-        $this->currentConnection[$cid][$name] = $obj;
-        $this->getTransactionContext($obj);
-
-        return $this->currentConnection[$cid][$name];
+        $client->connectionName = $name;
+        $this->currentConnection[$cid][$name] = $client;
+        $this->getTransactionContext($client);
+        return $client;
     }
 
-    function reset()
+    public function reset(): void
     {
         foreach ($this->currentConnection as $connections) {
             foreach ($connections as $client) {
@@ -531,81 +372,13 @@ class FastDb
                 }
             }
         }
-        /** @var Pool $pool */
-        foreach ($this->pools as $pool){
-            $pool->reset();
-        }
+        foreach ($this->pools as $pool) { $pool->reset(); }
     }
 
-    function preConnect():void
+    public function preConnect(): void
     {
-        foreach ($this->configs as $name => $config){
-            /** @var Config $dbConfig */
-            $dbConfig = $this->configs[$name];
-            if(!isset($this->pools[$name])){
-                $pool = new Pool($dbConfig);
-                $this->pools[$name] = $pool;
-            }else{
-                /** @var Pool $pool */
-                $pool = $this->pools[$name];
-            }
-            $pool->keepMin();
+        foreach ($this->configs as $name => $config) {
+            ($this->pools[$name] ??= new Pool($config))->keepMin();
         }
-    }
-
-    function isInTransaction(?Connection $connection = null):bool
-    {
-        $cid = Coroutine::getCid();
-        if($connection == null){
-            $connection = $this->currentConnection();
-        }
-        if($connection){
-            return $connection->isInTransaction;
-        }
-        return false;
-    }
-
-    private function notifyQuery(QueryResult $result): void
-    {
-        $this->logStack($result);
-        if (is_callable($this->onQuery)) {
-            // 查询已经失败时优先保留原异常；成功查询的回调异常仍正常向外传播。
-            $executionException = $result->getException();
-            try {
-                call_user_func($this->onQuery, $result);
-            } catch (\Throwable $callbackException) {
-                if ($executionException === null) {
-                    throw $callbackException;
-                }
-            }
-        }
-    }
-
-    protected function logStack(QueryResult $result): void
-    {
-        if($this->enableQueryStack){
-            $stack = new QueryStack();
-            // 统一使用执行时的连接名，不能用记录日志时可能已改变的选中连接名。
-            $stack->connectionName = $result->getConnectionName();
-            $stack->endTime = $result->getEndTime();
-            $stack->startTime = $result->getStartTime();
-            $stack->duration = $result->getDuration();
-            $stack->query = $result->getQueryBuilder();
-            $stack->rawQuery = $result->getRawSql();
-            $cid = Coroutine::getCid();
-            if(!isset($this->queryStack[$cid])){
-                $this->queryStack[$cid] = [];
-            }
-            $this->queryStack[$cid][] = $stack;
-        }
-    }
-
-    /**
-     * @param string $name
-     * @return false|Config
-     */
-    public function getConfig(string $name = 'default'): bool|Config
-    {
-        return $this->configs[$name] ?? false;
     }
 }

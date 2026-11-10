@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace EasySwoole\FastDb\Tests;
 
 use EasySwoole\FastDb\FastDb;
-use EasySwoole\FastDb\Internal\QueryExecutor;
 use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\Mysqli\Client;
 use EasySwoole\Mysqli\Config;
@@ -197,7 +196,6 @@ final class PaginationObserverTest extends TestCase
     }
     private function assertScopeCleared(Connection $connection): void
     {
-        $this->assertNull((new \ReflectionProperty(Connection::class, 'deferredCountObserver'))->getValue($connection));
-        $this->assertCount(0, (new \ReflectionProperty(QueryExecutor::class, 'completionObservers'))->getValue());
+        $this->assertNull((new \ReflectionProperty(Connection::class, 'executionFrame'))->getValue($connection));
     }
 }

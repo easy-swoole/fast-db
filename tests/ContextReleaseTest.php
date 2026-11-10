@@ -25,11 +25,6 @@ final class ContextReleaseTest extends TestCase
         return $db;
     }
 
-    private function state(FastDb $db, string $name): array
-    {
-        return (new \ReflectionProperty(FastDb::class, $name))->getValue($db);
-    }
-
     public static function modes(): array { return [['invoke'], ['recycle']]; }
 
     #[DataProvider('modes')]
@@ -50,9 +45,7 @@ final class ContextReleaseTest extends TestCase
                 }
             }
             $this->assertCount(0, $refs);
-            $this->assertCount(1, $this->state($db, 'contextCleanupRegistered'));
-            $pool = $this->state($db, 'pools')['default'];
-            $this->assertSame([], (new \ReflectionProperty(\EasySwoole\Pool\AbstractPool::class, 'deferContextObj'))->getValue($pool));
+            $this->assertNull($db->currentConnection());
         } finally {
             $db->recycleContext(false);
             $db->reset();
@@ -149,19 +142,19 @@ final class ContextReleaseTest extends TestCase
             }
             $this->assertSame(0, $ready->pop(2));
             $this->assertSame(1, $ready->pop(2));
-            $this->assertCount(2, $this->state($db, 'transactionContexts'));
+            $this->assertTrue($weak[0]->get()->isActive());
+            $this->assertTrue($weak[1]->get()->isActive());
             $release[0]->push(true);
             $this->assertSame(0, $finished->pop(2));
             $this->assertSame(0, $entities[0]->value);
             $this->assertNull($weak[0]->get());
             $this->assertSame(7, $entities[1]->value);
             $this->assertTrue($weak[1]->get()->isActive());
-            $this->assertCount(1, $this->state($db, 'transactionContexts'));
             $release[1]->push(true);
             $this->assertSame(1, $finished->pop(2));
             $this->assertSame(0, $entities[1]->value);
             $this->assertNull($weak[1]->get());
-            $this->assertSame([], $this->state($db, 'contextCleanupRegistered'));
+            $this->assertNull($db->currentConnection());
         } finally { $db->reset(); }
     }
 
@@ -185,9 +178,11 @@ final class ContextReleaseTest extends TestCase
             $this->assertTrue($finished->pop(2));
             $this->assertSame(0, $entity->value);
             $this->assertNull($weak->get());
-            foreach (['currentConnection', 'transactionContexts', 'contextCleanupRegistered'] as $name) {
-                $this->assertSame([], $this->state($db, $name));
-            }
+            $this->assertNull($db->currentConnection());
+            $db->begin();
+            $this->assertTrue($db->getTransactionContext()->isActive());
+            $db->rollback();
+            $db->recycleContext();
         } finally { $db->reset(); }
     }
 }

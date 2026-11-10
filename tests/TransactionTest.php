@@ -155,9 +155,8 @@ final class TransactionTest extends TestCase
             $this->assertSame(0, $this->value());
             $this->assertSame(0, $entity->value);
             $this->assertNull($weak->get());
-            foreach (['currentConnection', 'transactionContexts', 'contextCleanupRegistered'] as $name) {
-                $this->assertSame([], (new \ReflectionProperty(FastDb::class, $name))->getValue($db));
-            }
+            $this->assertNull($db->currentConnection());
+            $this->assertNull($db->getQueryStack());
             // 同一个连接池再次借用，必须能开启并回滚新事务。
             $db->begin();
             $db->rawQuery("UPDATE `{$this->table}` SET value=9 WHERE id=1");

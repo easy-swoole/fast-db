@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace EasySwoole\FastDb\Tests;
 
 use EasySwoole\FastDb\FastDb;
-use EasySwoole\FastDb\Mysql\QueryResult;
+use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Tests\Model\User;
 use EasySwoole\Mysqli\QueryBuilder;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -16,10 +16,11 @@ final class FindAllTest extends TestCase
     #[DataProvider('primaryKeyQueries')]
     public function testPrimaryKeyQuery(?string $primaryKeys, string $expectedCondition): void
     {
-        $result = new QueryResult(microtime(true));
-        $result->setResult([]);
-        $db = $this->getMockBuilder(FastDb::class)->onlyMethods(['query'])->getMock();
-        $db->expects($this->once())->method('query')
+        $client = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()
+            ->onlyMethods(['query', 'getLastAffectRows', 'getLastInsertId'])->getMock();
+        $client->method('getLastAffectRows')->willReturn(0);
+        $client->method('getLastInsertId')->willReturn(0);
+        $client->expects($this->once())->method('query')
             ->with($this->callback(function (QueryBuilder $query) use ($expectedCondition): bool {
                 $sql = $query->getLastQuery();
                 if ($expectedCondition === '') {
@@ -28,7 +29,9 @@ final class FindAllTest extends TestCase
                     $this->assertStringContainsString($expectedCondition, $sql);
                 }
                 return true;
-            }))->willReturn($result);
+            }))->willReturn([]);
+        $db = new FastDb();
+        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $client]]);
 
         $instance = new \ReflectionProperty(FastDb::class, 'instance');
         $original = $instance->getValue();

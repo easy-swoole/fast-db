@@ -9,7 +9,6 @@ use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Attributes\Hook\Call;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
-use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\Mysqli\QueryBuilder;
 use PHPUnit\Framework\TestCase;
 
@@ -17,17 +16,17 @@ final class UpdateConversionTest extends TestCase
 {
     public function testJsonConversionAndComparisonBaseline(): void
     {
-        $connection = $this->createStub(Connection::class);
+        $connection = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()
+            ->onlyMethods(['query', 'getLastAffectRows', 'getLastInsertId'])->getMock();
         $connection->method('getLastAffectRows')->willReturn(1);
-        $result = new QueryResult(microtime(true));
-        $result->setAffectedRows(1);
+        $connection->method('getLastInsertId')->willReturn(0);
         $queries = [];
-        $db = $this->getMockBuilder(FastDb::class)->onlyMethods(['query'])->getMock();
-        $db->expects($this->exactly(2))->method('query')
-            ->willReturnCallback(function (QueryBuilder $query) use (&$queries, $result): QueryResult {
+        $connection->expects($this->exactly(2))->method('query')
+            ->willReturnCallback(function (QueryBuilder $query) use (&$queries): bool {
                 $queries[] = $query->getLastBindParams();
-                return $result;
+                return true;
             });
+        $db = $this->database($connection);
         $instance = new \ReflectionProperty(FastDb::class, 'instance');
         $original = $instance->getValue();
         $instance->setValue(null, $db);
@@ -49,16 +48,16 @@ final class UpdateConversionTest extends TestCase
 
     public function testCallbackReceivesCurrentEntityAndNull(): void
     {
-        $connection = $this->createStub(Connection::class);
+        $connection = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()
+            ->onlyMethods(['query', 'getLastAffectRows', 'getLastInsertId'])->getMock();
         $connection->method('getLastAffectRows')->willReturn(1);
-        $result = new QueryResult(microtime(true));
-        $result->setAffectedRows(1);
-        $db = $this->getMockBuilder(FastDb::class)->onlyMethods(['query'])->getMock();
-        $db->expects($this->once())->method('query')
+        $connection->method('getLastInsertId')->willReturn(0);
+        $connection->expects($this->once())->method('query')
             ->with($this->callback(function (QueryBuilder $query): bool {
                 $this->assertSame([null, 1], $query->getLastBindParams());
                 return true;
-            }))->willReturn($result);
+            }))->willReturn(true);
+        $db = $this->database($connection);
         $instance = new \ReflectionProperty(FastDb::class, 'instance');
         $original = $instance->getValue();
         $instance->setValue(null, $db);
@@ -70,6 +69,13 @@ final class UpdateConversionTest extends TestCase
         } finally {
             $instance->setValue(null, $original);
         }
+    }
+
+    private function database(Connection $client): FastDb
+    {
+        $db = new FastDb();
+        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $client]]);
+        return $db;
     }
 }
 

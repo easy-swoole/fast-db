@@ -10,7 +10,9 @@ FastDb 是面向 Swoole 协程环境的 MySQL 数据访问库，组合连接池�
 
 | 组件 | 职责 |
 | --- | --- |
-| `Internal\QueryExecutor` | 统一执行、计时、异常保留、结果快照和回调通知；分页总数在外部回调前读取 |
+| `Internal\ExecutionFrame` | 保存单次执行的结果、计时与完成回调状态；分页总数在外部回调前读取 |
+| `Mysql\Connection` | 执行查询、同步事务状态、保存成功时点的结果快照，再通知底层回调 |
+| `Internal\QueryDiagnostics` | 按需保存全局查询回调和每协程有界事件栈；分别记录查询执行与连接获取 |
 | `Mysql\TransactionContext` | 按协程与实际连接保存事务基准，使用事务代次和操作令牌区分连续事务 |
 | `Internal\EntityState` | 字段比较基准、变更检测、主键保护和成功写入后的基准更新 |
 | `Internal\FieldCodec` | 加载赋值转换、写入值转换；与序列化隐藏字段分别处理 |
@@ -18,7 +20,9 @@ FastDb 是面向 Swoole 协程环境的 MySQL 数据访问库，组合连接池�
 | `Internal\RelationLoader` | 关联结果构造、唯一性检查及实体实例范围的关联缓存 |
 | `Internal\RelationPreloader` | 显式预加载时逐父捕获关联计划、分批查询，并回填实体缓存或附加数组结果 |
 
-`QueryResult` 和 `QueryStack` 的公开接口保持不变，测试会检查方法签名、参数名及公开属性。
+`QueryResult` 保存查询执行结果及原有执行阶段耗时；连接获取独立记录为 `QueryStack` 中的 `connectionAcquire` 事件，使用同一个 `duration` 字段表示该事件耗时。查询栈默认每协程只保留最近 256 条事件，可按实例调整；未配置查询回调或查询栈时，不创建诊断组件。
+
+克隆 FastDb 保留当前协程选库，并独立复制配置和诊断设置/回调；连接池、已借连接、查询栈历史及退出清理登记不会继承，由新实例按需创建和清理。
 
 `Query` 仅在首次添加 SQL 条件或显式读取底层构造器时创建 `QueryBuilder`；只配置输出字段或序列化实体时无需分配 SQL 构造器。清理 SQL 条件仍生成新的 Query，外部持有的旧 Query 和构造器引用保持原有状态；克隆实体时查询所有者和可变配置继续独立。
 
@@ -71,7 +75,7 @@ FastDb 是面向 Swoole 协程环境的 MySQL 数据访问库，组合连接池�
 - 选库作用域退出时恢复连接名；回调事务按实际连接管理提交、回滚及同连接嵌套加入。
 - 字段白名单、隐藏字段与可重复序列化的输出限制。
 - 插入、更新、删除、初始化钩子，以及一对一/一对多关联与可选批量预加载。
-- 全局/单次查询回调、耗时统计与协程级查询栈。
+- 全局/单次查询回调、SQL 与连接获取耗时统计，以及每协程容量可配置的查询栈。
 - PHPUnit 13.4 测试入口，支持独立单元测试和真实数据库集成测试。
 
 ### 运行要求
@@ -1691,9 +1695,12 @@ $row = $result->getResultOne();
 | `getConnectionName()` | 本次查询的执行连接名快照（string），供慢日志和异常定位使用；执行前必须设置 |
 | `getAffectedRows()` | 本次成功查询的影响行数快照；未取得结果或查询失败时为 null |
 | `getInsertId()` | 本次成功查询的自增 ID 快照；未取得结果或查询失败时为 null |
+| `getTotalCount(): ?int` | 请求分页总数后的统计结果；未读取总数时为 null |
+| `getTotalResult(): ?self` | 总数查询的 QueryResult；未读取总数时为 null |
 | `getQueryBuilder()` | 构建器查询的副本；原始 SQL 查询时 null |
 | `getRawSql()` | 原始 SQL 文本；构建器查询时通常 null |
-| `getStartTime()` / `getEndTime()` | 秒单位的时间戳，可相减计算执行耗时 |
+| `getDuration(): float` | 查询执行阶段耗时，秒，保持原有计时含义；不含获取连接及日志回调，实体失败替代结果见下文 |
+| `getStartTime()` / `getEndTime()` | Unix 时间戳，用于日志定位；查询执行耗时使用 getDuration() |
 
 写入结果的影响行数和 insert id 从 QueryResult 快照读取：
 
@@ -1705,6 +1712,12 @@ $insertId = $result->getInsertId();
 连接名在执行 SQL 前从实际连接记录，查询失败时也保留。查询栈统一读取该快照，不会因为构建器回调或日志回调切换连接而记错数据库。模型查询失败时的实体回调同样保留发起查询时的连接名。
 
 影响行数和自增 ID 类型为 `int|string|null`，超大无符号值保留为字符串，未查询或查询失败时为 null。影响行数与自增 ID 在查询成功后、日志回调执行前记录为快照，不会被后续 SQL 覆盖。QueryResult 不再暴露 Connection。`query()` 和 `rawQuery()` 的可选 `$timeout` 已传递给 mysqli 5.x，控制本次查询超时。
+
+分页总数及对应查询结果随主查询的 QueryResult 一起保存，可直接读取 `$result->getTotalCount()` 和 `$result->getTotalResult()`。FastDb 的 `getTotalCount($result)` / `getTotalResult($result)` 仅转发到结果对象，不另外保存总数映射。
+
+`getDuration()` 保留原有查询执行阶段的计时含义，从取得连接后开始，不把获取连接或日志回调算进去。`query(callable)` 的工厂在该执行阶段内运行，因此也包含工厂构建耗时，不能把它等同于纯服务端 SQL 耗时。
+
+连接获取耗时通过查询栈的独立 `connectionAcquire` 事件读取，不分摊给某条 SQL 或 QueryResult。计时覆盖连接池 `getObj()` 阶段，包含排队、按需新建连接、健康检查及重试；它不是纯粹的队列等待时间。业务端到端耗时还包含进入查询执行阶段前的构建和业务代码等阶段，需要另行计时。
 
 ### 超时异常定位
 
@@ -1757,7 +1770,7 @@ $db->setOnQuery(function (QueryResult $result): void {
 });
 ```
 
-开始时间在获得连接之后记录，因此不包含连接池等待。`query()` / `rawQuery()` 结束时间在执行结束或失败后、调用日志回调之前记录，不包含日志回调耗时。begin/commit/rollback 实际执行后，无论成功、SQL 错误或超时，都进入日志回调和查询栈；直接返回且未执行 SQL 时不触发。事务 rawSql 与 flags 生成的执行 SQL 一致。获取连接前失败不会进入这些执行回调。
+查询执行阶段的开始时间在获得连接之后记录，执行耗时不包含获取连接；获取阶段另记为独立查询栈事件。`query()` / `rawQuery()` 结束时间在执行结束或失败后、调用日志回调之前记录，不包含日志回调耗时；`query(callable)` 的工厂构建仍包含在原有执行计时内。begin/commit/rollback 实际执行后，无论成功、SQL 错误或超时，都进入日志回调和查询栈；直接返回且未执行 SQL 时不触发。事务 rawSql 与 flags 生成的执行 SQL 一致。全局 `onQuery` 只接收查询执行结果，连接获取成功或失败均不调用它。
 
 `query()` / `rawQuery()` 和事务执行抛异常时，回调中的 `getException()` 返回该次执行抛出的同一异常对象，`getResult()` / `getResultOne()` 为 null。成功执行时 getException() 为 null。执行已失败时，日志回调另抛异常不会覆盖原始执行异常；执行成功时，回调异常正常抛出，不能据此认定数据库操作失败。执行异常在回调后继续向调用方抛出。
 
@@ -1780,22 +1793,63 @@ $user = User::findRecord(1, onQuery: function (QueryResult $result): void {
 
 `findAll()`、`fastUpdate()`、`fastDelete()` 也有 `$onQuery` 参数。全局回调与实体/单次回调可以同时执行。实体查询在获得结果前失败时会创建替代 `QueryResult`，该结果提供时间、SQL 信息、执行异常及空结果，不保证拥有可用连接。
 
+实体借用连接失败时，这份替代结果保留原有兼容计时，`getDuration()` 仍可能包含失败调用区间；此时不能把它当作实际 SQL 执行窗口。开启查询栈后的独立 `connectionAcquire` 失败事件能更准确地区分获取耗时和异常。
+
 ### 查询栈
 
 ```php
-$db->isEnableQueryStack(true);
-$db->rawQuery('SELECT 11');
+$db->isEnableQueryStack(true, maxStackSize: 2);
+$db->rawQuery('SELECT 11'); // 首次借连接时先记 connectionAcquire，再记 query，共占两条。
 $db->rawQuery('SELECT 22');
+$db->rawQuery('SELECT 33');
 
 $stack = $db->getQueryStack(); // 当前协程记录数组，未记录时 null。
-$first = $db->getQueryStack(0);
-$last = $db->getQueryStack(-1); // SELECT 22。
-$previous = $db->getQueryStack(-2); // SELECT 11。
+$first = $db->getQueryStack(0); // SELECT 22，SELECT 11 已淘汰。
+$last = $db->getQueryStack(-1); // SELECT 33。
+$previous = $db->getQueryStack(-2); // SELECT 22。
 $missing = $db->getQueryStack(100); // null。
-$db->isEnableQueryStack(false); // 停止追加，不立即删除已有记录。
+$db->isEnableQueryStack(false, maxStackSize: 2); // 停止追加，保持相同容量下的已有记录。
 ```
 
-每项 `QueryStack` 包含 `connectionName`、`query`、`rawQuery`、`startTime`、`endTime`、`duration`。`duration` 使用 `hrtime()` 计算，单位为秒；开始、结束时间仍为 Unix 时间戳。协程退出/归还上下文时清理。开启后会积累记录，长生命周期协程应控制使用范围。
+`isEnableQueryStack(bool $bool, int $maxStackSize = 256): static` 的容量必须是正整数，配置属于该 FastDb 实例；每个协程分别保留最近 N 条事件，包含 `query` 和 `connectionAcquire`，达到容量时淘汰最旧项。返回数组始终按保留记录的先后顺序排列；正索引 0 表示当前保留的最旧项，-1 表示最新项，越界返回 null，原有索引规则不变。首次查询若需要借连接会产生两条事件，复用连接的后续查询只有 `query` 事件。
+
+每次启停调用都会应用 `maxStackSize`，缩小容量会立即裁剪该实例所有已有协程栈，包括关闭时。关闭只停止追加，不主动清空，但 `isEnableQueryStack(false)` 也会应用默认容量 256：此前容量大于 256 时，已有记录会缩到最近 256 条。需要保留更大容量下的现有记录，可显式传原容量，例如 `isEnableQueryStack(false, maxStackSize: 1024)`。协程退出或回收上下文时清理其记录。
+
+每项 `QueryStack` 的字段为：
+
+| 字段 | 含义 |
+| --- | --- |
+| `type` | 普通 SQL 为 `query`，独立连接获取事件为 `connectionAcquire` |
+| `connectionName` | 本次操作的连接名快照，失败时也可定位尝试借用的连接 |
+| `query` / `rawQuery` | SQL 构造器快照或原始 SQL；连接获取事件两者均为 null |
+| `duration` | 当前事件耗时，秒；query 为原查询执行阶段（含 query(callable) 工厂），connectionAcquire 为本次 getObj() 的获取总耗时 |
+| `exception` | SQL 执行异常，或连接获取事件中实际向外抛出的借用异常；成功时为 null |
+| `startTime` / `endTime` | 记录的起止 Unix 时间戳，用于日志定位；耗时字段使用单调时钟 |
+
+普通 SQL 记录的异常来自该 SQL 执行结果，不把 SQL 成功后日志回调再抛出的错误改记为 SQL 失败。获取连接失败时，栈中的 `exception` 则保留实际向调用方抛出的那个异常。
+
+#### 连接获取的独立事件
+
+通过 FastDb 真正执行一次 `getObj()` 新借连接，无论由 `query()`、`rawQuery()`、直接 `begin()`，还是 `invoke()`、`transaction()` 触发，都生成一条独立的 `type = 'connectionAcquire'` 事件。复用已有连接不生成获取事件；向 `begin()` 显式传入已有 Connection 也不借连接。连接池内部的创建、健康检查与重试包含在这一条事件里，不拆成多条。配置校验、`testDb()` 和 `preConnect()` 不属于这段借用计时。
+
+借用失败同样记录独立获取事件：`query` 和 `rawQuery` 为 null，`duration` 是获取历时，连接名及实际向外抛出的异常可见。没有执行 SQL 时，不生成 `query` 事件，也不调用全局 `onQuery`。
+
+仅在借用入口已启用查询栈时启动获取计时，记录完成时若已关闭则丢弃事件；入口关闭、借用过程中才开启时，该次借用不补记获取事件，之后的查询执行可正常入栈。工厂或底层查询回调中首次注册全局回调、开启查询栈，对当前查询的最终通知也会生效。回调重入可能使内层事件先于外层出现，不能假定获取事件与使用该连接的 SQL 总是相邻。嵌套事件历时可能互相包含，也不能把全部事件的 `duration` 相加当作业务端到端耗时。
+
+```php
+$db->isEnableQueryStack(true, maxStackSize: 256);
+try {
+    $db->rawQuery('SELECT 1');
+} catch (Throwable $error) {
+    $event = $db->getQueryStack(-1);
+    if ($event !== null && $event->type === 'connectionAcquire') {
+        $acquireMs = $event->duration * 1000;
+        $connectionName = $event->connectionName;
+        $sameException = $event->exception === $error;
+    }
+    throw $error;
+}
+```
 
 ## 记录慢查询日志
 
@@ -1828,7 +1882,7 @@ final class SlowQueryLogger
 }
 ```
 
-耗时使用 `hrtime()` 的单调时钟计算，系统时间调整不会影响耗时测量；`startTime` 仍为 Unix 时间戳，便于定位日志发生时间。全局查询耗时从获得连接之后开始，到执行结束或失败时停止，不包含连接池等待及日志回调耗时。失败或超时的执行达到阈值时也会记录。
+耗时使用 `hrtime()` 的单调时钟计算，系统时间调整不会影响耗时测量；`startTime` 仍为 Unix 时间戳，便于定位日志发生时间。示例仍按原有查询执行阶段达到 200 毫秒判定慢查询，包含 `query(callable)` 工厂构建，不把获取连接或日志回调算进该阈值。实体借用失败的替代结果按上一节说明处理。若需要发现查询执行很快、连接获取很慢的情况，应读取已开启的查询栈，对 `type === 'connectionAcquire'` 事件的 `duration` 设置独立阈值；获取事件不进入全局 `onQuery`。
 
 ### 方法一：FastDb 全局 onQuery
 
@@ -1966,8 +2020,8 @@ $config = ConfigModel::findRecord(
 | `preConnect()` | 预热各连接池 |
 | `reset()` | 重置全部连接池；存在活动 transaction() 作用域时拒绝 |
 | `setOnQuery(callable $call)` | 设置全局回调；返回管理器 |
-| `isEnableQueryStack(bool $enabled)` | 开关记录；返回管理器 |
-| `getQueryStack(?int $index = null)` | 整栈、单项或 null |
+| `isEnableQueryStack(bool $bool, int $maxStackSize = 256): static` | 每协程保留最近 N 条查询/获取连接事件；启停均应用容量，缩小时立即裁剪已有栈 |
+| `getQueryStack(?int $index = null)` | 整栈、单项或 null；事件类型由 type 区分 |
 
 ## 开发与测试
 

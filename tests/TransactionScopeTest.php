@@ -169,9 +169,8 @@ final class TransactionScopeTest extends TestCase
             $this->assertSame([], $this->amounts('a'));
             $this->assertNull($context->get());
             $this->assertNull($scope->get());
-            foreach (['currentConnection', 'transactionContexts', 'queryStack', 'contextCleanupRegistered'] as $name) {
-                $this->assertSame([], (new \ReflectionProperty(FastDb::class, $name))->getValue($db));
-            }
+            $this->assertNull($db->currentConnection());
+            $this->assertNull($db->getQueryStack());
         } finally { $db->reset(); }
     }
 

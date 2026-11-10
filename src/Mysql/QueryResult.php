@@ -12,6 +12,8 @@ class QueryResult
     // 单调时钟仅用于计算耗时，不能作为日期时间使用。
     protected int|float $startTick;
     protected float $duration = 0.0;
+    // count 不回指主结果，查询结束后不会保留连接或执行闭包。
+    private ?self $totalResult = null;
     protected mixed $result = null;
     protected ?\Throwable $exception = null;
     // 执行连接名的快照，不随日志回调或后续操作切换数据库而改变。
@@ -44,6 +46,21 @@ class QueryResult
     public function getDuration(): float
     {
         return $this->duration;
+    }
+
+    public function getTotalResult(): ?self
+    {
+        return $this->totalResult;
+    }
+
+    public function setTotalResult(?self $result): void
+    {
+        $this->totalResult = $result;
+    }
+
+    public function getTotalCount(): ?int
+    {
+        return $this->totalResult === null ? null : (int) ($this->totalResult->getResultOne()['count'] ?? 0);
     }
 
     public function getException(): ?\Throwable

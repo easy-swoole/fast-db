@@ -6,7 +6,6 @@ namespace EasySwoole\FastDb\Tests;
 
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
-use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\FastDb\Tests\Model\User;
 use EasySwoole\Mysqli\QueryBuilder;
 use PHPUnit\Framework\TestCase;
@@ -30,15 +29,19 @@ final class UpdateBaselineTest extends TestCase
 
     private function mockUpdates(int $count, array $affectedRows = [1]): void
     {
-        $result = new QueryResult(microtime(true));
-
-        $db = $this->getMockBuilder(FastDb::class)->onlyMethods(['query'])->getMock();
-        $db->expects($this->exactly($count))->method('query')
-            ->willReturnCallback(function (QueryBuilder $query) use ($result, &$affectedRows): QueryResult {
-                $result->setAffectedRows(count($affectedRows) > 1 ? array_shift($affectedRows) : $affectedRows[0]);
+        $affected = 0;
+        $client = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()
+            ->onlyMethods(['query', 'getLastAffectRows', 'getLastInsertId'])->getMock();
+        $client->expects($this->exactly($count))->method('query')
+            ->willReturnCallback(function (QueryBuilder $query) use (&$affected, &$affectedRows): bool {
+                $affected = count($affectedRows) > 1 ? array_shift($affectedRows) : $affectedRows[0];
                 $this->queries[] = $query->getLastQuery();
-                return $result;
+                return true;
             });
+        $client->method('getLastAffectRows')->willReturnCallback(static function () use (&$affected): int { return $affected; });
+        $client->method('getLastInsertId')->willReturn(0);
+        $db = new FastDb();
+        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $client]]);
         $this->instance->setValue(null, $db);
     }
 

@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace EasySwoole\FastDb\Tests;
 
 use EasySwoole\FastDb\FastDb;
-use EasySwoole\FastDb\Internal\QueryExecutor;
 use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\Mysqli\Client;
 use EasySwoole\Mysqli\Config;
@@ -90,8 +89,7 @@ final class ConnectionObserverTest extends TestCase
     public function testFailedExecutionDiscardsItsCompletionBeforeAnErrorObserverReusesTheBuilder(): void
     {
         $this->withConnection(function (Connection $connection, Socket $peer): void {
-            $db = new FastDb(); $builder = (new QueryBuilder())->raw('DO 1'); $completed = 0; $retried = false;
-            $cancel = QueryExecutor::onComplete($builder, static function () use (&$completed): void { $completed++; });
+            $db = new FastDb(); $builder = (new QueryBuilder())->raw('DO 1'); $completed = []; $retried = false;
             $current = new \ReflectionProperty(FastDb::class, 'currentConnection');
             $current->setValue($db, [Coroutine::getCid() => ['default' => $connection]]);
             $db->setOnQuery(function ($result) use ($db, $builder, &$retried): void {
@@ -100,13 +98,17 @@ final class ConnectionObserverTest extends TestCase
             $this->queueQuery($peer, 'prepared', "\xff" . pack('v', 1064) . '#42000syntax error');
             $this->queueQuery($peer, 'prepared', $this->ok());
             try {
-                try { $db->query($builder); $this->fail('Expected SQL error'); }
+                try {
+                    $db->query($builder, onComplete: static function ($result) use (&$completed): void { $completed[] = $result; });
+                    $this->fail('Expected SQL error');
+                }
                 catch (\EasySwoole\Mysqli\Exception\Exception $error) { $this->assertSame(1064, $error->getCode()); }
                 $this->assertTrue($retried);
-                $this->assertSame(0, $completed);
-                $listeners = (new \ReflectionProperty(QueryExecutor::class, 'completionObservers'))->getValue();
-                $this->assertCount(0, $listeners);
-            } finally { $cancel(); $current->setValue($db, []); }
+                $this->assertCount(1, $completed);
+                $this->assertSame($error, $completed[0]->getException());
+                $this->assertSame('DO 1', $completed[0]->getQueryBuilder()->getLastPrepareQuery());
+                $this->assertNull((new \ReflectionProperty(Connection::class, 'executionFrame'))->getValue($connection));
+            } finally { $current->setValue($db, []); }
         });
     }
 
@@ -123,6 +125,115 @@ final class ConnectionObserverTest extends TestCase
             $connection->rawQuery('DO 1'); $connection->rawQuery('DO 2');
             $this->assertSame(['first', 'replacement'], $seen);
         });
+    }
+
+    public function testFactoryCanExecuteTheSameBuilderBeforeCompilingItsOwnQuery(): void
+    {
+        $this->withConnection(function (Connection $connection, Socket $peer): void {
+            $db = new FastDb(); $completed = [];
+            $current = new \ReflectionProperty(FastDb::class, 'currentConnection');
+            $current->setValue($db, [Coroutine::getCid() => ['default' => $connection]]);
+            $this->queueQuery($peer, 'prepared', $this->ok(2, 1, 11));
+            $this->queueQuery($peer, 'prepared', $this->ok(2, 2, 22));
+            try {
+                $result = $db->query(static function (QueryBuilder $builder) use ($connection): void {
+                    $connection->query($builder->raw('DO inner_query'));
+                    $builder->raw('DO outer_query');
+                }, onComplete: static function ($result) use (&$completed): void { $completed[] = $result; });
+                $this->assertSame('DO outer_query', $result->getQueryBuilder()->getLastPrepareQuery());
+                $this->assertSame(2, $result->getAffectedRows());
+                $this->assertSame(22, $result->getInsertId());
+                $this->assertSame([$result], $completed);
+                $commands = [];
+                for ($i = 0; $i < 6; $i++) {
+                    $header = $peer->recvAll(4, 0.1);
+                    $this->assertIsString($header);
+                    $length = ord($header[0]) | (ord($header[1]) << 8) | (ord($header[2]) << 16);
+                    $commands[] = $peer->recvAll($length, 0.1);
+                }
+                $this->assertSame("\x16DO inner_query", $commands[0]);
+                $this->assertSame("\x16DO outer_query", $commands[3]);
+            } finally { $current->setValue($db, []); }
+        });
+    }
+
+    public function testCompletionErrorsDoNotReplaceSqlErrorsOrRepeatCompletion(): void
+    {
+        $this->withConnection(function (Connection $connection, Socket $peer): void {
+            $db = new FastDb(); $events = []; $low = 0; $completed = null; $logged = null;
+            $current = new \ReflectionProperty(FastDb::class, 'currentConnection');
+            $current->setValue($db, [Coroutine::getCid() => ['default' => $connection]]);
+            $connection->onQuery(static function () use (&$low): void { $low++; });
+            $db->setOnQuery(static function ($result) use (&$events, &$logged): void { $events[] = 'global'; $logged = $result; });
+            $this->queueQuery($peer, 'raw', "\xff" . pack('v', 1064) . '#42000syntax error');
+            try {
+                try {
+                    $db->rawQuery('invalid sql', onComplete: static function ($result) use (&$events, &$completed): void {
+                        $events[] = 'completion'; $completed = $result;
+                        throw new \RuntimeException('completion failed');
+                    });
+                    $this->fail('Expected SQL error');
+                } catch (\EasySwoole\Mysqli\Exception\Exception $error) {
+                    $this->assertSame(1064, $error->getCode());
+                }
+                $this->assertSame(['completion', 'global'], $events);
+                $this->assertSame(0, $low);
+                $this->assertSame($completed, $logged);
+                $this->assertSame($error, $completed->getException());
+                $this->assertNull($completed->getResult());
+                $this->assertNull((new \ReflectionProperty(Connection::class, 'executionFrame'))->getValue($connection));
+            } finally { $current->setValue($db, []); }
+        });
+    }
+
+    public function testMainObserverErrorKeepsPriorityOverSuccessfulSqlCompletionError(): void
+    {
+        $this->withConnection(function (Connection $connection, Socket $peer): void {
+            $db = new FastDb(); $events = []; $logged = null;
+            $failure = new \RuntimeException('low observer failed');
+            $current = new \ReflectionProperty(FastDb::class, 'currentConnection');
+            $current->setValue($db, [Coroutine::getCid() => ['default' => $connection]]);
+            $connection->onQuery(static function () use (&$events, $failure): void { $events[] = 'low'; throw $failure; });
+            $db->setOnQuery(static function ($result) use (&$events, &$logged): void { $events[] = 'global'; $logged = $result; });
+            $this->queueQuery($peer, 'raw', $this->ok(2, 1, 11));
+            try {
+                try {
+                    $db->rawQuery('DO 1', onComplete: static function () use (&$events): void {
+                        $events[] = 'completion'; throw new \RuntimeException('completion failed');
+                    });
+                    $this->fail('Expected low observer error');
+                } catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
+                $this->assertSame(['completion', 'low', 'global'], $events);
+                $this->assertTrue($logged->getResult());
+                $this->assertNull($logged->getException());
+                $this->assertSame(1, $logged->getAffectedRows());
+                $this->assertSame(11, $logged->getInsertId());
+            } finally { $current->setValue($db, []); }
+        });
+    }
+
+    public function testAStoredResultDoesNotRetainItsCompletionClosure(): void
+    {
+        $this->withConnection(function (Connection $connection, Socket $peer): void {
+            $db = new FastDb(); $marker = new \stdClass(); $weak = \WeakReference::create($marker);
+            $current = new \ReflectionProperty(FastDb::class, 'currentConnection');
+            $current->setValue($db, [Coroutine::getCid() => ['default' => $connection]]);
+            $this->queueQuery($peer, 'raw', $this->ok());
+            try {
+                $result = $db->rawQuery('DO 1', onComplete: static function () use ($marker): void {});
+                unset($marker);
+                $this->assertNull($weak->get());
+                $this->assertTrue($result->getResult());
+            } finally { $current->setValue($db, []); }
+        });
+    }
+
+    public function testSharedDispatcherDoesNotKeepAnUnusedConnectionAlive(): void
+    {
+        $connection = new Connection(new Config());
+        $weak = \WeakReference::create($connection);
+        unset($connection);
+        $this->assertNull($weak->get());
     }
 
     public function testCommitObserverCanBeginANewTransactionWithoutItBeingClearedOnReturn(): void

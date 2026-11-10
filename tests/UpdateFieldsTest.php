@@ -6,7 +6,6 @@ namespace EasySwoole\FastDb\Tests;
 
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
-use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\FastDb\Tests\Model\User;
 use EasySwoole\Mysqli\QueryBuilder;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -17,15 +16,14 @@ final class UpdateFieldsTest extends TestCase
     #[DataProvider('fieldSelections')]
     public function testUpdateIncludesOnlySelectedChangedFields(?array $fields, array $expectedFields): void
     {
-        $connection = $this->createStub(Connection::class);
+        $connection = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()
+            ->onlyMethods(['query', 'getLastAffectRows', 'getLastInsertId'])->getMock();
         $connection->method('getLastAffectRows')->willReturn(1);
-        $result = new QueryResult(microtime(true));
-        $result->setAffectedRows(1);
-        $db = $this->getMockBuilder(FastDb::class)->onlyMethods(['query'])->getMock();
+        $connection->method('getLastInsertId')->willReturn(0);
         if ($expectedFields === []) {
-            $db->expects($this->never())->method('query');
+            $connection->expects($this->never())->method('query');
         } else {
-            $db->expects($this->once())->method('query')
+            $connection->expects($this->once())->method('query')
                 ->with($this->callback(function (QueryBuilder $query) use ($expectedFields): bool {
                     $sql = $query->getLastPrepareQuery();
                     foreach (['name', 'score', 'status'] as $field) {
@@ -37,8 +35,10 @@ final class UpdateFieldsTest extends TestCase
                     }
                     $this->assertMatchesRegularExpression('/WHERE\s+`id`\s*=\s*\?/', $sql);
                     return true;
-                }))->willReturn($result);
+                }))->willReturn(true);
         }
+        $db = new FastDb();
+        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $connection]]);
 
         $instance = new \ReflectionProperty(FastDb::class, 'instance');
         $original = $instance->getValue();

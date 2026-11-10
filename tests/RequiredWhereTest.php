@@ -12,7 +12,7 @@ use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Beans\ListResult;
 use EasySwoole\FastDb\Beans\Query;
 use EasySwoole\FastDb\FastDb;
-use EasySwoole\FastDb\Mysql\QueryResult;
+use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\Mysqli\QueryBuilder;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -38,21 +38,22 @@ final class RequiredWhereTest extends TestCase
             (3, 1, 0, 1, 'own second'), (4, 2, 0, 1, 'other second')");
 
         // Execute the actual prepared SQL; canned rows would conceal OR precedence bugs.
-        $db = $this->getMockBuilder(FastDb::class)->onlyMethods(['query'])->getMock();
-        $db->expects($this->atLeastOnce())->method('query')->willReturnCallback(function (QueryBuilder $query): QueryResult {
+        $affected = 0;
+        $client = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()
+            ->onlyMethods(['query', 'getLastAffectRows', 'getLastInsertId'])->getMock();
+        $client->expects($this->atLeastOnce())->method('query')->willReturnCallback(function (QueryBuilder $query) use (&$affected): bool|array {
             $sql = $query->getLastPrepareQuery();
             $parameters = $query->getLastBindParams();
             $this->queries[] = ['sql' => $sql, 'parameters' => $parameters];
             $statement = $this->database->prepare($sql);
             $statement->execute($parameters);
-            $result = new QueryResult(microtime(true));
-            $result->setResult($statement->columnCount() > 0 ? $statement->fetchAll(\PDO::FETCH_ASSOC) : true);
-            $result->setAffectedRows($statement->rowCount());
-            $result->setInsertId(0);
-            $result->setConnectionName('default');
-            $result->setQueryBuilder(clone $query);
-            return $result;
+            $affected = $statement->rowCount();
+            return $statement->columnCount() > 0 ? $statement->fetchAll(\PDO::FETCH_ASSOC) : true;
         });
+        $client->method('getLastAffectRows')->willReturnCallback(static function () use (&$affected): int { return $affected; });
+        $client->method('getLastInsertId')->willReturn(0);
+        $db = new FastDb();
+        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $client]]);
         $this->singleton = new \ReflectionProperty(FastDb::class, 'instance');
         $this->originalInstance = $this->singleton->getValue();
         $this->singleton->setValue(null, $db);

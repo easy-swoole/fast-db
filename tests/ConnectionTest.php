@@ -15,10 +15,15 @@ final class ConnectionTest extends TestCase
     {
         $connection = $this->getMockBuilder(Connection::class)
             ->disableOriginalConstructor()
-            ->onlyMethods(['rollbackTransaction', 'beginTransaction'])
+            ->onlyMethods(['rawQuery'])
             ->getMock();
-        $connection->expects($this->once())->method('rollbackTransaction')->willReturn(true);
-        $connection->expects($this->once())->method('beginTransaction')->willReturn(true);
+        $connection->expects($this->exactly(2))->method('rawQuery')->willReturnCallback(
+            function (string $sql): bool {
+                static $calls = 0;
+                $this->assertSame(++$calls === 1 ? 'ROLLBACK AND NO CHAIN NO RELEASE' : 'START TRANSACTION', $sql);
+                return true;
+            }
+        );
         $connection->isInTransaction = true;
 
         $connection->objectRestore();
@@ -31,8 +36,8 @@ final class ConnectionTest extends TestCase
     public function testForceRollbackRemainsEnabledAcrossRestores(): void
     {
         $connection = $this->getMockBuilder(Connection::class)
-            ->disableOriginalConstructor()->onlyMethods(['rollbackTransaction'])->getMock();
-        $connection->expects($this->exactly(2))->method('rollbackTransaction')->willReturn(true);
+            ->disableOriginalConstructor()->onlyMethods(['rawQuery'])->getMock();
+        $connection->expects($this->exactly(2))->method('rawQuery')->willReturn(true);
         $connection->isForceRollback = true;
         $connection->isInTransaction = true;
 
@@ -43,11 +48,31 @@ final class ConnectionTest extends TestCase
         $this->assertTrue($connection->isForceRollback);
     }
 
+    public static function cleanupMethods(): array { return [['objectRestore'], ['gc']]; }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('cleanupMethods')]
+    public function testSuccessfulRollbackCleanupEndsTheOriginalGenerationOnce(string $method): void
+    {
+        $connection = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()
+            ->onlyMethods(['rawQuery'])->getMock();
+        $connection->expects($this->once())->method('rawQuery')
+            ->with('ROLLBACK AND NO CHAIN NO RELEASE')->willReturn(true);
+        $connection->isInTransaction = true;
+        $context = $connection->getTransactionContext();
+        $version = $context->version();
+        $token = $context->token();
+        $connection->$method();
+        $this->assertSame($version + 1, $context->version());
+        $this->assertTrue($token->wasRolledBack());
+        $this->assertFalse($connection->isInTransaction);
+        $this->assertNotSame($context, $connection->getTransactionContext());
+    }
+
     public function testFailedRollbackRejectsRestore(): void
     {
         $connection = $this->getMockBuilder(Connection::class)
-            ->disableOriginalConstructor()->onlyMethods(['rollbackTransaction'])->getMock();
-        $connection->expects($this->once())->method('rollbackTransaction')->willReturn(false);
+            ->disableOriginalConstructor()->onlyMethods(['rawQuery'])->getMock();
+        $connection->expects($this->once())->method('rawQuery')->willReturn(false);
         $connection->isInTransaction = true;
 
         $this->expectException(RuntimeError::class);
@@ -57,8 +82,8 @@ final class ConnectionTest extends TestCase
     public function testRollbackExceptionIsPropagated(): void
     {
         $connection = $this->getMockBuilder(Connection::class)
-            ->disableOriginalConstructor()->onlyMethods(['rollbackTransaction'])->getMock();
-        $connection->expects($this->once())->method('rollbackTransaction')
+            ->disableOriginalConstructor()->onlyMethods(['rawQuery'])->getMock();
+        $connection->expects($this->once())->method('rawQuery')
             ->willThrowException(new \RuntimeException('rollback failed'));
         $connection->isInTransaction = true;
 
@@ -74,7 +99,7 @@ final class ConnectionTest extends TestCase
         $entity = new \stdClass();
         $weak = \WeakReference::create($entity);
         $restored = false;
-        $connection->rememberTransactionBaseline($entity, [], static function () use (&$restored): void {
+        $connection->getTransactionContext()->rememberBaseline($entity, [], static function () use (&$restored): void {
             $restored = true;
         });
         unset($entity);
@@ -86,12 +111,12 @@ final class ConnectionTest extends TestCase
     public function testFailedRollbackKeepsBaselinesForLaterSuccessfulRestore(): void
     {
         $connection = $this->getMockBuilder(Connection::class)
-            ->disableOriginalConstructor()->onlyMethods(['rollbackTransaction'])->getMock();
-        $connection->expects($this->exactly(2))->method('rollbackTransaction')->willReturnOnConsecutiveCalls(false, true);
+            ->disableOriginalConstructor()->onlyMethods(['rawQuery'])->getMock();
+        $connection->expects($this->exactly(2))->method('rawQuery')->willReturnOnConsecutiveCalls(false, true);
         $connection->isInTransaction = true;
         $entity = new \stdClass();
         $entity->value = 1;
-        $connection->rememberTransactionBaseline($entity, ['value' => 0], static function ($entity, $baseline): void {
+        $connection->getTransactionContext()->rememberBaseline($entity, ['value' => 0], static function ($entity, $baseline): void {
             $entity->value = $baseline['value'];
         });
         try {
@@ -111,13 +136,13 @@ final class ConnectionTest extends TestCase
     public function testDiscardedConnectionRestoresBaselinesAfterClose(): void
     {
         $connection = $this->getMockBuilder(Connection::class)
-            ->disableOriginalConstructor()->onlyMethods(['rollbackTransaction', 'close'])->getMock();
-        $connection->expects($this->once())->method('rollbackTransaction')->willReturn(false);
+            ->disableOriginalConstructor()->onlyMethods(['rawQuery', 'close'])->getMock();
+        $connection->expects($this->once())->method('rawQuery')->willReturn(false);
         $connection->expects($this->once())->method('close')->willReturn(true);
         $connection->isInTransaction = true;
         $entity = new \stdClass();
         $entity->value = 1;
-        $connection->rememberTransactionBaseline($entity, ['value' => 0], static function ($entity, $baseline): void {
+        $connection->getTransactionContext()->rememberBaseline($entity, ['value' => 0], static function ($entity, $baseline): void {
             $entity->value = $baseline['value'];
         });
         $connection->gc();
@@ -144,11 +169,14 @@ final class ConnectionTest extends TestCase
     public function testEnumTransactionFlagsPreserveChainState(): void
     {
         $connection = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()
-            ->onlyMethods(['beginTransaction', 'commitTransaction'])->getMock();
-        $connection->expects($this->once())->method('beginTransaction')
-            ->with(\EasySwoole\Mysqli\Transaction\TransactionStartFlags::ReadOnly)->willReturn(true);
-        $connection->expects($this->once())->method('commitTransaction')
-            ->with(\EasySwoole\Mysqli\Transaction\TransactionCompletionFlags::Chain)->willReturn(true);
+            ->onlyMethods(['rawQuery'])->getMock();
+        $connection->expects($this->exactly(2))->method('rawQuery')->willReturnCallback(
+            function (string $sql): bool {
+                static $calls = 0;
+                $this->assertSame(++$calls === 1 ? 'START TRANSACTION READ ONLY' : 'COMMIT AND CHAIN', $sql);
+                return true;
+            }
+        );
         $db = new FastDb();
         $this->assertTrue($db->begin($connection, \EasySwoole\Mysqli\Transaction\TransactionStartFlags::ReadOnly));
         $this->assertTrue($db->commit($connection, \EasySwoole\Mysqli\Transaction\TransactionCompletionFlags::Chain));
@@ -186,10 +214,10 @@ final class ConnectionTest extends TestCase
                 ? \EasySwoole\Mysqli\Transaction\TransactionStartFlags::ReadOnly
                 : \EasySwoole\Mysqli\Transaction\TransactionCompletionFlags::NoChainNoRelease;
             $connection = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()
-                ->onlyMethods([$operation . 'Transaction'])->getMock();
+                ->onlyMethods(['rawQuery'])->getMock();
             $connection->isInTransaction = $operation !== 'begin';
-            $connection->expects($this->once())->method($operation . 'Transaction')
-                ->with($flags, 0.05)->willReturn(true);
+            $sql = $operation === 'begin' ? $flags->toSql() : strtoupper($operation) . $flags->toSqlSuffix();
+            $connection->expects($this->once())->method('rawQuery')->with($sql, 0.05)->willReturn(true);
             $this->assertTrue((new FastDb())->$operation(client: $connection, flags: $flags, timeout: 0.05));
             $this->assertSame($operation === 'begin', $connection->isInTransaction);
         }

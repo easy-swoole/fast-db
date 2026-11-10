@@ -5,7 +5,7 @@ namespace EasySwoole\FastDb\Mysql;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use Swoole\Coroutine;
 use EasySwoole\FastDb\Internal\TransactionSql;
-use EasySwoole\FastDb\Internal\QueryExecutor;
+use EasySwoole\FastDb\Internal\ExecutionFrame;
 use EasySwoole\FastDb\Internal\TransactionScope;
 use EasySwoole\Mysqli\Client;
 use EasySwoole\Mysqli\QueryBuilder;
@@ -25,11 +25,27 @@ class Connection extends Client implements ObjectInterface
     private ?TransactionContext $transactionContext = null;
     // 只在回调事务参与期间或标记 rollback-only 时持有，结束后立即释放。
     private ?TransactionScope $transactionScope = null;
-    private ?\stdClass $pendingCompletion = null;
-    private ?\stdClass $deferredCountObserver = null;
+    private ?ExecutionFrame $executionFrame = null;
+    private ?\Closure $userObserver = null;
     // 单调时钟记录最后一次成功通信的结束时间，归还连接时保留，关闭或失败时清除。
     private int|float|null $lastActiveTick = null;
     private const HEALTH_CHECK_IDLE_NANOSECONDS = 3_000_000_000;
+
+    public function __construct(\EasySwoole\Mysqli\Config $config)
+    {
+        parent::__construct($config);
+        // 无捕获共享 dispatcher 不持有连接；用户替换回调也无需再包裹每条 SQL。
+        static $dispatcher = null;
+        $this->onQuery = $dispatcher ??= static function (bool|array $result, Client $client, float $startedAt): void {
+            $client->observeResult($result, $startedAt);
+        };
+    }
+
+    public function onQuery(callable $callback): static
+    {
+        $this->userObserver = \Closure::fromCallable($callback);
+        return $this;
+    }
 
     /** 按当前协程及连接名取得上下文，禁止把未结束事务迁移到其他归属。 */
     final public function getTransactionContext(): TransactionContext
@@ -58,12 +74,6 @@ class Connection extends Client implements ObjectInterface
 
     /** @internal */
     final public function __setTransactionScope(?TransactionScope $scope): void { $this->transactionScope = $scope; }
-
-    /** @deprecated 兼容旧调用；实体基准应通过 TransactionContext 登记。 */
-    public function rememberTransactionBaseline(object $entity, array $baseline, callable $restore): void
-    {
-        $this->getTransactionContext()->rememberBaseline($entity, $baseline, $restore);
-    }
 
     /** 统一通知上下文结束事务，同时保留原有连接事务状态接口。 */
     public function finishTransaction(bool $committed): void
@@ -108,109 +118,130 @@ class Connection extends Client implements ObjectInterface
 
     public function query(QueryBuilder $builder, ?float $timeout = null): bool|array
     {
-        $this->transactionScope?->assertWire($this, $builder->getLastPrepareQuery());
-        return $this->executeObserved($builder->getLastPrepareQuery(),
-            fn () => parent::query($builder, $timeout), $builder);
+        return $this->executeQuery($builder, $builder->getLastPrepareQuery(), $timeout);
     }
 
     public function rawQuery(string $query, ?float $timeout = null): bool|array
     {
-        $this->transactionScope?->assertWire($this, $query);
-        $completion = $this->pendingCompletion;
-        $this->pendingCompletion = null;
-        return $this->executeObserved($query, fn () => parent::rawQuery($query, $timeout), null, $completion);
+        return $this->executeQuery(null, $query, $timeout);
     }
 
-    /** Synchronize successful SQL before observers, then restore its metadata after nested queries. */
-    private function executeObserved(?string $sql, callable $operation, ?QueryBuilder $builder = null,
-        ?\stdClass $completion = null): bool|array
+    /** @internal Facade 显式传帧；自定义 query/rawQuery 也只有这一处完成回退。 */
+    final public function runFrame(ExecutionFrame $frame, callable $operation): QueryResult
     {
-        $observer = $this->onQuery;
-        $completed = false;
-        $wrapped = function (bool|array $result, Client $client, float $startedAt) use ($observer, $sql, $builder, $completion, &$completed): void {
-            // Nested operations must see the real observer rather than this operation's wrapper.
-            $this->onQuery = $observer;
-            $completed = true;
-            $this->lastActiveTick = $result === false ? null : hrtime(true);
-            $this->synchronizeTransaction($sql);
-            $affectedRows = $this->lastAffectRows;
-            $insertId = $this->lastInsertId;
-            try {
-                if ($result === true && $completion !== null) {
-                    $completion->completed = true;
-                    if ($completion->flags->releasesConnection()) { $this->close(); }
-                }
-                $deferred = [];
-                $deferCountObserver = null;
-                if ($builder !== null && in_array('SQL_CALC_FOUND_ROWS', $builder->getLastQueryOptions(), true)) {
-                    $deferCountObserver = function (callable $read, callable $failure) use (&$deferred): void {
-                        $previous = $this->deferredCountObserver;
-                        $frame = (object) ['notifications' => [], 'failure' => $failure];
-                        $deferred[] = $frame;
-                        $this->deferredCountObserver = $frame;
-                        try { $read(); }
-                        finally { $this->deferredCountObserver = $previous; }
-                    };
-                }
-                $completionError = null;
-                try {
-                    if ($builder !== null) { QueryExecutor::complete($builder, $result, $this, $startedAt, $deferCountObserver); }
-                } catch (\Throwable $error) { $completionError = $error; }
-                $this->lastAffectRows = $affectedRows;
-                $this->lastInsertId = $insertId;
-                if ($this->deferredCountObserver !== null) {
-                    $this->deferredCountObserver->notifications[] = [$result, $startedAt, $affectedRows, $insertId];
-                } else {
-                    try {
-                        if ($observer !== null) { $observer($result, $client, $startedAt); }
-                    } catch (\Throwable $error) {
-                        // The main observer originally precedes COUNT; discard its postponed notifications on failure.
-                        foreach ($deferred as $frame) { ($frame->failure)(null); }
-                        throw $error;
-                    }
-                    if ($completionError !== null) { throw $completionError; }
-                    foreach ($deferred as $frame) {
-                        foreach ($frame->notifications as [$countResult, $countStarted, $countAffected, $countInsert]) {
-                            $this->lastAffectRows = $countAffected;
-                            $this->lastInsertId = $countInsert;
-                            try {
-                                // The main observer may have replaced the observer for the following COUNT.
-                                if ($this->onQuery !== null) { ($this->onQuery)($countResult, $this, $countStarted); }
-                            } catch (\Throwable $error) {
-                                ($frame->failure)($error);
-                                throw $error;
-                            } finally {
-                                $this->lastAffectRows = $affectedRows;
-                                $this->lastInsertId = $insertId;
-                            }
-                        }
-                    }
-                }
-                if ($completionError !== null) { throw $completionError; }
-            } finally {
-                $this->lastAffectRows = $affectedRows;
-                $this->lastInsertId = $insertId;
-            }
-        };
-        $this->onQuery = $wrapped;
+        $previous = $this->executionFrame;
+        $this->executionFrame = $frame;
         try {
-            $result = $operation();
-            if (!$completed) {
-                $this->lastActiveTick = $result === false ? null : hrtime(true);
-                $this->synchronizeTransaction($sql);
-            }
-            return $result;
+            $value = $operation($frame);
+            if (!$frame->completed) { $this->finishFrame($frame, $value, false); }
+            return $frame->result;
         } catch (\Throwable $error) {
-            $this->lastActiveTick = null;
-            // Observer errors may follow a nested transaction; they are not errors of this SQL.
-            if (!$completed) {
-                $this->restoreDeadlockedTransaction($error);
-                throw $this->withTimeoutContext($error, $sql, $builder);
-            }
+            $frame->fail($error);
+            try { $frame->complete($this); } catch (\Throwable) {}
             throw $error;
         } finally {
-            if ($this->onQuery === $wrapped) { $this->onQuery = $observer; }
+            $this->executionFrame = $previous;
         }
+    }
+
+    private function executeQuery(?QueryBuilder $builder, ?string $sql, ?float $timeout): bool|array
+    {
+        $this->transactionScope?->assertWire($this, $sql);
+        $frame = $this->executionFrame;
+        if ($frame === null || !$frame->accepts($builder, $sql)) {
+            $frame = new ExecutionFrame($builder, $sql);
+            $frame->result->setConnectionName($this->connectionName ?? 'default');
+        }
+        $previous = $this->executionFrame;
+        $this->executionFrame = $frame;
+        $frame->start();
+        $frame->observer = $this->userObserver;
+        try {
+            return $builder === null ? parent::rawQuery($sql, $timeout) : parent::query($builder, $timeout);
+        } catch (\Throwable $error) {
+            $this->lastActiveTick = null;
+            if (!$frame->completed) {
+                $this->restoreDeadlockedTransaction($error);
+                $error = $this->withTimeoutContext($error, $sql, $builder);
+            }
+            $frame->fail($error);
+            try { $frame->complete($this); } catch (\Throwable) {}
+            throw $error;
+        } finally {
+            $this->executionFrame = $previous;
+        }
+    }
+
+    /** Client 唯一的成功入口；已完成的外层帧不能接收旁路/重入操作的完成通知。 */
+    private function observeResult(bool|array $value, float $startedAt): void
+    {
+        $frame = $this->executionFrame;
+        if ($frame === null || !$frame->started || $frame->completed) {
+            if ($this->userObserver !== null) { ($this->userObserver)($value, $this, $startedAt); }
+            return;
+        }
+        $frame->driverStartedAt = $startedAt;
+        $this->finishFrame($frame, $value, true);
+    }
+
+    /** 冻结结果和状态后再公开通知；COUNT 先读，低层通知仍在主查询观察回调之后。 */
+    private function finishFrame(ExecutionFrame $frame, bool|array $value, bool $fromDriver): void
+    {
+        $frame->succeed($this, $value);
+        try {
+            if ($fromDriver) {
+                $this->lastActiveTick = $value === false ? null : hrtime(true);
+                $this->synchronizeTransaction($frame->sql ?? $frame->result->getQueryBuilder()?->getLastPrepareQuery());
+            } else {
+                $this->finishCustomControl($frame, $value);
+            }
+            if ($value === true && $frame->completionFlags?->releasesConnection()) { $this->close(); }
+            $completionError = null;
+            if ($frame->wantsTotal()) {
+                $count = $frame->count = new ExecutionFrame(null, 'SELECT FOUND_ROWS() as count', deferObserver: true);
+                $count->result->setConnectionName($frame->result->getConnectionName());
+                $count->start();
+                try {
+                    $this->runFrame($count, fn () => $this->rawQuery('SELECT FOUND_ROWS() as count'));
+                    $frame->result->setTotalResult($count->result);
+                } catch (\Throwable $error) { $completionError = $error; }
+            }
+            try { $frame->complete($this); }
+            catch (\Throwable $error) { $completionError ??= $error; }
+            if ($fromDriver && !$frame->deferObserver) {
+                $this->restoreMetadata($frame);
+                try { $this->notifyObserver($frame); }
+                catch (\Throwable $error) {
+                    $frame->invalidateTotal();
+                    throw $error;
+                }
+            }
+            if ($completionError !== null) { throw $completionError; }
+            if ($frame->count !== null) {
+                try { $this->notifyObserver($frame->count, true); }
+                catch (\Throwable $error) {
+                    $frame->invalidateTotal($error);
+                    throw $error;
+                }
+            }
+        } finally {
+            $this->restoreMetadata($frame);
+        }
+    }
+
+    private function notifyObserver(ExecutionFrame $frame, bool $useCurrent = false): void
+    {
+        $this->restoreMetadata($frame);
+        $observer = $useCurrent ? $this->userObserver : $frame->observer;
+        if ($observer !== null) {
+            $observer($frame->result->getResult(), $this, $frame->driverStartedAt);
+        }
+    }
+
+    private function restoreMetadata(ExecutionFrame $frame): void
+    {
+        $this->lastAffectRows = $frame->result->getAffectedRows();
+        $this->lastInsertId = $frame->result->getInsertId();
     }
 
     /** 以协议状态同步原始事务 SQL、DDL 隐式提交及普通事务入口。 */
@@ -239,41 +270,49 @@ class Connection extends Client implements ObjectInterface
 
     public function beginTransaction(TransactionStartFlags $flags, ?float $timeout = null): bool
     {
-        return $this->rawQuery($flags->toSql(), $timeout) === true;
+        return $this->executeControl($flags->toSql(), 'BEGIN', null, $timeout);
     }
 
     public function commitTransaction(TransactionCompletionFlags $flags, ?float $timeout = null): bool
     {
-        return $this->completeTransaction('COMMIT', $flags, $timeout);
+        return $this->executeControl('COMMIT' . $flags->toSqlSuffix(), 'COMMIT', $flags, $timeout);
     }
 
     public function rollbackTransaction(TransactionCompletionFlags $flags = TransactionCompletionFlags::NoChainNoRelease, ?float $timeout = null): bool
     {
-        return $this->completeTransaction('ROLLBACK', $flags, $timeout);
+        return $this->executeControl('ROLLBACK' . $flags->toSqlSuffix(), 'ROLLBACK', $flags, $timeout);
     }
 
-    private function completeTransaction(string $command, TransactionCompletionFlags $flags, ?float $timeout): bool
+    private function executeControl(string $sql, string $command, ?TransactionCompletionFlags $flags, ?float $timeout): bool
     {
-        $context = $this->getTransactionContext();
-        $version = $context->version();
-        $protocol = $this->mysqlClient();
-        $previousCompletion = $this->pendingCompletion;
-        $completion = (object) ['flags' => $flags, 'completed' => false];
-        $this->pendingCompletion = $completion;
-        try {
-            $success = $this->rawQuery($command . $flags->toSqlSuffix(), $timeout) === true;
-        } finally {
-            $this->pendingCompletion = $previousCompletion;
+        $frame = $this->executionFrame;
+        if ($frame === null || !$frame->accepts(null, $sql)) {
+            $frame = new ExecutionFrame(null, $sql);
+            $frame->result->setConnectionName($this->connectionName ?? 'default');
         }
-        if ($success) {
-            // Only custom/rawQuery overrides need this fallback; observers may have started a new transaction.
-            if (!$completion->completed && $this->ownsTransactionContext($context) && $context->version() === $version) {
-                $this->finishTransaction($command === 'COMMIT');
-                $this->isInTransaction = in_array($flags, [TransactionCompletionFlags::Chain, TransactionCompletionFlags::ChainNoRelease], true);
-            }
-            if (!$completion->completed && $flags->releasesConnection() && $this->mysqlClient() === $protocol) { $this->close(); }
+        $frame->transactionCommand = $command;
+        $frame->completionFlags = $flags;
+        $frame->transactionContext = $this->getTransactionContext();
+        $frame->transactionVersion = $frame->transactionContext->version();
+        $frame->transactionWasActive = $this->isInTransaction;
+        $frame->start();
+        return $this->runFrame($frame, fn () => $this->rawQuery($sql, $timeout))->getResult() === true;
+    }
+
+    /** 自定义连接没有协议成功入口时，仅同步本帧原来拥有的事务代次。 */
+    private function finishCustomControl(ExecutionFrame $frame, bool|array $value): void
+    {
+        $context = $frame->transactionContext;
+        if ($value !== true || $context === null || !$this->ownsTransactionContext($context)
+            || $context->version() !== $frame->transactionVersion) { return; }
+        if ($frame->transactionCommand === 'BEGIN') {
+            if ($frame->transactionWasActive) { $this->finishTransaction(true); }
+            $this->isInTransaction = true;
+        } else {
+            $this->finishTransaction($frame->transactionCommand === 'COMMIT');
+            $this->isInTransaction = in_array($frame->completionFlags,
+                [TransactionCompletionFlags::Chain, TransactionCompletionFlags::ChainNoRelease], true);
         }
-        return $success;
     }
 
     private function restoreDeadlockedTransaction(\Throwable $error): void
@@ -292,7 +331,7 @@ class Connection extends Client implements ObjectInterface
             // 会话已断开，不能继续发送 ROLLBACK；关闭后清除驱动引用并恢复本地基准。
             // 连接池后续通过 beforeUse 检查淘汰此对象，不会继续复用失效会话。
             $this->close();
-            $this->finishTransaction(false);
+            if ($this->isInTransaction) { $this->finishTransaction(false); }
             $this->transactionContext = null;
             return true;
         }
@@ -306,9 +345,7 @@ class Connection extends Client implements ObjectInterface
         }
         if($this->isInTransaction || $this->isForceRollback){
             try {
-                if($this->rollbackTransaction() === true){
-                    $this->finishTransaction(false);
-                }
+                $this->rollbackTransaction();
             }catch (\Throwable $throwable){
                 trigger_error($throwable->getMessage());
             }
@@ -332,7 +369,6 @@ class Connection extends Client implements ObjectInterface
             if($this->rollbackTransaction() !== true){
                 throw new RuntimeError('Failed to rollback connection during restore');
             }
-            $this->finishTransaction(false);
         }
         // 本次借用已经结束，下次借出必须创建新上下文，不能沿用旧事务登记。
         $this->transactionContext = null;
