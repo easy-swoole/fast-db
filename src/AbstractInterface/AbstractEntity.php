@@ -356,7 +356,6 @@ abstract class AbstractEntity implements \JsonSerializable
             }
         }
 
-        $this->reset(true);
         return $temp;
     }
 
@@ -695,37 +694,33 @@ abstract class AbstractEntity implements \JsonSerializable
                 }
             }
             // 先完成输出转换；普通 null 字段省略，让数据库使用默认值。
-            $data = FieldCodec::values($this, $entityRef->allProperties(), true);
+            $compareValues = [];
+            $data = FieldCodec::values($this, $entityRef->allProperties(), true, $compareValues);
             $fields = $this->queryLimit()->getFields()['fields'] ?? null;
-            if (!empty($fields)) { $data = array_intersect_key($data, array_flip($fields)); }
+            if (!empty($fields)) {
+                $data = array_intersect_key($data, array_flip($fields));
+                $compareValues = array_intersect_key($compareValues, $data);
+            }
             $query = $this->queryLimit()->__getQueryBuilder();
             if($updateDuplicateCols){
                 $query->onDuplicate($updateDuplicateCols);
             }
             $query->insert($this->tableName(),$data);
-            $ret = static::callQuery($query,$this->onQuery);
             $isSuccess = false;
-            //swoole客户端问题 https://github.com/swoole/swoole-src/issues/5202
-            if($ret->getResult()){
-                $isSuccess = true;
-            }else if($ret->getAffectedRows() >= 1){
-                $isSuccess = true;
-            }
-            if($ret->getInsertId() >= 1){
-                // 将数据库生成的自增主键回填到实体和本次写入数据。
-                $ref = ReflectionCache::getInstance()->parseEntity(static::class);
-                if($ref->getPrimaryKey()){
-                    $this->{$ref->getPrimaryKey()} = $ret->getInsertId();
-                    $data[$ref->getPrimaryKey()] =  $ret->getInsertId();
-                }
-                $isSuccess = true;
-            }else if(!empty($updateDuplicateCols)){
-                $isSuccess = true;
-            }
-            if($isSuccess){
-                // 写入成功后重新转换字段并同步基准，后续 update() 只处理新的修改。
-                $this->setData($data,true);
-            }
+            $primaryKey = $entityRef->getPrimaryKey();
+            static::callQuery($query, $this->onQuery,
+                function (QueryResult $result) use ($compareValues, $primaryKey, &$isSuccess): void {
+                    $isSuccess = $result->getException() === null
+                        && ($result->getResult() || $result->getAffectedRows() >= 1 || $result->getInsertId() >= 1);
+                    if (!$isSuccess) { return; }
+                    if ($primaryKey !== null && $result->getInsertId() >= 1) {
+                        // 自增主键先回填并建立基准，公开回调可以立即使用当前实体继续更新。
+                        $this->{$primaryKey} = $result->getInsertId();
+                        $compareValues[$primaryKey] = FieldCodec::compare($this->{$primaryKey});
+                    }
+                    // 只接受本次成功写入字段，不重新赋值，也不覆盖稍后公开回调的修改。
+                    $this->entityState->accept($compareValues);
+                });
             return $isSuccess;
         } finally {
             // 插入后兼容保留隐藏字段等输出配置，仅清除 SQL 条件。

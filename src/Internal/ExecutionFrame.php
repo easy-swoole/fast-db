@@ -13,7 +13,6 @@ final class ExecutionFrame
     public bool $started = false;
     public bool $completed = false;
     public ?self $count = null;
-    public ?\Throwable $failure = null;
     private ?\Closure $onComplete;
 
     public function __construct(
@@ -49,7 +48,6 @@ final class ExecutionFrame
 
     public function fail(\Throwable $error): void
     {
-        $this->failure ??= $error;
         if (!$this->completed) {
             $this->completed = true;
             $this->result->setException($error);

@@ -4,7 +4,6 @@ namespace EasySwoole\FastDb\Internal;
 
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\Mysqli\QueryBuilder;
-use EasySwoole\Mysqli\QueryBuilder\TableReference;
 
 /** 分批直接写入数据库格式的行，不创建逐行实体或管理事务。 */
 final class BatchWriter
@@ -14,11 +13,8 @@ final class BatchWriter
         callable $resolveTarget, callable $execute): int|string
     {
         if ($batchSize < 1) { throw new \InvalidArgumentException('Batch size must be greater than zero'); }
-        if ($updates !== null) {
-            if ($updates === []) { throw new \InvalidArgumentException('Upsert requires update columns'); }
-            foreach ($updates as $key => $value) { TableReference::identifier(is_int($key) ? $value : $key); }
-        }
-        $columns = $columnSet = null;
+        if ($updates === []) { throw new \InvalidArgumentException('Upsert requires update columns'); }
+        $columnSet = null;
         $batch = [];
         $target = null;
         $total = 0;
@@ -26,27 +22,17 @@ final class BatchWriter
             if (!is_array($row) || $row === []) {
                 throw new \InvalidArgumentException('Every batch row must be a non-empty associative array');
             }
-            $keys = array_keys($row);
-            if ($columns === null) {
-                foreach ($keys as $column) { TableReference::identifier($column); }
-                $columns = $keys;
-                $columnSet = array_fill_keys($columns, true);
-                if ($updates !== null) {
-                    foreach ($updates as $key => $value) {
-                        if (is_int($key) && !isset($columnSet[$value])) {
-                            throw new \InvalidArgumentException('Implicit upsert columns must exist in every row');
-                        }
-                    }
-                }
-            } elseif ($keys !== $columns) {
-                if (count($row) !== count($columns) || array_diff_key($columnSet, $row) !== []) {
+            // 驱动校验批内全部行；这里只比较各批首行，保证字段集合跨批一致。
+            if ($batch === []) {
+                if ($columnSet === null) { $columnSet = array_fill_keys(array_keys($row), true); }
+                elseif (count($row) !== count($columnSet) || array_diff_key($columnSet, $row) !== []) {
                     throw new \InvalidArgumentException('All batch rows must contain exactly the same columns');
                 }
             }
-            // 每条迭代项按读取时取值，列顺序和行内标量引用不影响后续缓冲内容。
-            $aligned = [];
-            foreach ($columns as $column) { $aligned[$column] = $row[$column]; }
-            $batch[] = $aligned;
+            // 按当前行顺序取值，解除标量引用；列名校验、排序及 upsert 整理由驱动负责。
+            $snapshot = [];
+            foreach ($row as $column => $value) { $snapshot[$column] = $value; }
+            $batch[] = $snapshot;
             if (count($batch) === $batchSize) {
                 $target ??= $resolveTarget();
                 $total = self::flush($batch, $updates, $target, $execute, $total);

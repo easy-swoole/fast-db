@@ -69,15 +69,22 @@ final class SerializationTest extends TestCase
         $this->assertTrue($user->queryLimit()->isPersistFieldLimit());
     }
 
-    public function testSerializationStillClearsSqlConditions(): void
+    public function testSerializationPreservesThePendingQueryAndOutputSelection(): void
     {
         $user = new User(['id' => 1, 'name' => 'secret']);
-        $user->queryLimit()->where('id', 1)->hideFields('name');
-        $user->toArray();
+        $selection = $user->queryLimit()->where('status', 0)->orderBy('id', 'DESC')
+            ->page(2, false, 5)->fields(['id', 'name'])->hideFields('name');
+        $query = $selection->__getQueryBuilder();
+        $this->assertSame(['id' => 1], $user->toArray());
+        $this->assertSame(['id' => 1], json_decode(json_encode($user, JSON_THROW_ON_ERROR), true));
+        $this->assertSame($selection, $user->queryLimit());
+        $this->assertSame($query, $user->queryLimit()->__getQueryBuilder());
 
-        $query = $user->queryLimit()->__getQueryBuilder();
         $query->get($user->tableName());
-        $this->assertStringNotContainsString('WHERE', $query->getLastQuery());
+        $this->assertStringContainsString('WHERE', $query->getLastPrepareQuery());
+        $this->assertSame([0], $query->getLastBindParams());
+        $this->assertStringContainsString('ORDER BY id DESC', $query->getLastPrepareQuery());
+        $this->assertMatchesRegularExpression('/LIMIT\s+5\s*,\s*5/i', $query->getLastPrepareQuery());
         $this->assertArrayNotHasKey('name', $user->toArray());
     }
 

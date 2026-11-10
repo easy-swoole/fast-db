@@ -2,7 +2,7 @@
 
 FastDb 是面向 Swoole 协程环境的 MySQL 数据访问库，组合连接池、SQL 构建器和基于 PHP Attributes 的实体映射。可以在 EasySwoole 框架内使用，也可以独立使用。
 
-本文面向 `3.x` 分支，依赖 `easyswoole/mysqli` ^5.0，以当前 `src/` 和 `composer.json` 为准。实体 API 位于 `AbstractEntity`，数据库与连接管理位于 `FastDb`，SQL 构建能力由 `easyswoole/mysqli` 提供。
+本文面向 `3.x` 分支，依赖 `easyswoole/mysqli` ^5.0.8 和 `easyswoole/pool` ^3.0.6，以当前 `src/` 和 `composer.json` 为准。实体 API 位于 `AbstractEntity`，数据库与连接管理位于 `FastDb`，SQL 构建能力由 `easyswoole/mysqli` 提供。
 
 ## 内部执行与实体状态
 
@@ -11,7 +11,7 @@ FastDb 是面向 Swoole 协程环境的 MySQL 数据访问库，组合连接池�
 | 组件 | 职责 |
 | --- | --- |
 | `Internal\ExecutionFrame` | 保存单次执行的结果、计时与完成回调状态；分页总数在外部回调前读取 |
-| `Mysql\Connection` | 执行查询、读取底层协议事务状态、保存成功时点的结果快照 |
+| `Mysql\Connection` | 执行查询、读取底层协议事务状态；仅门面查询保存执行结果快照 |
 | `Internal\QueryDiagnostics` | 按需保存全局查询回调和每协程有界事件栈；分别记录查询执行与连接获取 |
 | `AbstractInterface\AbstractEntity` | 字段比较基准、变更检测、主键保护和成功写入后的基准更新 |
 | `Internal\FieldCodec` | 加载赋值转换、写入值转换；与序列化隐藏字段分别处理 |
@@ -23,13 +23,13 @@ FastDb 是面向 Swoole 协程环境的 MySQL 数据访问库，组合连接池�
 
 FastDb 通过 `FastDb::getInstance()` 获取固定实例并长期复用。需要其他独立管理器时，由业务定义子类并按需初始化。
 
-`Query` 仅在首次添加 SQL 条件或显式读取底层构造器时创建 `QueryBuilder`；只配置输出字段或序列化实体时无需分配 SQL 构造器。清理 SQL 条件仍生成新的 Query，外部持有的旧 Query 和构造器引用保持原有状态；克隆实体时查询所有者和可变配置继续独立。
+`Query` 仅在首次添加 SQL 条件或显式读取底层构造器时创建 `QueryBuilder`；只配置输出字段或序列化实体时无需分配 SQL 构造器。序列化保留当前 Query 及其配置；插入后清理 SQL 条件会生成新的 Query，外部持有的旧 Query 和构造器引用保持原有状态。克隆实体时查询所有者和可变配置继续独立。
 
 加载后的实体不允许修改主键再执行 `update()` / `delete()`，以避免定位到其他记录。需要显式修改主键时应自行构造条件明确的 SQL。实体克隆后，比较状态和查询所有者独立。
 
 实体 `update()` / `delete()` 和关联查询在最终构建 SQL 前，将全部已有 WHERE 条件整体分组，再以 AND 追加主键或关联外键条件。例如 `WHERE (status = ? OR score = ?) AND id = ?`，附加 OR 条件始终受实体范围约束。该分组也覆盖 `func()`、底层构建器和生命周期钩子添加的条件；`fastUpdate()` / `fastDelete()` 继续按调用方提供的条件批量执行。
 
-上述约束要求 `easyswoole/mysqli` 提供 `QueryBuilder::groupExistingWhere()`。升级 FastDb 前，应先安装包含该接口的 mysqli 版本；驱动缺少接口时，实体写入及关联查询会明确抛出 `RuntimeError`，不会执行缺少分组保护的 SQL。
+最低 mysqli 依赖版本已提供 `QueryBuilder::groupExistingWhere()` 和 `forPageAfterId()`，由 Composer 保证接口可用，查询路径不再逐次探测驱动能力。连接池最小容量维护和创建失败处理沿用上游 pool 的实现。
 
 `Connection::isInTransaction(): bool` 直接读取底层协议的事务状态；`FastDb::isInTransaction()` 转发到当前或指定连接，不另外保存事务布尔副本。实体 `update()` 在数据库 SQL 成功后、公开查询回调前接受字段比较基准；返回值按本次 SQL 是否成功确定。后续事务回滚不会恢复模型属性或比较基准，需要由业务重新加载、重建对象或显式修改字段后再保存。
 
@@ -223,7 +223,7 @@ use EasySwoole\Mysqli\QueryBuilder;
 
 ## 3.x 迁移说明
 
-- 使用 `easyswoole/mysqli` ^5.0，生产安装不再要求 `ext-mysqli`；开发测试仍需要该扩展。
+- 使用 `easyswoole/mysqli` ^5.0.8 和 `easyswoole/pool` ^3.0.6，生产安装不再要求 `ext-mysqli`；开发测试仍需要该扩展。
 - 删除配置中的 `useMysqli`，统一使用协程协议客户端。
 - 将 `maxConnectTim` 改为 `maxConnectTime`，setter 改用 `setMaxConnectTime()`；旧字段不再映射到连接超时。
 - `begin()`、`commit()`、`rollback()` 参数顺序统一为 `(client, flags, timeout)`。flags 必须使用对应枚举，不能传整数或按位组合值。
@@ -549,7 +549,7 @@ $ok = $user->insert(); // bool。
 $id = $user->id; // 自增主键由 last insert id 回填。
 ```
 
-插入从 `toArray(true)` 生成数据，因此字段选择、隐藏字段和转换配置会影响实际写入列。普通 null 属性会被过滤，数据库默认值可生效；转换字段是否生成 null 由转换逻辑决定。未从数据库读取的默认值、触发器结果等需要重新查询才能获得。
+插入使用字段转换器生成数据库值，`fields()` 控制写入白名单，`hideFields()` 只控制输出。普通 null 属性会被过滤，数据库默认值可生效；转换字段是否生成 null 由转换逻辑决定。SQL 成功后，在公开查询回调前接受本次写入字段的比较基准并回填自增 ID，不再把数据库格式的写入值重新赋给模型。字段对象、时区以及回调中继续修改的属性均保留；这些修改可通过后续 `update()` 保存。未从数据库读取的默认值、触发器结果等需要重新查询才能获得。
 
 支持 MySQL duplicate-key 更新：
 
@@ -742,7 +742,17 @@ if ($user !== null) {
 }
 ```
 
-`toArray($filterNull = false)` / `jsonSerialize()` 输出实体映射字段，调用转换逻辑，并保留输出字段限制。`toArray()` 会清理 SQL 条件，不保留此前 `where()` / `orderBy()` 等查询状态。
+`toArray($filterNull = false)` / `jsonSerialize()` 只输出实体映射字段、调用转换逻辑并应用输出字段限制，不消费查询配置。此前设置的 WHERE、排序、分页和预加载声明均保留，记录模型日志不会改变下一次数据库操作。
+
+```php
+$user = User::findRecord(1);
+if ($user !== null) {
+    $user->queryLimit()->where('status', 0);
+    $logData = $user->toArray(); // 保留待执行的 WHERE。
+    $user->name = 'Bob';
+    $user->update(); // WHERE (status = ?) AND id = ?。
+}
+```
 
 `toArray(true)` 的 null 过滤位于普通属性分支；带转换对象或 `toValue` 的字段应通过转换器控制输出，不能假设转换结果为 null 的字段必然被移除。
 
@@ -1560,7 +1570,7 @@ $rows = $db->invoke(function (Connection $connection): array {
 });
 ```
 
-`invoke()` 返回回调返回值，finally 中归还由本次调用获取的连接。直接调用 `$connection->query()` / `rawQuery()` 不会经过 `FastDb` 的日志包装；需要全局日志时在回调中调用 `$db->query()` / `rawQuery()`。不要保存回调中的连接给后续协程使用。
+`invoke()` 返回回调返回值，finally 中归还由本次调用获取的连接。直接调用 `$connection->query()` / `rawQuery()` 直接执行驱动，不创建 FastDb 执行帧、QueryResult 或查询计时记录，也不会经过 `FastDb` 的日志包装；需要全局日志时在回调中调用 `$db->query()` / `rawQuery()`。不要保存回调中的连接给后续协程使用。
 
 ```php
 $db->currentConnection(); // 当前选中连接的 Connection|null，不主动创建连接。
@@ -1989,7 +1999,7 @@ php tests/run.php --log-junit ./test-results.xml
 
 ### 查询后不能反复复用同一套条件吗？
 
-`all()`、成功执行的更新/删除、聚合和关联查询会重置查询配置；`toArray()` 清理 SQL 条件，但保留字段输出限制。没有变化而直接返回的 `update()` 不重置限制。建议每次数据库操作明确设置所需条件。
+`all()`、更新/删除、聚合和关联查询会消费本次查询配置；没有变化而直接返回的 `update()` 也会清理一次性的限制。`toArray()` / `jsonSerialize()` 保留全部查询配置。建议每次数据库操作明确设置所需条件。
 
 ### `chunk()` 与 `chunkById()` 应该怎么选？
 

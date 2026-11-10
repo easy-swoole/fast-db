@@ -15,6 +15,7 @@ use EasySwoole\Mysqli\Transaction\TransactionCompletionFlags;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Swoole\Coroutine;
+use Swoole\Coroutine\Channel;
 use Swoole\Coroutine\Socket;
 
 final class ConnectionObserverTest extends TestCase
@@ -133,6 +134,107 @@ final class ConnectionObserverTest extends TestCase
             }
             $this->assertSame("\x16DO inner_query", $commands[0]);
             $this->assertSame("\x16DO outer_query", $commands[3]);
+        });
+    }
+
+    public static function directOperations(): array
+    {
+        return [['raw', false], ['prepared', false], ['raw', true], ['prepared', true], ['restore', false]];
+    }
+
+    #[DataProvider('directOperations')]
+    public function testDirectOperationsHaveNoFrameWhileTheDriverIsWaiting(string $mode, bool $fails): void
+    {
+        $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer) use ($mode, $fails): void {
+            $observations = new Channel(1);
+            Coroutine::create(static function () use ($connection, $peer, $mode, $fails, $observations): void {
+                $frames = []; $commands = [];
+                $read = static function () use ($connection, $peer, &$frames, &$commands): void {
+                    $header = $peer->recvAll(4, 0.1);
+                    if (!is_string($header) || strlen($header) !== 4) { throw new \RuntimeException('Missing command header'); }
+                    $length = ord($header[0]) | (ord($header[1]) << 8) | (ord($header[2]) << 16);
+                    $commands[] = $peer->recvAll($length, 0.1);
+                    $frames[] = (new \ReflectionProperty(Connection::class, 'executionFrame'))->getValue($connection) === null;
+                };
+                $send = static function (string $payload) use ($peer): void {
+                    $packet = substr(pack('V', strlen($payload)), 0, 3) . "\1" . $payload;
+                    if ($peer->sendAll($packet, 0.1) !== strlen($packet)) { throw new \RuntimeException('Cannot send response'); }
+                };
+                try {
+                    if ($mode === 'prepared') { $read(); $send("\0" . pack('VvvCv', 7, 0, 0, 0, 0)); }
+                    $read();
+                    $send($fails ? "\xff" . pack('v', 1064) . '#42000direct failure' : "\0\3\x29\2\0\0\0");
+                    if ($mode === 'prepared') { $read(); }
+                    $observations->push([$frames, $commands]);
+                } catch (\Throwable $error) { $observations->push($error); }
+            });
+            try {
+                $value = match ($mode) {
+                    'raw' => $connection->rawQuery('DO direct_query'),
+                    'prepared' => $connection->query((new QueryBuilder())->raw('DO direct_query')),
+                    'restore' => $connection->objectRestore(),
+                };
+                $this->assertFalse($fails);
+                if ($mode !== 'restore') { $this->assertTrue($value); }
+            } catch (\EasySwoole\Mysqli\Exception\Exception $error) {
+                $this->assertTrue($fails);
+                $this->assertSame(1064, $error->getCode());
+            }
+            $observed = $observations->pop(0.2);
+            $this->assertIsArray($observed);
+            [$frames, $commands] = $observed;
+            $this->assertSame(array_fill(0, count($frames), true), $frames);
+            $this->assertSame($mode === 'prepared' ? 3 : 1, count($commands));
+            $this->assertSame($fails ? null : 3, $connection->getLastAffectRows());
+            $this->assertSame($fails ? null : 41, $connection->getLastInsertId());
+            $this->assertNull((new \ReflectionProperty(Connection::class, 'executionFrame'))->getValue($connection));
+        }, $mode === 'restore');
+    }
+
+    #[DataProvider('queryModes')]
+    public function testCaughtDirectFactoryErrorsDoNotCompleteOrFailThePendingOuterFrame(string $mode): void
+    {
+        $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer) use ($mode): void {
+            $completed = []; $logged = [];
+            $db->setOnQuery(static function (QueryResult $result) use (&$logged): void { $logged[] = $result; });
+            $this->queueQuery($peer, $mode, "\xff" . pack('v', 1064) . '#42000direct failure');
+            $this->queueQuery($peer, 'prepared', $this->ok(2, 1, 11));
+            $result = $db->query(function (QueryBuilder $builder) use ($connection, $mode): void {
+                try {
+                    $mode === 'raw' ? $connection->rawQuery('DO inner_query') : $connection->query($builder->raw('DO inner_query'));
+                    $this->fail('Expected direct SQL failure');
+                } catch (\EasySwoole\Mysqli\Exception\Exception $error) { $this->assertSame(1064, $error->getCode()); }
+                $builder->raw('DO outer_query');
+            }, onComplete: static function (QueryResult $result) use (&$completed): void { $completed[] = $result; });
+            $this->assertSame([$result], $completed);
+            $this->assertSame([$result], $logged);
+            $this->assertNull($result->getException());
+            $this->assertSame('DO outer_query', $result->getQueryBuilder()->getLastPrepareQuery());
+            $this->assertSame(1, $result->getAffectedRows());
+            $this->assertSame(11, $result->getInsertId());
+        });
+    }
+
+    public function testCompletionDirectReentryRestoresTheOuterFrameAndMetadata(): void
+    {
+        $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
+            $this->queueQuery($peer, 'prepared', $this->ok(2, 1, 11));
+            $this->queueQuery($peer, 'raw', $this->ok(2, 2, 22));
+            $result = $db->query((new QueryBuilder())->raw('DO outer_query'), onComplete: function (QueryResult $result, Connection $client): void {
+                $property = new \ReflectionProperty(Connection::class, 'executionFrame');
+                $outer = $property->getValue($client);
+                $this->assertTrue($outer->completed);
+                $this->assertTrue($client->rawQuery('DO inner_query'));
+                $this->assertSame($outer, $property->getValue($client));
+                $this->assertSame(2, $client->getLastAffectRows());
+                $this->assertSame(22, $client->getLastInsertId());
+                $this->assertSame(1, $result->getAffectedRows());
+            });
+            $this->assertSame(1, $result->getAffectedRows());
+            $this->assertSame(11, $result->getInsertId());
+            $this->assertSame(1, $connection->getLastAffectRows());
+            $this->assertSame(11, $connection->getLastInsertId());
+            $this->assertNull((new \ReflectionProperty(Connection::class, 'executionFrame'))->getValue($connection));
         });
     }
 

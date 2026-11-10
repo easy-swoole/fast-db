@@ -35,13 +35,18 @@ final class FieldCodec
         return $value;
     }
 
-    public static function values(AbstractEntity $entity, array $properties, bool $filterNull): array
+    public static function values(AbstractEntity $entity, array $properties, bool $filterNull, ?array &$compareValues = null): array
     {
         $result = [];
         foreach ($properties as $property) {
             $value = $entity->{$property->name} ?? null;
             if ($filterNull && $value === null && !$property->toValue) { continue; }
             $result[$property->name] = self::encode($entity, $property, $value);
+            if ($compareValues !== null) {
+                // 记录实际参与本字段编码的值，后续字段的转换回调可能修改实体。
+                $compareValues[$property->name] = $value instanceof ConvertObjectInterface
+                    ? $result[$property->name] : $value;
+            }
         }
         return $result;
     }

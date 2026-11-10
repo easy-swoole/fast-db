@@ -75,6 +75,27 @@ final class TransactionTest extends TestCase
         $this->assertSame(2, $this->value());
     }
 
+    public function testInsertObserverCanUpdateTheInsertedEntityWithoutLosingItsBaseline(): void
+    {
+        $this->db->rawQuery("ALTER TABLE `{$this->table}` MODIFY id INT NOT NULL AUTO_INCREMENT");
+        $entity = new TransactionEntity(['value' => 3]);
+        $nested = false;
+        $this->db->setOnQuery(function () use ($entity, &$nested): void {
+            if ($nested) { return; }
+            $nested = true;
+            $this->assertSame(2, $entity->id);
+            $entity->value = 9;
+            $this->assertTrue($entity->update());
+        });
+        $this->assertTrue($entity->insert());
+        $this->assertSame(9, $entity->value);
+        $this->assertSame(9, (int) $this->observer->query("SELECT value FROM `{$this->table}` WHERE id=2")->fetch_assoc()['value']);
+        $queries = 0;
+        $this->db->setOnQuery(static function () use (&$queries): void { $queries++; });
+        $this->assertTrue($entity->update());
+        $this->assertSame(0, $queries);
+    }
+
     public function testInsertIdSnapshotSurvivesSqlInGlobalLogCallback(): void
     {
         $this->db->rawQuery("ALTER TABLE `{$this->table}` MODIFY id INT NOT NULL AUTO_INCREMENT");

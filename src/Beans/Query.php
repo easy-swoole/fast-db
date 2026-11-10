@@ -141,11 +141,7 @@ class Query
     /** @internal 构建 SQL 前调用，使已有条件始终与主键或关联外键约束共同成立。 */
     function whereRequired(string $col, mixed $whereValue): Query
     {
-        $builder = $this->builder();
-        if (!method_exists($builder, 'groupExistingWhere')) {
-            throw new RuntimeError('Required WHERE constraints need an easyswoole/mysqli version with QueryBuilder::groupExistingWhere(); upgrade the driver before using entity writes or relations');
-        }
-        $builder->groupExistingWhere()->where($col, $whereValue, '=', 'AND');
+        $this->builder()->groupExistingWhere()->where($col, $whereValue, '=', 'AND');
         return $this;
     }
 
@@ -183,7 +179,7 @@ class Query
         return $this->builder();
     }
 
-    /** 清理 SQL 条件但保留输出配置，供序列化及插入后的兼容清理使用。 */
+    /** 插入后清理 SQL 条件并保留输出配置。 */
     public function withoutSqlConditions(): Query
     {
         $copy = new Query($this->entity);
@@ -194,12 +190,8 @@ class Query
     /** @internal 创建独立的游标分页 Query，保留输出配置和原模板。 */
     public function forPageAfterId(string $column, mixed $lastId, int $size): Query
     {
-        $builder = $this->builder();
-        if (!method_exists($builder, 'forPageAfterId')) {
-            throw new RuntimeError('chunkById requires QueryBuilder::forPageAfterId(); upgrade easyswoole/mysqli');
-        }
         $copy = new Query($this->entity);
-        $copy->queryBuilder = $builder->forPageAfterId($column, $lastId, $size);
+        $copy->queryBuilder = $this->builder()->forPageAfterId($column, $lastId, $size);
         $copy->selection = clone $this->selection;
         $copy->relations = $this->relations;
         return $copy;

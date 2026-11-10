@@ -98,23 +98,17 @@ class Connection extends Client implements ObjectInterface
 
     private function executeQuery(?QueryBuilder $builder, ?string $sql, ?float $timeout): bool|array
     {
-        $frame = $this->executionFrame;
-        if ($frame === null || !$frame->accepts($builder, $sql)) {
-            $frame = new ExecutionFrame($builder, $sql);
-            $frame->result->setConnectionName($this->connectionName ?? 'default');
-        }
         $previous = $this->executionFrame;
+        // 直连只返回驱动结果；构建中或已完成的外层帧不能接收本次直连通知。
+        $frame = $previous !== null && $previous->accepts($builder, $sql) ? $previous : null;
         $this->executionFrame = $frame;
-        $frame->start();
         try {
             return $builder === null ? parent::rawQuery($sql, $timeout) : parent::query($builder, $timeout);
         } catch (\Throwable $error) {
             $this->lastActiveTick = null;
-            if (!$frame->completed) {
+            if ($frame === null || !$frame->completed) {
                 $error = $this->withTimeoutContext($error, $sql, $builder);
             }
-            $frame->fail($error);
-            try { $frame->complete($this); } catch (\Throwable) {}
             throw $error;
         } finally {
             $this->executionFrame = $previous;

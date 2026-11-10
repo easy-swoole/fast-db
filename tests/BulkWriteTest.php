@@ -166,17 +166,14 @@ final class BulkWriteTest extends TestCase
         $this->assertCount(1, $this->connection->queries);
     }
 
-    public function testColumnsAreReorderedToTheFirstRowAcrossBatchBoundaries(): void
+    public function testDifferentColumnOrdersKeepTheirValuesAcrossBatchBoundaries(): void
     {
         $rows = $this->rows(3);
         $rows[1] = array_reverse($rows[1], true);
         $rows[2] = array_reverse($rows[2], true);
         $this->assertSame(3, BulkWriteFixtureRecord::fastInsertAll($rows, batchSize: 1));
         $this->assertSame($this->rows(3), $this->stored());
-        foreach ($this->connection->queries as $index => $query) {
-            $this->assertMatchesRegularExpression('/\(`id`,\s*`name`,\s*`count`,\s*`payload`\)/', $query['sql']);
-            $this->assertSame(array_values($this->row($index + 1)), $query['parameters']);
-        }
+        $this->assertCount(3, $this->connection->queries);
     }
 
     public function testNullAndExpressionValuesReachTheBuilderWithoutEntityConversion(): void
@@ -274,7 +271,7 @@ final class BulkWriteTest extends TestCase
         try { BulkWriteFixtureRecord::fastUpsert($this->rows(1), ['missing_column']); $this->fail('Incoming update columns must exist in the row schema'); }
         catch (\InvalidArgumentException) { $this->addToAssertionCount(1); }
         $this->assertSame([], $this->connection->queries);
-        $this->assertSame(0, BulkWriteFixtureRecord::$constructed);
+        $this->assertSame([], $this->events);
     }
 
     public function testDriverAffectedRowsAreSummedWithoutFloatPrecisionLoss(): void
@@ -443,13 +440,33 @@ final class BulkWriteTest extends TestCase
         $this->assertSame([], $this->connection->queries);
     }
 
-    public function testColumnSetValidationAppliesAcrossDifferentBatches(): void
+    public static function differentBatchColumns(): array { return [[1, false], [1, true], [2, false], [2, true]]; }
+
+    #[DataProvider('differentBatchColumns')]
+    public function testColumnSetValidationAppliesAcrossDifferentBatches(int $batchSize, bool $sameCount): void
     {
-        $rows = [$this->row(1), $this->row(2), ['id' => 3, 'name' => 'missing fields']];
-        try { BulkWriteFixtureRecord::fastInsertAll($rows, batchSize: 2); $this->fail('Rows must preserve one column set across all batches'); }
+        $invalid = $this->row(3);
+        unset($invalid['payload']);
+        if ($sameCount) { $invalid['unexpected'] = 'different field'; }
+        $rows = [$this->row(1), $this->row(2), $invalid];
+        try { BulkWriteFixtureRecord::fastInsertAll($rows, batchSize: $batchSize); $this->fail('Rows must preserve one column set across all batches'); }
         catch (\InvalidArgumentException) { $this->addToAssertionCount(1); }
         $this->assertSame($this->rows(2), $this->stored());
-        $this->assertCount(1, $this->connection->queries);
+        $this->assertCount(intdiv(2, $batchSize), $this->connection->queries);
+    }
+
+    public function testDriverRejectsDifferentColumnsInsideTheBatchBeforeAnyWrite(): void
+    {
+        $invalid = $this->row(2);
+        unset($invalid['payload']);
+        $invalid['unexpected'] = 'different field';
+        try {
+            BulkWriteFixtureRecord::fastInsertAll([$this->row(1), $invalid, $this->row(3)], batchSize: 3);
+            $this->fail('A batch must not silently lose or shift fields');
+        } catch (\InvalidArgumentException) { $this->addToAssertionCount(1); }
+        $this->assertSame([], $this->stored());
+        $this->assertSame([], $this->connection->queries);
+        $this->assertSame([], $this->events);
     }
 }
 

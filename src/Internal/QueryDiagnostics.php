@@ -72,11 +72,7 @@ final class QueryDiagnostics
             $this->append($stack);
         }
         if ($this->onQuery !== null) {
-            $executionException = $result->getException();
-            try { ($this->onQuery)($result); }
-            catch (\Throwable $callbackException) {
-                if ($executionException === null) { throw $callbackException; }
-            }
+            ($this->onQuery)($result);
         }
     }
 

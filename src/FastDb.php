@@ -204,8 +204,11 @@ class FastDb
         $frame = new ExecutionFrame($builder, $sql, $onComplete, true);
         $frame->result->setConnectionName($client->connectionName ?? 'default');
         if ($builder === null) { $frame->start(); }
+        $operationSucceeded = false;
         try {
-            return $client->runFrame($frame, $operation);
+            $result = $client->runFrame($frame, $operation);
+            $operationSucceeded = true;
+            return $result;
         } finally {
             try {
                 // 工厂或完成回调中首次启用诊断，也适用于本次已完成的 SQL。
@@ -213,7 +216,7 @@ class FastDb
                 if ($frame->count !== null) { $this->diagnostics?->notify($frame->count->result); }
             } catch (\Throwable $error) {
                 // 查询或完成回调已失败时保留原异常，只有原流程成功才抛出日志回调异常。
-                if ($frame->failure === null) { throw $error; }
+                if ($operationSucceeded) { throw $error; }
             }
         }
     }
