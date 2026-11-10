@@ -61,7 +61,7 @@ class ConvertList implements ConvertObjectInterface
         // Bean 实现 JsonSerializable，直接编码可避免每个元素变成 JSON 字符串。
         // 类型化列表始终输出 JSON 数组，删除元素留下的键不影响列表格式。
         if (static::itemClass() === null) {
-            return json_encode($this->list);
+            return json_encode($this->list, JSON_THROW_ON_ERROR);
         }
         return json_encode(array_values($this->list), JSON_THROW_ON_ERROR);
     }

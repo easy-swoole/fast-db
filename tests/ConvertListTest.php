@@ -97,6 +97,19 @@ final class ConvertListTest extends TestCase
         $this->assertNull($list->first());
     }
 
+    public static function encodingFailures(): array
+    {
+        return [['invalid utf8', "\xFF"], ['NaN', NAN], ['infinity', INF]];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('encodingFailures')]
+    public function testInvalidJsonValuesRaiseAnEncodingError(string $kind, mixed $value): void
+    {
+        $list = new ConvertList([$value]);
+        $this->expectException(\JsonException::class);
+        $list->toValue();
+    }
+
     public function testInvalidItemIsRejected(): void
     {
         $list = new UserBeanList([]);

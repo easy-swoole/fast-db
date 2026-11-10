@@ -232,7 +232,11 @@ abstract class AbstractEntity implements \JsonSerializable
     function toArray(bool $filterNull = false):array
     {
         $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
-        $properties = $this->queryLimit()->filterProperties($entityRef->allProperties(), true);
+        $properties = $entityRef->allProperties();
+        // 标准实体没有输出配置时直接转换；子类覆写 queryLimit 的行为仍然生效。
+        if ($this->queryBuilder !== null || $entityRef->hasCustomQueryLimit) {
+            $properties = $this->queryLimit()->filterProperties($properties, true);
+        }
         return FieldCodec::values($this, $properties, $filterNull);
     }
 
@@ -555,7 +559,7 @@ abstract class AbstractEntity implements \JsonSerializable
         $this->configureRelation($relate, $query);
         $target = new $relate->targetEntity();
         return new RelationPlan($relate->type, $relate, $target->tableName(), $query,
-            FastDb::getInstance()->selectConnection(), $this->{$relate->selfProperty} ?? null);
+            FastDb::getInstance()->selectConnection(), FieldCodec::compare($this->{$relate->selfProperty} ?? null));
     }
 
     protected function relateOne(Relate|null $relate = null,string|null $tableName = null):null|array|AbstractEntity

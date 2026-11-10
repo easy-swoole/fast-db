@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace EasySwoole\FastDb\Tests;
 
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
+use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Beans\Page;
 use EasySwoole\FastDb\Beans\Query;
 use EasySwoole\Mysqli\QueryBuilder;
@@ -16,6 +17,36 @@ final class QueryLazyBuilderTest extends TestCase
     private function builderState(Query $query): ?QueryBuilder
     {
         return (new \ReflectionProperty(Query::class, 'queryBuilder'))->getValue($query);
+    }
+
+    public function testPlainSerializationDoesNotCreateAQueryOrRetainTheEntityUntilGc(): void
+    {
+        $entity = new LazyOutputOwner(['id' => 1, 'secret' => 'private']);
+        $state = new \ReflectionProperty(AbstractEntity::class, 'queryBuilder');
+        $this->assertSame(['id' => 1, 'secret' => 'private'], $entity->toArray());
+        $this->assertSame('{"id":1,"secret":"private"}', json_encode($entity, JSON_THROW_ON_ERROR));
+        $entity->secret = null;
+        $this->assertSame(['id' => 1], $entity->toArray(true));
+        $this->assertNull($state->getValue($entity));
+        $reference = \WeakReference::create($entity);
+        unset($entity);
+        $this->assertNull($reference->get());
+    }
+
+    public static function outputOverrides(): array
+    {
+        return [[LazyCustomOutputOwner::class], [LazyInheritedCustomOutputOwner::class]];
+    }
+
+    #[DataProvider('outputOverrides')]
+    public function testSerializationStillCallsDirectAndInheritedQueryLimitOverrides(string $class): void
+    {
+        LazyCustomOutputOwner::$calls = 0;
+        $entity = new $class(['id' => 1, 'secret' => 'private']);
+        $this->assertSame(['id' => 1], $entity->toArray());
+        $this->assertSame(1, LazyCustomOutputOwner::$calls);
+        $this->assertSame(['id' => 1], $entity->toArray());
+        $this->assertSame(2, LazyCustomOutputOwner::$calls);
     }
 
     public function testOutputOptionsDoNotAllocateASqlBuilder(): void
@@ -172,3 +203,22 @@ class LazyGetterOverrideQuery extends Query
         throw new \LogicException('Internal SQL methods must preserve their original private builder dispatch.');
     }
 }
+
+class LazyOutputOwner extends AbstractEntity
+{
+    #[Property(isPrimaryKey: true)] public int $id;
+    #[Property] public ?string $secret;
+    public function tableName(): string { return 'lazy_output'; }
+}
+
+class LazyCustomOutputOwner extends LazyOutputOwner
+{
+    public static int $calls = 0;
+    public function queryLimit(): Query
+    {
+        self::$calls++;
+        return parent::queryLimit()->hideFields('secret');
+    }
+}
+
+class LazyInheritedCustomOutputOwner extends LazyCustomOutputOwner {}

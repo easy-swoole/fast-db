@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace EasySwoole\FastDb\Tests;
 
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
+use EasySwoole\FastDb\AbstractInterface\ConvertList;
+use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Config;
 use EasySwoole\FastDb\FastDb;
@@ -215,6 +217,57 @@ final class TransactionTest extends TestCase
         $this->assertTrue($zero->update());
         $this->assertSame(6, TextKeyMysqlEntity::findRecord('0')->value);
         $this->assertTrue($zero->delete());
+    }
+
+    public function testConvertedKeysSupportMysqlLazyAndPreloadedRelations(): void
+    {
+        $this->observer->query("ALTER TABLE `{$this->table}` MODIFY id VARCHAR(20) NOT NULL");
+        $this->observer->query("INSERT INTO `{$this->table}` VALUES ('uuid-a',10),('uuid-b',20)");
+        $entity = ConvertedKeyMysqlEntity::findRecord('uuid-a');
+        $this->assertSame('uuid-a', $entity->record()->id);
+        $entity->id = new ConvertedKey('uuid-a');
+        $this->assertSame('uuid-a', $entity->record()->id);
+        $this->assertSame('uuid-a', $entity->records()->first()->id);
+        foreach ([false, true] as $asArray) {
+            $queries = 0;
+            $this->db->setOnQuery(static function () use (&$queries): void { $queries++; });
+            $owner = new ConvertedKeyMysqlEntity();
+            $owner->queryLimit()->fields(null, $asArray)->orderBy('id', 'ASC')->withRelations(['record', 'records']);
+            $parents = $owner->all()->list();
+            $this->assertCount(3, $parents);
+            foreach ($parents as $parent) {
+                if ($asArray) {
+                    $this->assertSame($parent['id'], $parent['record']['id']);
+                    $this->assertSame([$parent['id']], array_column($parent['records'], 'id'));
+                } else {
+                    $parent->id = new ConvertedKey($parent->id->value);
+                    $this->assertSame($parent->id->value, $parent->record()->id);
+                    $this->assertSame($parent->id->value, $parent->records()->first()->id);
+                }
+            }
+            $this->assertSame(3, $queries);
+        }
+    }
+
+    public function testMysqlJsonEncodingFailureDoesNotReplaceStoredText(): void
+    {
+        $this->observer->query("ALTER TABLE `{$this->table}` ADD COLUMN items TEXT NULL");
+        $this->observer->query("UPDATE `{$this->table}` SET items='[1]' WHERE id=1");
+        $entity = EncodingMysqlEntity::findRecord(1);
+        $entity->items->append(NAN);
+        $queries = 0;
+        $this->db->setOnQuery(static function () use (&$queries): void { $queries++; });
+        try { $entity->update(); $this->fail('Invalid JSON must fail before SQL'); }
+        catch (\JsonException) {}
+        $this->assertSame(0, $queries);
+        $this->assertSame('[1]', $this->observer->query("SELECT items FROM `{$this->table}` WHERE id=1")->fetch_assoc()['items']);
+        $this->assertTrue(is_nan($entity->items->toArray()[1]));
+        $entity->setData(['items' => '[2]']);
+        EncodingMysqlList::$encodes = 0;
+        $this->assertTrue($entity->update());
+        $this->assertSame(1, EncodingMysqlList::$encodes);
+        $this->assertSame(1, $queries);
+        $this->assertSame('[2]', $this->observer->query("SELECT items FROM `{$this->table}` WHERE id=1")->fetch_assoc()['items']);
     }
 
     public function testDefaultRecycleRollsBackTheSessionAndClearsDiagnostics(): void
@@ -978,4 +1031,21 @@ class ConvertedKeyMysqlEntity extends AbstractEntity
     #[Property(isPrimaryKey: true, convertObject: ConvertedKey::class)] public ?ConvertedKey $id;
     #[Property] public int $value;
     public function tableName(): string { return TransactionEntity::$table; }
+    #[Relate(TextKeyMysqlEntity::class, 'id', type: 'one', cacheResult: true)]
+    public function record() { return $this->relateOne(); }
+    #[Relate(TextKeyMysqlEntity::class, 'id', type: 'many', cacheResult: true)]
+    public function records() { return $this->relateMany(); }
+}
+
+class EncodingMysqlEntity extends AbstractEntity
+{
+    #[Property(isPrimaryKey: true)] public int $id;
+    #[Property(convertObject: EncodingMysqlList::class)] public ?EncodingMysqlList $items;
+    public function tableName(): string { return TransactionEntity::$table; }
+}
+
+class EncodingMysqlList extends ConvertList
+{
+    public static int $encodes = 0;
+    public function toValue(): string { self::$encodes++; return parent::toValue(); }
 }

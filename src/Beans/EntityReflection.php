@@ -22,7 +22,8 @@ class EntityReflection
     private ?string $primaryKey = null;
 
     public function __construct(
-        public readonly string $entityClass
+        public readonly string $entityClass,
+        public readonly bool $hasCustomQueryLimit = false,
     ){}
 
     public function getOnDelete(): ?OnDelete

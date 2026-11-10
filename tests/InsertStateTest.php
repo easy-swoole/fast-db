@@ -203,6 +203,38 @@ final class InsertStateTest extends TestCase
         $this->assertCount(0, $this->client->queries);
     }
 
+    public function testChangedConvertedObjectsAreEncodedOnceAndAcceptedAsTheBaseline(): void
+    {
+        $this->client->database->exec("INSERT INTO insert_state (id,items) VALUES (1,'[1]')");
+        $entity = new InsertStateRecord(['id' => 1, 'items' => '[1]']);
+        $entity->items->append(2);
+        InsertStateList::$valueCalls = 0;
+        $this->assertTrue($entity->update());
+        $this->assertSame(1, InsertStateList::$valueCalls);
+        $this->assertSame(['[1,2]', 1], $this->client->queries[0]['parameters']);
+        $this->assertSame('[1,2]', $this->client->row()['items']);
+        InsertStateList::$valueCalls = 0;
+        $this->assertTrue($entity->update());
+        $this->assertSame(1, InsertStateList::$valueCalls);
+        $this->assertCount(1, $this->client->queries);
+    }
+
+    public function testEncodingFailureDoesNotWriteAnEmptyStringOrChangeTheBusinessValue(): void
+    {
+        $this->client->database->exec("INSERT INTO insert_state (id,items) VALUES (1,'[1]')");
+        $entity = new InsertStateRecord(['id' => 1, 'items' => '[1]']);
+        $entity->items->append(NAN);
+        try { $entity->update(); $this->fail('Invalid JSON must fail before SQL'); }
+        catch (\JsonException) {}
+        $this->assertSame([], $this->client->queries);
+        $this->assertSame('[1]', $this->client->row()['items']);
+        $this->assertTrue(is_nan($entity->items->toArray()[1]));
+        // 无效业务数据由调用方修正，修正后可以继续正常保存。
+        $entity->setData(['items' => '[2]']);
+        $this->assertTrue($entity->update());
+        $this->assertSame('[2]', $this->client->row()['items']);
+    }
+
     public function testSqlFailureDoesNotAcceptFieldsAndKeepsObserverChangesForRetry(): void
     {
         $this->client->database->exec("INSERT INTO insert_state (id,name) VALUES (20,'before')");

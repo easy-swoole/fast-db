@@ -837,7 +837,7 @@ $user->update(); // nullable 属性可清空到 SQL NULL。
 
 本节示例需要把快速开始模型的 `tags` 声明替换为转换属性。实体 `toArray()` 对转换对象使用 `toValue()`，因此这里输出的 `tags` 是 JSON 字符串，不是嵌套数组。
 
-`ConvertList::toObject()` 接收 PHP 数组或解码结果为数组的 JSON 字符串；直接传入 PHP `null` 保留默认空列表约定。非法 JSON 抛出 `JsonException`，其他输入类型或 JSON 标量抛出 `InvalidArgumentException`，不再静默替换成空列表。`append(null)` 不追加。`first()` 返回第一个实际存在的元素，空列表返回 null，不要求数组键从 0 开始。`remove()` 会保留原数组键，删除后 JSON 编码可能呈现对象形式；需要列表 JSON 时可先使用 `array_values()` 整理数据并重新赋值。
+`ConvertList::toObject()` 接收 PHP 数组或解码结果为数组的 JSON 字符串；直接传入 PHP `null` 保留默认空列表约定。非法 JSON 抛出 `JsonException`，其他输入类型或 JSON 标量抛出 `InvalidArgumentException`，不再静默替换成空列表。普通列表与类型化列表的 JSON 编码均使用 `JSON_THROW_ON_ERROR`；非法 UTF-8、NAN、INF 等编码错误会抛出 `JsonException`，不会转换为空字符串或自动替换业务数据。`append(null)` 不追加。`first()` 返回第一个实际存在的元素，空列表返回 null，不要求数组键从 0 开始。`remove()` 会保留原数组键，删除后 JSON 编码可能呈现对象形式；需要列表 JSON 时可先使用 `array_values()` 整理数据并重新赋值。
 
 #### Bean 列表
 
@@ -1230,7 +1230,7 @@ foreach ($rows as $row) {
 
 附加键使用关系方法的声明名；如果父数组已经有同名键，会明确报错，不覆盖原字段。数组模式下父行和关联行保持数据库表示，例如 JSON 字段仍是 JSON 字符串，不会把转换对象放进返回数组。
 
-无论返回实体还是数组，父关联键 `selfProperty` 必须以原列名被 SELECT 选中；不能只选择别名，也不会自动扩大父字段白名单。实体模式不能用 `hideFields()` 隐藏该键，因为后续 getter 需要真实父键；数组模式可以隐藏，库使用隐藏前的原始行完成关联匹配。配置方法读取的其他 `$this` 字段也应由父查询选中。目标关系的 `fields()` 不必选中 `targetProperty`：内部匹配辅助列会被移除，不进入关联输出。
+无论返回实体还是数组，父关联键 `selfProperty` 必须以原列名被 SELECT 选中；不能只选择别名，也不会自动扩大父字段白名单。实体模式不能用 `hideFields()` 隐藏该键，因为后续 getter 需要真实父键；数组模式可以隐藏，库使用隐藏前的原始行完成关联匹配。配置方法读取的其他 `$this` 字段也应由父查询选中。目标关系的 `fields()` 不必选中 `targetProperty`：内部匹配辅助列会被移除，不进入关联输出。当前实体的关联字段可以使用 `convertObject` 值对象或枚举；按需加载与预加载均使用其 `toValue()` 数据库值生成关联条件和匹配缓存。预加载要求转换后的关联值为整数、字符串或 null。
 
 数组结果启用预加载时，会为每一条父行临时构造父模型，以便实例配置方法读取 `$this` 字段。因此会执行父模型初始化、输入赋值和相应转换；临时模型不进入返回结果。这部分开销只发生在显式 `withRelations()` 路径，未启用预加载的数组查询仍不会逐行构造实体。
 

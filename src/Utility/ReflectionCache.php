@@ -36,7 +36,8 @@ class ReflectionCache
             throw new RuntimeError("{$entityClass} not a subclass of " . AbstractEntity::class);
         }
 
-        $entity = new EntityReflection($entityClass);
+        $entity = new EntityReflection($entityClass,
+            $reflection->getMethod('queryLimit')->getDeclaringClass()->getName() !== AbstractEntity::class);
         $entity->setOnDelete($this->parseClassTag(OnDelete::class, $reflection));
         $entity->setOnInitialize($this->parseClassTag(OnInitialize::class, $reflection));
         $entity->setOnInsert($this->parseClassTag(OnInsert::class, $reflection));

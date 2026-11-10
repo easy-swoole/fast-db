@@ -189,6 +189,43 @@ final class EntityQueryBoundaryTest extends TestCase
         $this->assertNull(ConvertedKeyBoundaryRecord::findRecord('0'));
     }
 
+    public function testConvertedKeysSupportLazyRelationsAndValueBasedCacheMatching(): void
+    {
+        $entity = new ConvertedKeyBoundaryRecord(['id' => 'trim', 'order' => 6]);
+        $this->assertSame('trim', $entity->record()->id);
+        $this->assertSame(['trim'], $this->client->queries[0]['parameters']);
+        $entity->id = new ConvertedKey('trim');
+        $this->assertSame('trim', $entity->record()->id);
+        $this->assertCount(1, $this->client->queries);
+        $this->assertSame('trim', $entity->records()->first()->id);
+        $this->assertCount(2, $this->client->queries);
+        $entity->id->value = 'other';
+        $this->assertSame('other', $entity->record()->id);
+        $this->assertCount(3, $this->client->queries);
+    }
+
+    public static function relationOutputs(): array { return [[false], [true]]; }
+
+    #[DataProvider('relationOutputs')]
+    public function testConvertedKeysSupportEntityAndArrayPreloading(bool $asArray): void
+    {
+        $owner = new ConvertedKeyBoundaryRecord();
+        $owner->queryLimit()->fields(null, $asArray)->orderBy('id', 'ASC')->withRelations(['record', 'records']);
+        $parents = $owner->all()->list();
+        $this->assertCount(3, $this->client->queries);
+        foreach ($parents as $parent) {
+            if ($asArray) {
+                $this->assertSame($parent['id'], $parent['record']['id']);
+                $this->assertSame([$parent['id']], array_column($parent['records'], 'id'));
+            } else {
+                $parent->id = new ConvertedKey($parent->id->value);
+                $this->assertSame($parent->id->value, $parent->record()->id);
+                $this->assertSame($parent->id->value, $parent->records()->first()->id);
+            }
+        }
+        $this->assertCount(3, $this->client->queries);
+    }
+
     public static function aggregates(): array
     {
         return [['sum', 18.0], ['avg', 6.0], ['min', 4.0], ['max', 8.0]];
@@ -354,4 +391,8 @@ class ConvertedKeyBoundaryRecord extends AbstractEntity
     #[Property(isPrimaryKey: true, convertObject: ConvertedKey::class)] public ?ConvertedKey $id;
     #[Property] public int $order;
     public function tableName(): string { return 'query_boundary'; }
+    #[Relate(QueryBoundaryRecord::class, 'id', type: 'one', cacheResult: true)]
+    public function record() { return $this->relateOne(); }
+    #[Relate(QueryBoundaryRecord::class, 'id', type: 'many', cacheResult: true)]
+    public function records() { return $this->relateMany(); }
 }
