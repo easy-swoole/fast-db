@@ -92,7 +92,6 @@ final class ConnectionObserverTest extends TestCase
             $this->assertCount(1, $completed);
             $this->assertSame($error, $completed[0]->getException());
             $this->assertSame('DO 1', $completed[0]->getQueryBuilder()->getLastPrepareQuery());
-            $this->assertNull((new \ReflectionProperty(Connection::class, 'executionFrame'))->getValue($connection));
         });
     }
 
@@ -143,18 +142,17 @@ final class ConnectionObserverTest extends TestCase
     }
 
     #[DataProvider('directOperations')]
-    public function testDirectOperationsHaveNoFrameWhileTheDriverIsWaiting(string $mode, bool $fails): void
+    public function testDirectOperationsReturnDriverResultsAndMetadata(string $mode, bool $fails): void
     {
         $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer) use ($mode, $fails): void {
             $observations = new Channel(1);
             Coroutine::create(static function () use ($connection, $peer, $mode, $fails, $observations): void {
-                $frames = []; $commands = [];
-                $read = static function () use ($connection, $peer, &$frames, &$commands): void {
+                $commands = [];
+                $read = static function () use ($peer, &$commands): void {
                     $header = $peer->recvAll(4, 0.1);
                     if (!is_string($header) || strlen($header) !== 4) { throw new \RuntimeException('Missing command header'); }
                     $length = ord($header[0]) | (ord($header[1]) << 8) | (ord($header[2]) << 16);
                     $commands[] = $peer->recvAll($length, 0.1);
-                    $frames[] = (new \ReflectionProperty(Connection::class, 'executionFrame'))->getValue($connection) === null;
                 };
                 $send = static function (string $payload) use ($peer): void {
                     $packet = substr(pack('V', strlen($payload)), 0, 3) . "\1" . $payload;
@@ -165,7 +163,7 @@ final class ConnectionObserverTest extends TestCase
                     $read();
                     $send($fails ? "\xff" . pack('v', 1064) . '#42000direct failure' : "\0\3\x29\2\0\0\0");
                     if ($mode === 'prepared') { $read(); }
-                    $observations->push([$frames, $commands]);
+                    $observations->push($commands);
                 } catch (\Throwable $error) { $observations->push($error); }
             });
             try {
@@ -182,17 +180,15 @@ final class ConnectionObserverTest extends TestCase
             }
             $observed = $observations->pop(0.2);
             $this->assertIsArray($observed);
-            [$frames, $commands] = $observed;
-            $this->assertSame(array_fill(0, count($frames), true), $frames);
+            $commands = $observed;
             $this->assertSame($mode === 'prepared' ? 3 : 1, count($commands));
             $this->assertSame($fails ? null : 3, $connection->getLastAffectRows());
             $this->assertSame($fails ? null : 41, $connection->getLastInsertId());
-            $this->assertNull((new \ReflectionProperty(Connection::class, 'executionFrame'))->getValue($connection));
         }, $mode === 'restore');
     }
 
     #[DataProvider('queryModes')]
-    public function testCaughtDirectFactoryErrorsDoNotCompleteOrFailThePendingOuterFrame(string $mode): void
+    public function testCaughtDirectFactoryErrorsDoNotAffectTheOuterQuery(string $mode): void
     {
         $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer) use ($mode): void {
             $completed = []; $logged = [];
@@ -215,26 +211,42 @@ final class ConnectionObserverTest extends TestCase
         });
     }
 
-    public function testCompletionDirectReentryRestoresTheOuterFrameAndMetadata(): void
+    public function testCompletionDirectReentryKeepsTheOuterResultAndLatestConnectionMetadata(): void
     {
         $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
             $this->queueQuery($peer, 'prepared', $this->ok(2, 1, 11));
             $this->queueQuery($peer, 'raw', $this->ok(2, 2, 22));
             $result = $db->query((new QueryBuilder())->raw('DO outer_query'), onComplete: function (QueryResult $result, Connection $client): void {
-                $property = new \ReflectionProperty(Connection::class, 'executionFrame');
-                $outer = $property->getValue($client);
-                $this->assertTrue($outer->completed);
                 $this->assertTrue($client->rawQuery('DO inner_query'));
-                $this->assertSame($outer, $property->getValue($client));
                 $this->assertSame(2, $client->getLastAffectRows());
                 $this->assertSame(22, $client->getLastInsertId());
                 $this->assertSame(1, $result->getAffectedRows());
             });
             $this->assertSame(1, $result->getAffectedRows());
             $this->assertSame(11, $result->getInsertId());
-            $this->assertSame(1, $connection->getLastAffectRows());
-            $this->assertSame(11, $connection->getLastInsertId());
-            $this->assertNull((new \ReflectionProperty(Connection::class, 'executionFrame'))->getValue($connection));
+            $this->assertSame(2, $connection->getLastAffectRows());
+            $this->assertSame(22, $connection->getLastInsertId());
+        });
+    }
+
+    public function testCompletionFailureDoesNotBecomeAConnectionTimeoutOrInvalidateRecentActivity(): void
+    {
+        $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
+            $failure = new \EasySwoole\Mysqli\Exception\TimeoutException('business completion failed', 110);
+            $logged = null;
+            $db->setOnQuery(static function (QueryResult $result) use (&$logged): void { $logged = $result; });
+            $this->queueQuery($peer, 'raw', $this->ok(2, 1, 11));
+            try {
+                $db->rawQuery('DO 1', onComplete: static function () use ($failure): void { throw $failure; });
+                $this->fail('Expected completion error');
+            } catch (\Throwable $error) { $this->assertSame($failure, $error); }
+            $this->assertTrue($logged->getResult());
+            $this->assertNull($logged->getException());
+            $this->assertSame(11, $logged->getInsertId());
+            $this->assertTrue($connection->beforeUse());
+            $this->assertSame("\x05\0\0\0", $peer->recvAll(4, 0.1));
+            $this->assertSame("\x03DO 1", $peer->recvAll(5, 0.1));
+            $this->assertFalse($peer->recv(1, 0.001), 'Callback failure must not trigger a health probe.');
         });
     }
 
@@ -255,7 +267,6 @@ final class ConnectionObserverTest extends TestCase
             $this->assertSame($completed, $logged);
             $this->assertSame($error, $completed->getException());
             $this->assertNull($completed->getResult());
-            $this->assertNull((new \ReflectionProperty(Connection::class, 'executionFrame'))->getValue($connection));
         });
     }
 
@@ -497,14 +508,13 @@ final class ConnectionObserverTest extends TestCase
         }, true);
     }
 
-    public function testInheritedStreamsSynchronizeStateWithoutAnExecutionFrame(): void
+    public function testInheritedStreamsExposeActualTransactionState(): void
     {
         $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
             $this->queueQuery($peer, 'raw', $this->ok(1));
             $this->assertSame([], iterator_to_array($connection->rawIterate('START TRANSACTION')));
             $this->assertTrue($connection->isInTransaction());
             $this->assertNotNull((new \ReflectionProperty(Connection::class, 'lastActiveTick'))->getValue($connection));
-            $this->assertNull((new \ReflectionProperty(Connection::class, 'executionFrame'))->getValue($connection));
             $this->queueQuery($peer, 'raw', $this->ok());
             $this->assertSame([], iterator_to_array($connection->rawIterate('ROLLBACK')));
             $this->assertFalse($connection->isInTransaction());

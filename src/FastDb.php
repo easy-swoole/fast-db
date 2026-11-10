@@ -6,7 +6,6 @@ use EasySwoole\Component\Singleton;
 use EasySwoole\FastDb\Beans\QueryStack;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\Internal\QueryDiagnostics;
-use EasySwoole\FastDb\Internal\ExecutionFrame;
 use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\Pool;
 use EasySwoole\FastDb\Mysql\QueryResult;
@@ -184,9 +183,8 @@ class FastDb
         $client = $this->getClient($connection);
         $build = is_callable($queryBuilder) ? $queryBuilder : null;
         $builder = $build === null ? $queryBuilder : new QueryBuilder();
-        return $this->execute($client, static function (ExecutionFrame $execution) use ($client, $builder, $build, $timeout) {
+        return $this->execute($client, static function () use ($client, $builder, $build, $timeout) {
             if ($build !== null) { $build($builder); }
-            $execution->start();
             return $client->query($builder, $timeout);
         }, $builder, null, $onComplete);
     }
@@ -201,24 +199,49 @@ class FastDb
     private function execute(Connection $client, callable $operation, ?QueryBuilder $builder = null,
         ?string $sql = null, ?callable $onComplete = null): QueryResult
     {
-        $frame = new ExecutionFrame($builder, $sql, $onComplete, true);
-        $frame->result->setConnectionName($client->connectionName ?? 'default');
-        if ($builder === null) { $frame->start(); }
-        $operationSucceeded = false;
-        try {
-            $result = $client->runFrame($frame, $operation);
-            $operationSucceeded = true;
-            return $result;
-        } finally {
-            try {
-                // 工厂或完成回调中首次启用诊断，也适用于本次已完成的 SQL。
-                $this->diagnostics?->notify($frame->result);
-                if ($frame->count !== null) { $this->diagnostics?->notify($frame->count->result); }
-            } catch (\Throwable $error) {
-                // 查询或完成回调已失败时保留原异常，只有原流程成功才抛出日志回调异常。
-                if ($operationSucceeded) { throw $error; }
-            }
+        $result = $this->executeResult($client, $operation, $builder, $sql);
+        $error = $result->getException();
+        $count = null;
+        if ($error === null && $builder !== null
+            && in_array('SQL_CALC_FOUND_ROWS', $result->getQueryBuilder()->getLastQueryOptions(), true)) {
+            // 必须先取得总数，再允许任何完成回调或观察回调执行其他 SQL。
+            $count = $this->executeResult($client, static fn () => $client->rawQuery('SELECT FOUND_ROWS() as count'),
+                null, 'SELECT FOUND_ROWS() as count');
+            $error = $count->getException();
+            if ($error === null) { $result->setTotalResult($count); }
         }
+        if ($onComplete !== null) {
+            try { $onComplete($result, $client); }
+            catch (\Throwable $callbackError) { $error ??= $callbackError; }
+        }
+        try {
+            // 回调中首次开启诊断或替换观察者，也适用于本次通知。
+            $this->diagnostics?->notify($result);
+            if ($count !== null) { $this->diagnostics?->notify($count); }
+        } catch (\Throwable $callbackError) {
+            $error ??= $callbackError;
+        }
+        if ($error !== null) { throw $error; }
+        return $result;
+    }
+
+    /** 驱动返回后立即保存本次结果；异常只在此记录，统一由调用层通知后抛出。 */
+    private function executeResult(Connection $client, callable $operation, ?QueryBuilder $builder, ?string $sql): QueryResult
+    {
+        $result = new QueryResult(microtime(true));
+        $result->setConnectionName($client->connectionName ?? 'default');
+        $result->setRawSql($sql);
+        try {
+            $result->setResult($operation());
+            $result->setAffectedRows($client->getLastAffectRows());
+            $result->setInsertId($client->getLastInsertId());
+        } catch (\Throwable $error) {
+            $result->setException($error);
+        } finally {
+            if ($builder !== null) { $result->setQueryBuilder(clone $builder); }
+            $result->finishTiming();
+        }
+        return $result;
     }
 
     public function getTotalCount(QueryResult $result): ?int

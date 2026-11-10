@@ -10,8 +10,8 @@ FastDb 是面向 Swoole 协程环境的 MySQL 数据访问库，组合连接池�
 
 | 组件 | 职责 |
 | --- | --- |
-| `Internal\ExecutionFrame` | 保存单次执行的结果、计时与完成回调状态；分页总数在外部回调前读取 |
-| `Mysql\Connection` | 执行查询、读取底层协议事务状态；仅门面查询保存执行结果快照 |
+| `FastDb` | 驱动返回后保存本次执行结果，预取分页总数，再通知完成回调及查询观察者 |
+| `Mysql\Connection` | 驱动调用、协议事务状态、连接健康及超时上下文；不保存门面执行状态 |
 | `Internal\QueryDiagnostics` | 按需保存全局查询回调和每协程有界事件栈；分别记录查询执行与连接获取 |
 | `AbstractInterface\AbstractEntity` | 字段比较基准、变更检测、主键保护和成功写入后的基准更新 |
 | `Internal\FieldCodec` | 加载赋值转换、写入值转换；与序列化隐藏字段分别处理 |
@@ -1620,7 +1620,7 @@ $rows = $db->invoke(function (Connection $connection): array {
 });
 ```
 
-`invoke()` 返回回调返回值，finally 中归还由本次调用获取的连接。直接调用 `$connection->query()` / `rawQuery()` 直接执行驱动，不创建 FastDb 执行帧、QueryResult 或查询计时记录，也不会经过 `FastDb` 的日志包装；需要全局日志时在回调中调用 `$db->query()` / `rawQuery()`。不要保存回调中的连接给后续协程使用。
+`invoke()` 返回回调返回值，finally 中归还由本次调用获取的连接。直接调用 `$connection->query()` / `rawQuery()` 直接执行驱动，不创建 QueryResult 或查询计时记录，也不会经过 `FastDb` 的日志包装；需要全局日志时在回调中调用 `$db->query()` / `rawQuery()`。不要保存回调中的连接给后续协程使用。
 
 ```php
 $db->currentConnection(); // 当前选中连接的 Connection|null，不主动创建连接。
@@ -1698,6 +1698,10 @@ $insertId = $result->getInsertId();
 ```
 
 连接名在执行 SQL 前从实际连接记录，查询失败时也保留。查询栈统一读取该快照，不会因为构建器回调或日志回调切换连接而记错数据库。模型查询失败时的实体回调同样保留发起查询时的连接名。
+
+FastDb 在 Connection 返回后立即保存结果行、影响行数、自增 ID、SQL、参数和耗时。需要总数时，在同一连接上先取得 `FOUND_ROWS()`，然后才调用完成回调和查询观察者。查询结果保存的是本次执行的返回值，后续数据库变化不会自动刷新这些 PHP 数据；需要新数据时应再次查询。
+
+Connection 的 `getLastAffectRows()` / `getLastInsertId()` 始终表示最后一条实际执行 SQL 的元数据，包括回调中的 SQL 或分页总数查询；FastDb 不再把连接的元数据恢复为外层查询的旧值。通过 FastDb 执行时，使用返回的 `QueryResult` 获取该次操作的影响行数和自增 ID。
 
 影响行数和自增 ID 类型为 `int|string|null`，超大无符号值保留为字符串，未查询或查询失败时为 null。影响行数与自增 ID 在查询成功后、日志回调执行前记录为快照，不会被后续 SQL 覆盖。QueryResult 不再暴露 Connection。`query()` 和 `rawQuery()` 的可选 `$timeout` 已传递给 mysqli 5.x，控制本次查询超时。
 

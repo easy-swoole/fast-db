@@ -3,7 +3,6 @@
 namespace EasySwoole\FastDb\Mysql;
 
 use EasySwoole\FastDb\Exception\RuntimeError;
-use EasySwoole\FastDb\Internal\ExecutionFrame;
 use EasySwoole\Mysqli\Client;
 use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\Mysqli\Exception\TimeoutException as DriverTimeoutException;
@@ -17,7 +16,6 @@ class Connection extends Client implements ObjectInterface
     public string $connectionName;
     public bool $isForceRollback = false;
 
-    private ?ExecutionFrame $executionFrame = null;
     // 单调时钟记录最后一次成功通信的结束时间，归还连接时保留，关闭或失败时清除。
     private int|float|null $lastActiveTick = null;
     private const HEALTH_CHECK_IDLE_NANOSECONDS = 3_000_000_000;
@@ -25,10 +23,10 @@ class Connection extends Client implements ObjectInterface
     public function __construct(\EasySwoole\Mysqli\Config $config)
     {
         parent::__construct($config);
-        // 父类成功回调专用于内部状态同步；共享分发器不捕获连接实例。
+        // 成功通信只更新活跃时间；共享回调不捕获连接实例。
         static $dispatcher = null;
         $this->onQuery = $dispatcher ??= static function (bool|array $result, Client $client): void {
-            $client->observeResult($result);
+            $client->lastActiveTick = $result === false ? null : hrtime(true);
         };
     }
 
@@ -79,30 +77,8 @@ class Connection extends Client implements ObjectInterface
         return $this->executeQuery(null, $query, $timeout);
     }
 
-    /** @internal 门面入口显式传入执行帧；未走驱动回调的自定义查询统一在此补全结果。 */
-    final public function runFrame(ExecutionFrame $frame, callable $operation): QueryResult
-    {
-        $previous = $this->executionFrame;
-        $this->executionFrame = $frame;
-        try {
-            $value = $operation($frame);
-            if (!$frame->completed) { $this->finishFrame($frame, $value); }
-            return $frame->result;
-        } catch (\Throwable $error) {
-            $frame->fail($error);
-            try { $frame->complete($this); } catch (\Throwable) {}
-            throw $error;
-        } finally {
-            $this->executionFrame = $previous;
-        }
-    }
-
     private function executeQuery(?QueryBuilder $builder, ?string $sql, ?float $timeout): bool|array
     {
-        $previous = $this->executionFrame;
-        // 直连只返回驱动结果；构建中或已完成的外层帧不能接收本次直连通知。
-        $frame = $previous !== null && $previous->accepts($builder, $sql) ? $previous : null;
-        $this->executionFrame = $frame;
         $returned = false;
         try {
             $value = $builder === null ? parent::rawQuery($sql, $timeout) : parent::query($builder, $timeout);
@@ -110,51 +86,10 @@ class Connection extends Client implements ObjectInterface
             return $value;
         } catch (DriverTimeoutException $error) {
             // 仅在这里补充驱动超时上下文，普通 SQL 异常直接向上层传播。
-            if ($frame !== null && $frame->completed) { throw $error; }
             throw $this->withTimeoutContext($error, $sql, $builder);
         } finally {
             if (!$returned) { $this->lastActiveTick = null; }
-            $this->executionFrame = $previous;
         }
-    }
-
-    /** 驱动唯一的成功回调入口；已完成的外层帧不能接收旁路或重入操作的完成通知。 */
-    private function observeResult(bool|array $value): void
-    {
-        $this->lastActiveTick = $value === false ? null : hrtime(true);
-        $frame = $this->executionFrame;
-        if ($frame === null || !$frame->started || $frame->completed) { return; }
-        $this->finishFrame($frame, $value);
-    }
-
-    /** 冻结查询结果；总数预取和内部完成均早于全局及实体查询回调。 */
-    private function finishFrame(ExecutionFrame $frame, bool|array $value): void
-    {
-        // 先冻结结果并结束主查询计时，排除总数查询和回调耗时，也防止重入复用当前帧。
-        $frame->succeed($this, $value);
-        try {
-            $completionError = null;
-            if ($frame->wantsTotal()) {
-                $count = $frame->count = new ExecutionFrame(null, 'SELECT FOUND_ROWS() as count');
-                $count->result->setConnectionName($frame->result->getConnectionName());
-                $count->start();
-                try {
-                    $this->runFrame($count, fn () => $this->rawQuery('SELECT FOUND_ROWS() as count'));
-                    $frame->result->setTotalResult($count->result);
-                } catch (\Throwable $error) { $completionError = $error; }
-            }
-            try { $frame->complete($this); }
-            catch (\Throwable $error) { $completionError ??= $error; }
-            if ($completionError !== null) { throw $completionError; }
-        } finally {
-            $this->restoreMetadata($frame);
-        }
-    }
-
-    private function restoreMetadata(ExecutionFrame $frame): void
-    {
-        $this->lastAffectRows = $frame->result->getAffectedRows();
-        $this->lastInsertId = $frame->result->getInsertId();
     }
 
     private function withTimeoutContext(DriverTimeoutException $error, ?string $sql, ?QueryBuilder $builder = null): TimeoutException
