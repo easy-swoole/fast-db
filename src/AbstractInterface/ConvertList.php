@@ -43,14 +43,15 @@ class ConvertList implements ConvertObjectInterface
 
     public static function toObject(mixed $data): static
     {
-        if(empty($data)){
+        // null 表示默认空列表；其他输入必须明确符合转换格式。
+        if($data === null){
             return new static([]);
         }
+        if(is_string($data)){
+            $data = json_decode($data, true, 512, JSON_THROW_ON_ERROR);
+        }
         if(!is_array($data)){
-            $data = json_decode($data,true);
-            if(!is_array($data)){
-                $data = [];
-            }
+            throw new \InvalidArgumentException('ConvertList expects an array or JSON decoding to an array');
         }
         return new static($data);
     }

@@ -810,7 +810,7 @@ $user->update(); // nullable 属性可清空到 SQL NULL。
 
 本节示例需要把快速开始模型的 `tags` 声明替换为转换属性。实体 `toArray()` 对转换对象使用 `toValue()`，因此这里输出的 `tags` 是 JSON 字符串，不是嵌套数组。
 
-`ConvertList::toObject()` 接收数组或 JSON 字符串，空值/不能解码为数组的值转成空列表。`append(null)` 不追加。`remove()` 会保留原数组键，删除后 JSON 编码可能呈现对象形式；需要列表 JSON 时可先使用 `array_values()` 整理数据并重新赋值。
+`ConvertList::toObject()` 接收 PHP 数组或解码结果为数组的 JSON 字符串；直接传入 PHP `null` 保留默认空列表约定。非法 JSON 抛出 `JsonException`，其他输入类型或 JSON 标量抛出 `InvalidArgumentException`，不再静默替换成空列表。`append(null)` 不追加。`remove()` 会保留原数组键，删除后 JSON 编码可能呈现对象形式；需要列表 JSON 时可先使用 `array_values()` 整理数据并重新赋值。
 
 #### Bean 列表
 
@@ -961,7 +961,41 @@ class Address extends ConvertBean
 public ?Address $address;
 ```
 
-`ConvertBean` 继承 `SplBean`，可从 JSON 或数组恢复字段，`toValue()` 返回其字符串表示，用于数据库存储。必须为模型增加相应的数据库字段。
+`ConvertBean` 继承 `SplBean`，可从解码结果为数组的 JSON 或 PHP 数组恢复字段，`toValue()` 返回其字符串表示，用于数据库存储。直接传入 PHP `null` 仍按默认对象初始化；非法 JSON 抛出 `JsonException`，其他输入类型或 JSON 标量抛出 `InvalidArgumentException`。必须为模型增加相应的数据库字段。
+
+### 严格解析与业务降级
+
+`ConvertBean` 和 `ConvertList` 的 JSON 解析使用 `JSON_THROW_ON_ERROR`。空字符串、损坏文本、非法 UTF-8 和超出解析深度的 JSON 都会抛出 `JsonException`。合法 JSON 的 `null`、布尔值、数字或字符串不符合这两个转换器的数据结构要求，会抛出 `InvalidArgumentException`；JSON 对象和数组仍解码为 PHP 数组。PHP `null` 与 JSON 文本 `'null'` 分别按上述默认值和结构规则处理。
+
+实体构造、`setData()` 和查询结果转换会向调用方传播这些异常。实体可空属性接收 PHP `null` 时仍保留 null，不调用转换器；非空属性使用转换器原有的默认对象或空列表约定。
+
+需要“解析失败时返回空列表”等降级行为时，由业务继承转换器并在属性上显式选择：
+
+```php
+use EasySwoole\FastDb\AbstractInterface\ConvertList;
+use EasySwoole\FastDb\Attributes\Property;
+
+class TolerantTags extends ConvertList
+{
+    public static function toObject(mixed $data): static
+    {
+        try {
+            return parent::toObject($data);
+        } catch (\JsonException $exception) {
+            // 业务可在这里记录原始数据和异常，再选择返回空列表。
+            return new static([]);
+        }
+    }
+}
+
+// 放在实体类中，以该业务转换器替代内置 ConvertList。
+#[Property(convertObject: TolerantTags::class)]
+public TolerantTags $tags;
+```
+
+`ConvertBean` 同样可以通过子类覆盖 `toObject()`，捕获 `JsonException` 后 `return new static([])`，使用子类定义的默认字段初始化。默认对象仍需满足业务 Bean 自身的必填字段约束。
+
+示例仅降级 JSON 解析错误；结构错误、类型化列表元素校验和 Bean 初始化异常继续抛出。若业务也要处理结构错误，可在子类中明确增加对应的处理规则。FastDb 不统一吞掉转换异常，也不提供全局自动降级策略。
 
 ### 自定义转换对象与枚举
 
