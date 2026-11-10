@@ -203,7 +203,7 @@ final class RelationPreloadTest extends TestCase
         $this->assertCount(3, $this->connection->queries);
     }
 
-    public function testRelationWrapperOrConditionsRetainTheirForeignKeyBoundaryInTheBatch(): void
+    public function testConfiguredOrConditionsRetainTheirForeignKeyBoundaryInTheBatch(): void
     {
         $parents = $this->parents('filteredChildren');
         $this->assertSame([11], array_map(static fn(PreloadFixtureChild $child): int => $child->id, $parents[0]->filteredChildren()->list()));
@@ -273,38 +273,33 @@ final class RelationPreloadTest extends TestCase
         $this->assertCount(2, $other->queries, 'Accessing the existing getter must hit the actual-connection preload.');
     }
 
-    public function testDynamicWrapperConditionsAndTablesAreAppliedToTheirOwnParents(): void
+    public function testInstanceConfigurationKeepsPerParentConditions(): void
     {
-        $this->connection->database->exec('CREATE TABLE preload_archived_children AS SELECT * FROM preload_children WHERE 0');
-        $this->connection->database->exec("INSERT INTO preload_archived_children VALUES (31,2,'a','archived child','[31]')");
         $parents = $this->parents('dynamicChildren');
 
         $this->assertSame([12], array_map(static fn(PreloadFixtureChild $child): int => $child->id, $parents[0]->dynamicChildren()->list()));
-        $this->assertSame([31], array_map(static fn(PreloadFixtureChild $child): int => $child->id, $parents[1]->dynamicChildren()->list()));
+        $this->assertSame([13], array_map(static fn(PreloadFixtureChild $child): int => $child->id, $parents[1]->dynamicChildren()->list()));
         $this->assertSame([], $parents[2]->dynamicChildren()->list());
-        // 常规表的筛选条件各不相同，归档表另形成第三组可合并的查询计划。
-        $this->assertCount(4, $this->connection->queries);
-        $this->assertCount(4, $this->events);
+        // 两种配置分别形成批查询，同条件的父实体共用一批。
+        $this->assertCount(3, $this->connection->queries);
+        $this->assertCount(3, $this->events);
     }
 
     public static function parentOutputModes(): array { return [[false], [true]]; }
 
-    #[DataProvider('parentOutputModes')]
-    public function testTemporaryParentKeyChangesUseTheValueAtTheRelationEntrance(bool $arrays): void
+    public function testPreloadingDoesNotExecuteGetterBusinessLogic(): void
     {
         $owner = new PreloadFixtureParent();
-        $owner->queryLimit()->fields(null, $arrays)->withRelations('redirectedChildren');
+        $owner->queryLimit()->returnAsArray()->withRelations('redirectedChildren');
         $parents = $owner->all()->list();
-        foreach ($parents as $index => $parent) {
-            $children = $arrays ? $parent['redirectedChildren'] : $parent->redirectedChildren()->list();
-            $this->assertSame([13], array_map(static fn($child): int => is_array($child) ? $child['id'] : $child->id, $children));
-            $this->assertSame($index + 1, $arrays ? $parent['id'] : $parent->id);
-        }
+        $this->assertSame([11, 12], array_column($parents[0]['redirectedChildren'], 'id'));
+        $this->assertSame([13], array_column($parents[1]['redirectedChildren'], 'id'));
+        $this->assertSame([], $parents[2]['redirectedChildren']);
         $this->assertCount(2, $this->connection->queries);
     }
 
     #[DataProvider('parentOutputModes')]
-    public function testDynamicTargetTableNameIsResolvedForEachParentsCapturedContext(bool $arrays): void
+    public function testTargetTableNameIsResolvedForEachConfiguredParent(bool $arrays): void
     {
         $this->connection->database->exec('CREATE TABLE preload_archived_children AS SELECT * FROM preload_children WHERE 0');
         $this->connection->database->exec("INSERT INTO preload_archived_children VALUES (31,2,'a','archived child','[31]')");
@@ -516,7 +511,7 @@ final class RelationPreloadTest extends TestCase
     {
         PreloadFixtureParent::$nonRelationCalls = 0;
         $owner = new PreloadFixtureParent();
-        try { $owner->queryLimit()->withRelations('nonRelationOperation')->returnEntity()->all(); $this->fail('Only declared relation wrappers may be captured'); }
+        try { $owner->queryLimit()->withRelations('nonRelationOperation')->returnEntity()->all(); $this->fail('Only declared relation wrappers may be preloaded'); }
         catch (RuntimeError|\InvalidArgumentException) { $this->addToAssertionCount(1); }
         $this->assertSame(0, PreloadFixtureParent::$nonRelationCalls);
         $this->assertSame(3, (int)$this->connection->database->query('SELECT COUNT(*) FROM preload_parents')->fetchColumn());
@@ -534,10 +529,10 @@ class PreloadFixtureParent extends AbstractEntity
 
     public function nonRelationOperation() { self::$nonRelationCalls++; return $this->delete(); }
 
-    #[Relate(PreloadFixtureChild::class, 'parent_id', cacheResult: true)]
+    #[Relate(PreloadFixtureChild::class, 'parent_id', cacheResult: true, type: 'many')]
     public function children() { return $this->relateMany(); }
 
-    #[Relate(PreloadFixtureChild::class, 'parent_id')]
+    #[Relate(PreloadFixtureChild::class, 'parent_id', type: 'many')]
     public function redirectedChildren()
     {
         $original = $this->id;
@@ -546,62 +541,83 @@ class PreloadFixtureParent extends AbstractEntity
         finally { $this->id = $original; }
     }
 
-    #[Relate(PreloadFixtureProfile::class, 'parent_id', cacheResult: true)]
+    #[Relate(PreloadFixtureProfile::class, 'parent_id', cacheResult: true, type: 'one')]
     public function profile() { return $this->relateOne(); }
 
-    #[Relate(PreloadFixtureChild::class, 'group_code', 'group_code', cacheResult: true)]
+    #[Relate(PreloadFixtureChild::class, 'group_code', 'group_code', cacheResult: true, type: 'many')]
     public function groupChildren() { return $this->relateMany(); }
 
-    #[Relate(PreloadFixtureChild::class, 'parent_id', 'group_code', cacheResult: true)]
+    #[Relate(PreloadFixtureChild::class, 'parent_id', 'group_code', cacheResult: true, type: 'many')]
     public function numericChildren() { return $this->relateMany(); }
 
-    #[Relate(PreloadFixtureChild::class, 'parent_id', cacheResult: true)]
-    public function filteredChildren()
-    {
-        $this->queryLimit()->where('name', 'child-11')->orWhere('name', 'child-13');
-        return $this->relateMany();
-    }
+    #[Relate(PreloadFixtureChild::class, 'parent_id', cacheResult: true, type: 'many', configure: 'configureFilteredChildren')]
+    public function filteredChildren() { return $this->relateMany(); }
 
-    #[Relate(PreloadFixtureChild::class, 'parent_id', cacheResult: true)]
-    public function dynamicChildren()
-    {
-        $this->queryLimit()->where('id', $this->id === 1 ? 12 : 0, '>=');
-        return $this->relateMany(null, $this->id === 2 ? 'preload_archived_children' : null);
-    }
+    protected function configureFilteredChildren(QueryBuilder $query): void
+    { $query->where('name', 'child-11')->orWhere('name', 'child-13'); }
 
-    #[Relate(PreloadFixtureDynamicChild::class, 'parent_id', cacheResult: true)]
-    public function contextChildren()
-    {
-        PreloadFixtureDynamicChild::$contextTable = $this->id === 2 ? 'preload_archived_children' : 'preload_children';
-        return $this->relateMany();
-    }
+    #[Relate(PreloadFixtureChild::class, 'parent_id', cacheResult: true, type: 'many', configure: 'configureDynamicChildren')]
+    public function dynamicChildren() { return $this->relateMany(); }
 
-    #[Relate(PreloadFixtureChild::class, 'parent_id', cacheResult: true)]
-    public function arrayChildren() { $this->queryLimit()->returnAsArray(); return $this->relateMany(); }
+    protected function configureDynamicChildren(QueryBuilder $query): void
+    { $query->where('id', $this->id === 1 ? 12 : 0, '>='); }
 
-    #[Relate(PreloadFixtureProfile::class, 'parent_id', cacheResult: true)]
-    public function arrayProfile() { $this->queryLimit()->returnAsArray(); return $this->relateOne(); }
+    #[Relate(PreloadFixtureDynamicChild::class, 'parent_id', cacheResult: true, type: 'many', configure: 'configureContextChildren')]
+    public function contextChildren() { return $this->relateMany(); }
 
-    #[Relate(PreloadFixtureChild::class, 'parent_id', cacheResult: true)]
-    public function selectedChildren() { $this->queryLimit()->fields(['id', 'name', 'payload AS encoded'], true); return $this->relateMany(); }
+    protected function configureContextChildren(QueryBuilder $query): void
+    { PreloadFixtureDynamicChild::$contextTable = $this->id === 2 ? 'preload_archived_children' : 'preload_children'; }
 
-    #[Relate(PreloadFixtureConstructorChild::class, 'parent_id', cacheResult: true)]
+    #[Relate(PreloadFixtureChild::class, 'parent_id', cacheResult: true, type: 'many', configure: 'configureArrayChildren', returnAsArray: true)]
+    public function arrayChildren() { return $this->relateMany(); }
+
+    protected function configureArrayChildren(QueryBuilder $query): void
+    {  }
+
+    #[Relate(PreloadFixtureProfile::class, 'parent_id', cacheResult: true, type: 'one', configure: 'configureArrayProfile', returnAsArray: true)]
+    public function arrayProfile() { return $this->relateOne(); }
+
+    protected function configureArrayProfile(QueryBuilder $query): void
+    {  }
+
+    #[Relate(PreloadFixtureChild::class, 'parent_id', cacheResult: true, type: 'many', configure: 'configureSelectedChildren', returnAsArray: true)]
+    public function selectedChildren() { return $this->relateMany(); }
+
+    protected function configureSelectedChildren(QueryBuilder $query): void
+    { $query->fields(['id', 'name', 'payload AS encoded']); }
+
+    #[Relate(PreloadFixtureConstructorChild::class, 'parent_id', cacheResult: true, type: 'many')]
     public function constructorChildren() { return $this->relateMany(); }
 
-    #[Relate(PreloadFixtureChild::class, 'parent_id')]
-    public function limitedChildren() { $this->queryLimit()->limit(1); return $this->relateMany(); }
+    #[Relate(PreloadFixtureChild::class, 'parent_id', type: 'many', configure: 'configureLimitedChildren')]
+    public function limitedChildren() { return $this->relateMany(); }
 
-    #[Relate(PreloadFixtureChild::class, 'parent_id')]
-    public function pagedChildren() { $this->queryLimit()->page(1, false, 1); return $this->relateMany(); }
+    protected function configureLimitedChildren(QueryBuilder $query): void
+    { $query->limit(1); }
 
-    #[Relate(PreloadFixtureChild::class, 'parent_id')]
-    public function groupedChildren() { $this->queryLimit()->groupBy('parent_id'); return $this->relateMany(); }
+    #[Relate(PreloadFixtureChild::class, 'parent_id', type: 'many', configure: 'configurePagedChildren')]
+    public function pagedChildren() { return $this->relateMany(); }
 
-    #[Relate(PreloadFixtureChild::class, 'parent_id')]
-    public function countedChildren() { $this->queryLimit()->page(1, true, 10); return $this->relateMany(); }
+    protected function configurePagedChildren(QueryBuilder $query): void
+    { $query->limit(0, 1); }
 
-    #[Relate(PreloadFixtureChild::class, 'parent_id')]
-    public function lockedChildren() { $this->queryLimit()->selectForUpdate(); return $this->relateMany(); }
+    #[Relate(PreloadFixtureChild::class, 'parent_id', type: 'many', configure: 'configureGroupedChildren')]
+    public function groupedChildren() { return $this->relateMany(); }
+
+    protected function configureGroupedChildren(QueryBuilder $query): void
+    { $query->groupBy('parent_id'); }
+
+    #[Relate(PreloadFixtureChild::class, 'parent_id', type: 'many', configure: 'configureCountedChildren')]
+    public function countedChildren() { return $this->relateMany(); }
+
+    protected function configureCountedChildren(QueryBuilder $query): void
+    { $query->withTotalCount(); }
+
+    #[Relate(PreloadFixtureChild::class, 'parent_id', type: 'many', configure: 'configureLockedChildren')]
+    public function lockedChildren() { return $this->relateMany(); }
+
+    protected function configureLockedChildren(QueryBuilder $query): void
+    { $query->selectForUpdate(); }
 }
 
 class PreloadFixtureCollisionParent extends PreloadFixtureParent

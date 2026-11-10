@@ -57,6 +57,25 @@ final class TransactionTest extends TestCase
         return (int) $this->observer->query("SELECT value FROM `{$this->table}` WHERE id = 1")->fetch_assoc()['value'];
     }
 
+    public function testDeclaredRelationsShareProtectedConfigurationAcrossLazyAndPreloadedQueries(): void
+    {
+        $this->observer->query("INSERT INTO `{$this->table}` VALUES (2,1),(3,1),(4,2)");
+        DeclaredMysqlEntity::$getterCalls = 0;
+        $owner = new DeclaredMysqlEntity();
+        $owner->queryLimit()->where('id', 2, '<=')->orderBy('id', 'ASC')->withRelations('children');
+        $parents = $owner->all()->list();
+        $this->assertSame(0, DeclaredMysqlEntity::$getterCalls);
+        $this->assertSame([3], array_map(static fn($child) => $child->id, $parents[0]->children()->list()));
+        $this->assertSame([4], array_map(static fn($child) => $child->id, $parents[1]->children()->list()));
+        $lazy = new DeclaredMysqlEntity(['id'=>1,'value'=>0]);
+        $this->assertSame([3], array_map(static fn($child) => $child->id, $lazy->children()->list()));
+        $owner->queryLimit()->where('id',2,'<=')->orderBy('id','ASC')->returnAsArray()->withRelations('children');
+        $rows = $owner->all()->list();
+        $this->assertSame([3], array_column($rows[0]['children'],'id'));
+        $this->assertSame([4], array_column($rows[1]['children'],'id'));
+        $this->assertSame(3, DeclaredMysqlEntity::$getterCalls);
+    }
+
     public function testDefaultRecycleRollsBackTheSessionAndClearsDiagnostics(): void
     {
         $this->db->isEnableQueryStack(true);
@@ -785,5 +804,23 @@ final class TransactionEntity extends AbstractEntity
     public function tableName(): string
     {
         return self::$table;
+    }
+}
+
+class DeclaredMysqlEntity extends AbstractEntity
+{
+    public static int $getterCalls = 0;
+    #[Property(isPrimaryKey:true)] public int $id;
+    #[Property] public int $value;
+    public function tableName(): string { return TransactionEntity::$table; }
+    #[\EasySwoole\FastDb\Attributes\Relate(self::class,'value',type:'many',configure:'configureChildren')]
+    public function children(): \EasySwoole\FastDb\Beans\ListResult
+    {
+        self::$getterCalls++;
+        return $this->relateMany();
+    }
+    protected function configureChildren(\EasySwoole\Mysqli\QueryBuilder $query): void
+    {
+        $query->where('id', $this->id === 1 ? 3 : 4, '>=')->orderBy('id','ASC');
     }
 }

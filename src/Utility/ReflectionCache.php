@@ -13,69 +13,58 @@ use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Beans\EntityReflection;
 use EasySwoole\FastDb\Exception\RuntimeError;
 
+/** 按类保存字段、关联和配置方法元数据，不保留实体实例。 */
 class ReflectionCache
 {
     use Singleton;
 
     private array $entityData = [];
     private array $relationData = [];
+    private array $relationConfigurators = [];
 
     /**
      * @throws \ReflectionException
      * @throws RuntimeError
      */
-    function parseEntity(string $entityClass):EntityReflection
+    public function parseEntity(string $entityClass): EntityReflection
     {
-        $key = $entityClass;
-        if(isset($this->entityData[$key])){
-            return $this->entityData[$key];
+        if (isset($this->entityData[$entityClass])) {
+            return $this->entityData[$entityClass];
         }
-        $ref = new \ReflectionClass($entityClass);
-        if(!$ref->isSubclassOf(AbstractEntity::class)){
-            throw new RuntimeError("{$entityClass} not a subclass of ".AbstractEntity::class);
+        $reflection = new \ReflectionClass($entityClass);
+        if (!$reflection->isSubclassOf(AbstractEntity::class)) {
+            throw new RuntimeError("{$entityClass} not a subclass of " . AbstractEntity::class);
         }
-        $entityReflection = new EntityReflection($entityClass);
 
-        $entityReflection->setOnDelete($this->parseClassTag(OnDelete::class,$ref));
-        $entityReflection->setOnInitialize($this->parseClassTag(OnInitialize::class,$ref));
-        $entityReflection->setOnInsert($this->parseClassTag(OnInsert::class,$ref));
-        $entityReflection->setOnUpdate($this->parseClassTag(OnUpdate::class,$ref));
+        $entity = new EntityReflection($entityClass);
+        $entity->setOnDelete($this->parseClassTag(OnDelete::class, $reflection));
+        $entity->setOnInitialize($this->parseClassTag(OnInitialize::class, $reflection));
+        $entity->setOnInsert($this->parseClassTag(OnInsert::class, $reflection));
+        $entity->setOnUpdate($this->parseClassTag(OnUpdate::class, $reflection));
 
+        foreach ($reflection->getProperties() as $propertyRef) {
+            if ($propertyRef->isStatic() || !$propertyRef->isPublic()) { continue; }
+            $attributes = $propertyRef->getAttributes(Property::class);
+            if ($attributes === []) { continue; }
 
-        $properties = $ref->getProperties();
-        foreach ($properties as $propertyRef){
-            if($propertyRef->isStatic() || (!$propertyRef->isPublic())){
-                continue;
-            }
-            $temp = $propertyRef->getAttributes(Property::class);
-            if(empty($temp)){
-                continue;
-            }
-            $temp = $temp[0];
-            $property = new Property(...$temp->getArguments());
+            $property = new Property(...$attributes[0]->getArguments());
             $property->__setName($propertyRef->name);
-            if($propertyRef->getType()){
-                if($propertyRef->getType()->allowsNull()){
-                    $property->allowNull = true;
-                }
-            }
-            if($propertyRef->getDefaultValue() !== null){
-                $property->defaultValue = $propertyRef->getDefaultValue();
-            }
-
-            $entityReflection->addProperty($property);
+            $type = $propertyRef->getType();
+            if ($type !== null && $type->allowsNull()) { $property->allowNull = true; }
+            $default = $propertyRef->getDefaultValue();
+            if ($default !== null) { $property->defaultValue = $default; }
+            $entity->addProperty($property);
         }
-
-        $this->entityData[$key] = $entityReflection;
-        return $entityReflection;
+        return $this->entityData[$entityClass] = $entity;
     }
 
-    /** 返回副本，避免调用方补全 selfProperty 时修改缓存中的原始关系定义。 */
+    /** 返回副本，避免补全 selfProperty 时修改缓存中的原始关系定义。 */
     public function parseRelation(string $entityClass, string $method): Relate
     {
         if (!isset($this->relationData[$entityClass][$method])) {
-            $attributes = (new \ReflectionMethod($entityClass, $method))->getAttributes(Relate::class);
-            if (empty($attributes)) {
+            $reflection = new \ReflectionMethod($entityClass, $method);
+            $attributes = $reflection->getAttributes(Relate::class);
+            if ($attributes === []) {
                 throw new RuntimeError("{$method} did not define Relate attribute in {$entityClass}");
             }
             $this->relationData[$entityClass][$method] = $attributes[0]->newInstance();
@@ -83,18 +72,27 @@ class ReflectionCache
         return clone $this->relationData[$entityClass][$method];
     }
 
-    protected function parseClassTag(string $targetTag,\ReflectionClass $ref)
+    /** 配置方法的可见性按类缓存，逐父配置不再重复反射。 */
+    public function relationConfigurator(string $entityClass, string $method): string
     {
-        $temp = $ref->getAttributes($targetTag);
-        if(!empty($temp)){
-            return new $targetTag(...$temp[0]->getArguments());
-        }else{
-            $temp = $ref->getParentClass();
-            if($temp){
-                return $this->parseClassTag($targetTag,$temp);
-            }else{
-                return null;
+        if (!isset($this->relationConfigurators[$entityClass][$method])) {
+            try { $reflection = new \ReflectionMethod($entityClass, $method); }
+            catch (\ReflectionException $error) {
+                throw new RuntimeError('Unknown relation configurator: ' . $method, 0, $error);
             }
+            if ($reflection->isPrivate() || $reflection->isStatic() || $reflection->isAbstract()) {
+                throw new RuntimeError('Relation configurator must be a public or protected instance method');
+            }
+            $this->relationConfigurators[$entityClass][$method] = $reflection->getName();
         }
+        return $this->relationConfigurators[$entityClass][$method];
+    }
+
+    protected function parseClassTag(string $targetTag, \ReflectionClass $ref)
+    {
+        $attributes = $ref->getAttributes($targetTag);
+        if ($attributes !== []) { return new $targetTag(...$attributes[0]->getArguments()); }
+        $parent = $ref->getParentClass();
+        return $parent ? $this->parseClassTag($targetTag, $parent) : null;
     }
 }

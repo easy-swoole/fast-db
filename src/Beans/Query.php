@@ -109,8 +109,15 @@ class Query
             }
         }
         foreach ($names as &$name) {
-            try { $name = (new \ReflectionMethod($this->entity, $name))->getName(); }
-            catch (\ReflectionException $error) { throw new RuntimeError('Unknown relation method: ' . $name, 0, $error); }
+            try {
+                $method = new \ReflectionMethod($this->entity, $name);
+                if (!$method->isPublic() || $method->isStatic() || $method->getNumberOfRequiredParameters() !== 0) {
+                    throw new RuntimeError('Preloaded relation getter must be a public instance method without required arguments');
+                }
+                $name = $method->getName();
+            } catch (\ReflectionException $error) {
+                throw new RuntimeError('Unknown relation method: ' . $name, 0, $error);
+            }
         }
         unset($name);
         $this->relations = array_values(array_unique($names));

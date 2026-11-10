@@ -17,111 +17,81 @@ final class RelationLoader
 
     public function clear(): void { $this->cache = $this->preloaded = []; }
 
-    /** 显式预取独立于按需缓存，只保留调用形状的快照和结果。 */
+    /** 显式预取独立于按需缓存，null 同样是有效结果。 */
     public function prime(Relate $relate, QueryBuilder $lookup, string $kind, bool $returnAsArray, string $connectionName, mixed $data): void
     {
         $this->preloaded[$this->fingerprint($relate, $lookup, $kind, $returnAsArray, $connectionName)] = $data;
     }
 
-    private function fingerprint(Relate $relate, QueryBuilder $query, string $kind, bool $returnAsArray, string $connectionName): string
+    public function one(AbstractEntity $entity, Relate $relate, ?string $tableName, callable $execute, callable $reset, callable $readTotal): null|array|AbstractEntity
     {
-        return hash('sha256', serialize([
-            $connectionName,
-            $kind,
-            $relate->targetEntity,
-            $returnAsArray,
-            $query->getLastPrepareQuery(),
-            $query->getLastBindParams(),
-            $query->getLastQueryOptions(),
-        ]));
+        return $this->load($entity, $relate, $tableName, 'one', $execute, $reset, $readTotal);
     }
 
-    /** 统一构造关联查询，使两种关联使用相同的字段、连接和缓存键规则。 */
+    public function many(AbstractEntity $entity, Relate $relate, ?string $tableName, callable $execute, callable $reset, callable $readTotal): ListResult
+    {
+        return $this->load($entity, $relate, $tableName, 'many', $execute, $reset, $readTotal);
+    }
+
+    /** 两种关联共用构建、缓存查找和写回流程，结果组装分别处理。 */
+    private function load(AbstractEntity $entity, Relate $relate, ?string $tableName, string $kind,
+        callable $execute, callable $reset, callable $readTotal): mixed
+    {
+        [$target, $query, $returnAsArray, $key] = $this->prepare($entity, $relate, $tableName, $kind);
+        if ($key !== null && array_key_exists($key, $this->preloaded)) {
+            $reset();
+            return $this->preloaded[$key];
+        }
+        if ($relate->cacheResult && $key !== null && array_key_exists($key, $this->cache)) {
+            $reset();
+            return $this->cache[$key];
+        }
+
+        $result = $execute($query);
+        $rows = $result->getResult();
+        if ($kind === 'one') {
+            // 单条关联沿用先清理查询、再执行字段赋值转换的顺序。
+            $reset();
+            if (empty($rows)) { $data = null; }
+            elseif (count($rows) > 1) { throw new RuntimeError('more than one record hit is no allow in relateOne method'); }
+            elseif ($returnAsArray) { $data = $rows[0]; }
+            else {
+                $target->setData($rows[0], true);
+                $data = $target;
+            }
+        } else {
+            $items = [];
+            foreach ($rows as $row) {
+                $items[] = $returnAsArray ? $row : new $relate->targetEntity($row);
+            }
+            $total = in_array('SQL_CALC_FOUND_ROWS', $query->getLastQueryOptions()) ? $readTotal($result) : null;
+            $reset();
+            $data = new ListResult($items, $total);
+        }
+        if ($relate->cacheResult && $key !== null) { $this->cache[$key] = $data; }
+        return $data;
+    }
+
+    /** 目标初始化、表名求值和缓存键计算的先后顺序与普通关联查询一致。 */
     private function prepare(AbstractEntity $entity, Relate $relate, ?string $tableName, string $kind): array
     {
         $target = new $relate->targetEntity();
-        $query = $entity->queryLimit()->__getQueryBuilder();
-        $selection = $entity->queryLimit()->getFields();
-        $fields = $selection['fields'] ?? null;
-        $returnAsArray = $selection['returnAsArray'] ?? false;
-        $value = $entity->{$relate->selfProperty} ?? null;
-        $entity->queryLimit()->whereRequired($relate->targetProperty, $value);
-        $query->get($tableName ?: $target->tableName(), $kind === 'one' ? 2 : null, $fields);
+        $selection = $entity->queryLimit();
+        $query = $selection->__getQueryBuilder();
+        $fields = $selection->getFields();
+        $returnAsArray = $fields['returnAsArray'] ?? false;
+        $selection->whereRequired($relate->targetProperty, $entity->{$relate->selfProperty} ?? null);
+        $query->get($tableName ?: $target->tableName(), $kind === 'one' ? 2 : null, $fields['fields'] ?? null);
         $key = $relate->cacheResult || $this->preloaded !== []
             ? $this->fingerprint($relate, $query, $kind, $returnAsArray, FastDb::getInstance()->selectConnection()) : null;
         return [$target, $query, $returnAsArray, $key];
     }
 
-    public function one(AbstractEntity $entity, Relate $relate, ?string $tableName, callable $execute, callable $reset, callable $readTotal): null|array|AbstractEntity
+    private function fingerprint(Relate $relate, QueryBuilder $query, string $kind, bool $returnAsArray, string $connectionName): string
     {
-        [$temp, $query, $returnAsArray, $cacheKey] = $this->prepare($entity, $relate, $tableName, 'one');
-        // 显式预取即使 cacheResult=false 也可读取，null 也是有效命中。
-        if ($cacheKey !== null && array_key_exists($cacheKey, $this->preloaded)) {
-            $reset();
-            return $this->preloaded[$cacheKey];
-        }
-        if ($relate->cacheResult && $cacheKey !== null && array_key_exists($cacheKey, $this->cache)) {
-            $reset();
-            return $this->cache[$cacheKey];
-        }
-        $ret = $execute($query)->getResult();
-        $reset();
-        if(empty($ret)){
-            if ($relate->cacheResult && $cacheKey !== null) {
-                $this->cache[$cacheKey] = null;
-            }
-            return null;
-        }
-        if(count($ret) > 1){
-            $msg = "more than one record hit is no allow in relateOne method";
-            throw new RuntimeError($msg);
-        }
-        if($returnAsArray){
-            if ($relate->cacheResult && $cacheKey !== null) {
-                $this->cache[$cacheKey] = $ret[0];
-            }
-            return $ret[0];
-        }
-        // 关联加载的数据也应作为比较基准，避免未修改的字段被整行更新。
-        $temp->setData($ret[0],true);
-        if ($relate->cacheResult && $cacheKey !== null) {
-            $this->cache[$cacheKey] = $temp;
-        }
-        return $temp;
-
-    }
-
-    public function many(AbstractEntity $entity, Relate $relate, ?string $tableName, callable $execute, callable $reset, callable $readTotal): ListResult
-    {
-        [$temp, $query, $returnAsArray, $cacheKey] = $this->prepare($entity, $relate, $tableName, 'many');
-        if ($cacheKey !== null && array_key_exists($cacheKey, $this->preloaded)) {
-            $reset();
-            return $this->preloaded[$cacheKey];
-        }
-        if ($relate->cacheResult && $cacheKey !== null && array_key_exists($cacheKey, $this->cache)) {
-            $reset();
-            return $this->cache[$cacheKey];
-        }
-        $queryResult = $execute($query);
-        $ret = $queryResult->getResult();
-
-        $final = [];
-        foreach ($ret as $item){
-            if($returnAsArray){
-                $final[] = $item;
-            }else{
-                $final[] = new $relate->targetEntity($item);
-            }
-        }
-        $total = null;
-        if(in_array('SQL_CALC_FOUND_ROWS',$query->getLastQueryOptions())){
-            $total = $readTotal($queryResult);
-        }
-        $reset();
-        $result = new ListResult($final,$total);
-        if ($relate->cacheResult && $cacheKey !== null) {
-            $this->cache[$cacheKey] = $result;
-        }
-        return $result;
+        return hash('sha256', serialize([
+            $connectionName, $kind, $relate->targetEntity, $returnAsArray,
+            $query->getLastPrepareQuery(), $query->getLastBindParams(), $query->getLastQueryOptions(),
+        ]));
     }
 }

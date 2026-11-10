@@ -2,7 +2,7 @@
 
 FastDb 是面向 Swoole 协程环境的 MySQL 数据访问库，组合连接池、SQL 构建器和基于 PHP Attributes 的实体映射。可以在 EasySwoole 框架内使用，也可以独立使用。
 
-本文面向 `3.x` 分支，依赖 `easyswoole/mysqli` ^5.0.8 和 `easyswoole/pool` ^3.0.6，以当前 `src/` 和 `composer.json` 为准。实体 API 位于 `AbstractEntity`，数据库与连接管理位于 `FastDb`，SQL 构建能力由 `easyswoole/mysqli` 提供。
+本文面向 `3.x` 分支，使用 `easyswoole/mysqli` 5.x 和 `easyswoole/pool` 3.x，以当前 `src/` 和 `composer.json` 为准。实体 API 位于 `AbstractEntity`，数据库与连接管理位于 `FastDb`，SQL 构建能力由 `easyswoole/mysqli` 提供。
 
 ## 内部执行与实体状态
 
@@ -17,7 +17,7 @@ FastDb 是面向 Swoole 协程环境的 MySQL 数据访问库，组合连接池�
 | `Internal\FieldCodec` | 加载赋值转换、写入值转换；与序列化隐藏字段分别处理 |
 | `Internal\FieldSelection` | 保存字段白名单、隐藏字段和输出限制，不混入 SQL 构建状态 |
 | `Internal\RelationLoader` | 关联结果构造、唯一性检查及实体实例范围的关联缓存 |
-| `Internal\RelationPreloader` | 显式预加载时逐父捕获关联计划、分批查询，并回填实体缓存或附加数组结果 |
+| `Internal\RelationPreloader` | 显式预加载时逐父读取声明和应用配置、分批查询，并回填实体缓存或附加数组结果 |
 
 `QueryResult` 保存查询执行结果及原有执行阶段耗时；连接获取独立记录为 `QueryStack` 中的 `connectionAcquire` 事件，使用同一个 `duration` 字段表示该事件耗时。查询栈默认每协程只保留最近 256 条事件，可按实例调整；未配置查询回调或查询栈时，不创建诊断组件。
 
@@ -29,7 +29,7 @@ FastDb 通过 `FastDb::getInstance()` 获取固定实例并长期复用。需要
 
 实体 `update()` / `delete()` 和关联查询在最终构建 SQL 前，将全部已有 WHERE 条件整体分组，再以 AND 追加主键或关联外键条件。例如 `WHERE (status = ? OR score = ?) AND id = ?`，附加 OR 条件始终受实体范围约束。该分组也覆盖 `func()`、底层构建器和生命周期钩子添加的条件；`fastUpdate()` / `fastDelete()` 继续按调用方提供的条件批量执行。
 
-最低 mysqli 依赖版本已提供 `QueryBuilder::groupExistingWhere()` 和 `forPageAfterId()`，由 Composer 保证接口可用，查询路径不再逐次探测驱动能力。连接池最小容量维护和创建失败处理沿用上游 pool 的实现。
+本组件直接使用 mysqli 的 `QueryBuilder::groupExistingWhere()` 和 `forPageAfterId()`，查询路径不再逐次探测驱动能力。连接池最小容量维护和创建失败处理沿用上游 pool 的实现。
 
 `Connection::isInTransaction(): bool` 直接读取底层协议的事务状态；`FastDb::isInTransaction()` 转发到当前或指定连接，不另外保存事务布尔副本。实体 `update()` 在数据库 SQL 成功后、公开查询回调前接受字段比较基准；返回值按本次 SQL 是否成功确定。后续事务回滚不会恢复模型属性或比较基准，需要由业务重新加载、重建对象或显式修改字段后再保存。
 
@@ -223,7 +223,7 @@ use EasySwoole\Mysqli\QueryBuilder;
 
 ## 3.x 迁移说明
 
-- 使用 `easyswoole/mysqli` ^5.0.8 和 `easyswoole/pool` ^3.0.6，生产安装不再要求 `ext-mysqli`；开发测试仍需要该扩展。
+- 使用 `easyswoole/mysqli` 5.x 和 `easyswoole/pool` 3.x，具体依赖范围以 `composer.json` 为准，生产安装不再要求 `ext-mysqli`；开发测试仍需要该扩展。
 - 删除配置中的 `useMysqli`，统一使用协程协议客户端。
 - 将 `maxConnectTim` 改为 `maxConnectTime`，setter 改用 `setMaxConnectTime()`；旧字段不再映射到连接超时。
 - `begin()`、`commit()`、`rollback()` 参数顺序统一为 `(client, flags, timeout)`。flags 必须使用对应枚举，不能传整数或按位组合值。
@@ -1125,13 +1125,13 @@ use EasySwoole\FastDb\Attributes\Relate;
 
 class RelatedUser extends User
 {
-    #[Relate(targetEntity: Profile::class, targetProperty: 'userId')]
+    #[Relate(targetEntity: Profile::class, targetProperty: 'userId', type: 'one')]
     public function profile()
     {
         return $this->relateOne();
     }
 
-    #[Relate(targetEntity: Order::class, targetProperty: 'userId', selfProperty: 'id')]
+    #[Relate(targetEntity: Order::class, targetProperty: 'userId', selfProperty: 'id', type: 'many')]
     public function orders()
     {
         return $this->relateMany();
@@ -1183,9 +1183,9 @@ foreach ($users as $user) {
 }
 ```
 
-`withRelations(string|array $relations)` 接受单个方法名或方法名列表，不接受闭包配置或点分嵌套路径。方法名会去重并规范为声明时的大小写；再次调用会覆盖本次声明，`withRelations([])` 清除声明。关系方法须为标注了 `#[Relate]` 的 public、非 static 方法，且不能有必填参数。未标注的普通业务方法不会被当作关系方法执行。
+`withRelations(string|array $relations)` 接受单个方法名或方法名列表，不接受闭包配置或点分嵌套路径。方法名会去重并规范为声明时的大小写；再次调用会覆盖本次声明，`withRelations([])` 清除声明。关系方法须为标注了 `#[Relate]` 的 public、非 static 方法，且不能有必填参数。预加载只读取关联声明，不执行 getter。预加载必须显式填写 `type: 'one'` 或 `type: 'many'`；旧关联未填写 type 时仍可按需调用，但预加载会明确报错。
 
-实体模式会把结果注入各父实体的关联缓存，之后相同查询形状的关系 getter 可直接命中，即使 `Relate::cacheResult` 为 false 也有效。一对一仍返回实体或 null，匹配多条仍抛出 `RuntimeError`；一对多仍返回 `ListResult`。关系方法自己配置 `fields(..., true)` 时，继续按原有规则返回数组或包含数组的 `ListResult`。父实体的 `toArray()` 不会自动把关系变成字段，需要输出时显式调用 getter。
+实体模式会把结果注入各父实体的关联缓存，之后相同查询形状的关系 getter 可直接命中，即使 `Relate::cacheResult` 为 false 也有效。一对一仍返回实体或 null，匹配多条仍抛出 `RuntimeError`；一对多仍返回 `ListResult`。关系声明设置 `returnAsArray: true` 时，按需加载和预加载均返回数组或包含数组的 `ListResult`。父实体的 `toArray()` 不会自动把关系变成字段，需要输出时显式调用 getter。
 
 #### 返回数组并附加关联
 
@@ -1203,38 +1203,54 @@ foreach ($rows as $row) {
 
 附加键使用关系方法的声明名；如果父数组已经有同名键，会明确报错，不覆盖原字段。数组模式下父行和关联行保持数据库表示，例如 JSON 字段仍是 JSON 字符串，不会把转换对象放进返回数组。
 
-无论返回实体还是数组，父关联键 `selfProperty` 必须以原列名被 SELECT 选中；不能只选择别名，也不会自动扩大父字段白名单。实体模式不能用 `hideFields()` 隐藏该键，因为后续 getter 需要真实父键；数组模式可以隐藏，库使用隐藏前的原始行完成关联匹配。关系方法读取的其他 `$this` 字段也应由父查询选中。目标关系的 `fields()` 不必选中 `targetProperty`：内部匹配辅助列会被移除，不进入关联输出。
+无论返回实体还是数组，父关联键 `selfProperty` 必须以原列名被 SELECT 选中；不能只选择别名，也不会自动扩大父字段白名单。实体模式不能用 `hideFields()` 隐藏该键，因为后续 getter 需要真实父键；数组模式可以隐藏，库使用隐藏前的原始行完成关联匹配。配置方法读取的其他 `$this` 字段也应由父查询选中。目标关系的 `fields()` 不必选中 `targetProperty`：内部匹配辅助列会被移除，不进入关联输出。
 
-数组结果启用预加载时，会为每一条父行临时构造父模型，以便关系方法读取 `$this` 字段。因此会执行父模型初始化、输入赋值和相应转换；临时模型不进入返回结果。这部分开销只发生在显式 `withRelations()` 路径，未启用预加载的数组查询仍不会逐行构造实体。
+数组结果启用预加载时，会为每一条父行临时构造父模型，以便实例配置方法读取 `$this` 字段。因此会执行父模型初始化、输入赋值和相应转换；临时模型不进入返回结果。这部分开销只发生在显式 `withRelations()` 路径，未启用预加载的数组查询仍不会逐行构造实体。
 
-#### 方法内配置与查询数量
+#### 可选配置方法与查询数量
 
-关系入口前设置的 WHERE、ORDER、字段列表，以及显式传给 `relateOne()` / `relateMany()` 的 `Relate` 和表名会按实际调用捕获。例如：
+`configure` 默认为 null，无附加条件时可以省略。填写方法名时，由 AbstractEntity 调用 public/protected 实例方法，传入 `QueryBuilder`，返回值忽略。支持继承的配置方法，不支持 private 或 static 方法。方法的可见性检查按类缓存。
 
 ```php
+use EasySwoole\Mysqli\QueryBuilder;
+
 class PreloadUser extends RelatedUser
 {
-    #[Relate(targetEntity: Order::class, targetProperty: 'userId', selfProperty: 'id')]
+    #[Relate(
+        targetEntity: Order::class,
+        targetProperty: 'userId',
+        type: 'many',
+        configure: 'configureActiveOrders',
+        returnAsArray: true
+    )]
     public function activeOrders()
     {
-        $this->queryLimit()->where('status', 1)->orderBy('id', 'DESC')
-            ->fields(['id', 'status'], true);
         return $this->relateMany();
+    }
+
+    protected function configureActiveOrders(QueryBuilder $query): void
+    {
+        $query->where('status', 1)->orderBy('id', 'DESC')
+            ->fields(['id', 'status']);
+        // 需要按父实体区分条件时，可以读取 $this 的已加载属性。
     }
 }
 
 $entity = new PreloadUser();
 $entity->queryLimit()->withRelations('activeOrders');
 $users = $entity->all()->list();
+$orders = $users[0]->activeOrders(); // 同样的配置可命中预加载缓存。
 ```
 
-库对每个父实体调用关系方法，在进入 `relateOne()` / `relateMany()` 时截获计划，不执行逐父关联 SQL。不会只采样第一条父记录：关系方法依赖父字段设置不同条件、目标表或连接时，会按实际计划分组。目标模型仍按普通关联规则初始化，默认 `tableName()` 或显式覆盖表名在该父对象的关联入口确定，连接名在目标初始化和表名求值后记录；支持依赖当时上下文的动态分表、分库，不会按类名跨父对象复用表名。相同连接、目标实体、关联类型、表名、条件参数、排序、字段和返回形式的计划可以合并批查。
+按需加载和预加载共用配置方法。配置方法通过传入的构建器设置 SQL 条件、排序或字段；关系返回数组的规则使用 `Relate::returnAsArray` 声明。框架直接从 `type` 获取关联类型，无需执行 getter、抛出内部异常或临时替换实体的查询对象。
+
+配置会按父实体分别应用，相同连接、目标实体、关联类型、表名、条件参数、排序、字段和返回形式的计划合并查询。目标表由目标实体的 `tableName()` 确定，连接在配置及目标模型初始化后记录。
+
+迁移原有预加载关系时，将 getter 中的附加条件移入 configure，添加 type。getter 中自行切库、覆盖表名、临时修改父键等业务行为不会参与预加载；需要这些复杂查询时，由业务显式查询和组装结果。预加载结果按声明及配置生成，getter 的后处理仅在业务实际调用 getter 时执行。
 
 常见固定关系、每种关系不超过 250 个唯一父关联键时，通常是 1 条父查询加每种关系 1 条批查询；例如 100 个父实体同时预加载 profile 和 orders，通常为 3 条 SQL。更大的结果按每个兼容计划、每 250 个去重父键分批；相同计划还可合并。若动态条件让每个父对象都产生不同计划，关联查询仍可能达到 N 条，不保证任意关系都固定为一条批 SQL。父分页的额外总数查询、业务方法或钩子自己执行的 SQL 另计；空父列表不执行关联 SQL。
 
-方法应配置查询后直接返回关联结果，且不能捕获并吞掉关联入口异常。预加载取得的是 `relateOne()` / `relateMany()` 的原始关系结果；关系入口后的自定义结果转换不用于组装数组附加值。实体之后显式调用 getter 时，wrapper 自身的后处理仍按原方法执行。
-
-首版不支持关系方法内的 limit/page、GROUP BY、HAVING、DISTINCT、UNION、子查询 FROM、行锁或总数统计；这些形状会明确报错，不能把全部父对象共用的 LIMIT 当作每个父对象的限制。父列表本身可以分页。`all()` 预加载当前列表，`chunk()` / `chunkById()` 只预加载当前批次，在逐条业务回调前完成。
+预加载不支持配置中的 LIMIT、GROUP BY、HAVING、DISTINCT、UNION、子查询 FROM、行锁或总数统计；这些形状会明确报错，不能把全部父对象共用的 LIMIT 当作每个父对象的限制。父列表本身可以分页。`all()` 预加载当前列表，`chunk()` / `chunkById()` 只预加载当前批次，在逐条业务回调前完成。
 
 预加载声明只作用于本次查询，执行后会被消费；查询模板或实体克隆会保留尚未消费的声明，并独立复制查询配置。实体缓存按连接、父键、实际 SQL、参数和返回模式匹配，更改条件、父键、目标表或实体/数组模式不会错误命中旧结果。`clearRelationCache()` 同时清除预加载结果和普通关联缓存，之后 getter 恢复查询；数组附加值已经是普通数组，不受该方法影响。`cacheResult: false` 只关闭按需查询缓存，不会禁用显式预加载的结果。缓存不会自动感知外部写入或事务结果，长生命周期实体应按需清理。
 
@@ -1334,7 +1350,7 @@ if ($user !== null) {
 ```php
 class RelatedUser extends User
 {
-    #[Relate(targetEntity: Order::class, targetProperty: 'userId', selfProperty: 'id')]
+    #[Relate(targetEntity: Order::class, targetProperty: 'userId', selfProperty: 'id', type: 'many')]
     public function archivedOrders()
     {
         return $this->relateMany(
@@ -2085,7 +2101,7 @@ SELECT * FROM users WHERE (status = 0) AND id > 4 ORDER BY id ASC LIMIT 2;
 
 固定关系且每种关系不超过 250 个唯一父键时，通常从“1 条父查询 + 每个父对象的关联查询”变成“1 条父查询 + 每种关系 1 条批查询”。大列表会分批，动态条件不同的父对象按计划分组；不要把它理解为任何场景都只发一条关联 SQL。`chunk()` 和 `chunkById()` 会针对每个当前批次分别预加载。
 
-父关联键必须被选中；实体模式不能隐藏该键，数组模式可以隐藏，但启用预加载后会临时构造父模型来捕获真实关系计划。关系方法内的每父 limit/page、分组和总数等形状不受支持，详见批量预加载章节。需要最新关联值时调用实体的 `clearRelationCache()`。
+父关联键必须被选中；实体模式不能隐藏该键，数组模式可以隐藏，但启用预加载后会临时构造父模型并应用显式配置。配置中的每父 LIMIT、分组和总数等形状不受支持，详见批量预加载章节。需要最新关联值时调用实体的 `clearRelationCache()`。
 
 ### 原始写入为什么没有执行钩子/转换？
 

@@ -47,15 +47,16 @@ class Connection extends Client implements ObjectInterface
     public function connect(?float $timeout = null): bool
     {
         $alreadyConnected = $this->mysqlClient()?->isConnected() ?? false;
+        $returned = false;
         try {
             $connected = parent::connect($timeout);
             if ($connected && !$alreadyConnected) {
                 $this->lastActiveTick = hrtime(true);
             }
+            $returned = true;
             return $connected;
-        } catch (\Throwable $error) {
-            $this->lastActiveTick = null;
-            throw $error;
+        } finally {
+            if (!$returned) { $this->lastActiveTick = null; }
         }
     }
 
@@ -102,15 +103,17 @@ class Connection extends Client implements ObjectInterface
         // 直连只返回驱动结果；构建中或已完成的外层帧不能接收本次直连通知。
         $frame = $previous !== null && $previous->accepts($builder, $sql) ? $previous : null;
         $this->executionFrame = $frame;
+        $returned = false;
         try {
-            return $builder === null ? parent::rawQuery($sql, $timeout) : parent::query($builder, $timeout);
-        } catch (\Throwable $error) {
-            $this->lastActiveTick = null;
-            if ($frame === null || !$frame->completed) {
-                $error = $this->withTimeoutContext($error, $sql, $builder);
-            }
-            throw $error;
+            $value = $builder === null ? parent::rawQuery($sql, $timeout) : parent::query($builder, $timeout);
+            $returned = true;
+            return $value;
+        } catch (DriverTimeoutException $error) {
+            // 仅在这里补充驱动超时上下文，普通 SQL 异常直接向上层传播。
+            if ($frame !== null && $frame->completed) { throw $error; }
+            throw $this->withTimeoutContext($error, $sql, $builder);
         } finally {
+            if (!$returned) { $this->lastActiveTick = null; }
             $this->executionFrame = $previous;
         }
     }
@@ -154,11 +157,8 @@ class Connection extends Client implements ObjectInterface
         $this->lastInsertId = $frame->result->getInsertId();
     }
 
-    private function withTimeoutContext(\Throwable $error, ?string $sql, ?QueryBuilder $builder = null): \Throwable
+    private function withTimeoutContext(DriverTimeoutException $error, ?string $sql, ?QueryBuilder $builder = null): TimeoutException
     {
-        if (!$error instanceof DriverTimeoutException) {
-            return $error;
-        }
         $exception = new TimeoutException($error->getMessage(), (int) $error->getCode(), $error);
         $exception->rawSql = $sql;
         $exception->queryBuilder = $builder === null ? null : clone $builder;

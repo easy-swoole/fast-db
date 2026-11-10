@@ -35,9 +35,6 @@ abstract class AbstractEntity implements \JsonSerializable
     // 缓存仅属于当前实体实例；键包含连接、关联类型、执行 SQL、参数和返回形式。
     private ?RelationLoader $relationLoader = null;
 
-    // 仅预加载捕获期间登记；普通实体不保存捕获状态，也不分配捕获帧。
-    private static ?\WeakMap $relationPlanScopes = null;
-
     /** 外部数据变化后，可主动清空当前实体的全部关联缓存。 */
     public function clearRelationCache(): static
     {
@@ -71,44 +68,6 @@ abstract class AbstractEntity implements \JsonSerializable
         $this->entityState = clone $this->entityState;
         $this->relationLoader = $this->relationLoader === null ? null : clone $this->relationLoader;
         $this->queryBuilder = $this->queryBuilder?->forEntity($this);
-    }
-
-    private function init()
-    {
-        $this->entityState = new EntityState();
-        $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
-        // 通过缓存的属性元数据初始化字段，并建立默认值的比较基准。
-        /** @var Property $property */
-        foreach ($entityRef->allProperties() as $property){
-            $defaultValue = $property->defaultValue;
-            // 默认对象按自身 __clone 语义复制，避免实体修改反射缓存中的共享实例；枚举保持原值。
-            if (is_object($defaultValue) && !($defaultValue instanceof \UnitEnum)) {
-                $defaultValue = clone $defaultValue;
-            }
-            if($property->convertObject){
-                // 非空字段即使默认值为 null，也交给转换器生成有效对象；可空字段保留 null。
-                if((!$property->allowNull) || ($defaultValue !== null)){
-                    // 已经是目标类型的默认值不再转换，避免枚举实例被转换成其他枚举值。
-                    /** @var ConvertObjectInterface $object */
-                    $object = $defaultValue instanceof $property->convertObject
-                        ? $defaultValue
-                        : call_user_func([$property->convertObject,'toObject'],$defaultValue);
-                    $this->{$property->name} = $object;
-                    $this->entityState->baseline[$property->name] = $object->toValue();
-                }else{
-                    $this->{$property->name} = null;
-                    $this->entityState->baseline[$property->name] = $defaultValue;
-                }
-            }else{
-                if(($defaultValue !== null) || $property->allowNull){
-                    $this->{$property->name} = $defaultValue;
-                }
-                $this->entityState->baseline[$property->name] = $defaultValue;
-            }
-        }
-        if($entityRef->getOnInitialize()){
-            $this->callHook($entityRef->getOnInitialize());
-        }
     }
 
     /**
@@ -171,62 +130,11 @@ abstract class AbstractEntity implements \JsonSerializable
                 $list = (new RelationPreloader())->load($this, $list, $rows, $relations, $returnAsArray,
                     $connectionName, $hideFields, fn (QueryBuilder $builder) => static::callQuery($builder, $this->onQuery));
             }
-            $this->reset();
-
             return new ListResult($list,$total);
         } finally {
             // 成功、失败或提前返回均消费本次查询配置，实体数据及比较基准不受影响。
             $this->reset();
         }
-    }
-
-    /** 实体查询及游标分块共用字段隐藏、转换和输出配置传播。 */
-    private function hydrateRows(mixed $rows, Query $selection, bool $returnAsArray, array $hideFields): array
-    {
-        $list = [];
-
-        if($returnAsArray){
-            if ($hideFields === []) {
-                // 按值重建列表，保留重编号、解引用和初始迭代位置的既有语义。
-                foreach ($rows as $item) { $list[] = $item; }
-            } else {
-                foreach ($rows as $item){
-                    foreach ($hideFields as $field){
-                        unset($item[$field]);
-                    }
-                    $list[] = $item;
-                }
-            }
-        }else{
-            foreach ($rows as $item){
-                foreach ($hideFields as $field){
-                    unset($item[$field]);
-                }
-                // 构造实体时完成字段转换，并将查询结果作为后续更新的比较基准。
-                $t = new static($item);
-                if($selection->isPersistFieldLimit()){
-                    $t->queryLimit()->hideFields($hideFields);
-                    if(!empty($selection->getFields())){
-                        $t->queryLimit()->fields(...$selection->getFields());
-                    }
-                }
-                $list[] = $t;
-            }
-        }
-        return $list;
-    }
-
-    /** 使用预取的总数快照，同时保留实体级查询回调对总数查询的通知。 */
-    private function readTotal(QueryResult $result): ?int
-    {
-        $count = FastDb::getInstance()->getTotalResult($result);
-        if ($count === null) {
-            $count = static::callQuery('SELECT FOUND_ROWS() as count', $this->onQuery);
-        } elseif (is_callable($this->onQuery)) {
-            ($this->onQuery)($count);
-        }
-        $value = $count->getResultOne()['count'] ?? null;
-        return $value === null ? null : (int) $value;
     }
 
     function chunk(callable $func,int $chunkSize = 10)
@@ -249,7 +157,6 @@ abstract class AbstractEntity implements \JsonSerializable
                     $this->queryBuilder = $builder;
                 }
             }
-            $this->reset();
         } finally {
             // 成功、失败或提前返回均消费本次查询配置，实体数据及比较基准不受影响。
             $this->reset();
@@ -320,24 +227,6 @@ abstract class AbstractEntity implements \JsonSerializable
         }
     }
 
-    /** 校验整页后才交付业务回调，拒绝缺失、非标量及未推进的游标。 */
-    private static function chunkCursor(array $rows, string $column, int|string|null $previous): int|string
-    {
-        foreach ($rows as $row) {
-            if (!is_array($row) || !array_key_exists($column, $row)
-                || (!is_int($row[$column]) && !is_string($row[$column]))) {
-                throw new \UnexpectedValueException('The chunk field must be selected under its original name and contain a non-null integer or string');
-            }
-            $current = $row[$column];
-            if ($previous !== null && ((string) $current === (string) $previous
-                || (is_int($current) && is_int($previous) && $current <= $previous))) {
-                throw new \UnexpectedValueException('The chunk field did not advance; use a stable unique field');
-            }
-            $previous = $current;
-        }
-        return $previous;
-    }
-
     /** 将实体字段转为输出值，同时应用隐藏字段和字段白名单。 */
     function toArray(bool $filterNull = false):array
     {
@@ -385,7 +274,6 @@ abstract class AbstractEntity implements \JsonSerializable
                 $query->get($this->tableName(),1, "count({$field}) as count");
             }
             $ret = static::callQuery($query,$this->onQuery)->getResult();
-            $this->reset();
             if (empty($ret)) {
                 if ($hasFiled) {
                     return [];
@@ -398,60 +286,6 @@ abstract class AbstractEntity implements \JsonSerializable
             }
 
             return $ret['count'];
-        } finally {
-            // 成功、失败或提前返回均消费本次查询配置，实体数据及比较基准不受影响。
-            $this->reset();
-        }
-    }
-
-    private function aggregate(string $aggregate, string|array $cols, string|null $group = null, bool $force = false): int|array|float
-    {
-        try {
-            $multiFields = false;
-            if (is_string($cols)) {
-                $cols = [$cols];
-            }
-
-            if (count($cols) > 1) {
-                $multiFields = true;
-            }
-
-            $str = "";
-            while ($item = array_shift($cols)) {
-                $str .= "{$aggregate}(`{$item}`) as {$item}";
-                if (!empty($cols)) {
-                    $str .= " , ";
-                }
-            }
-            $query = $this->queryLimit()->__getQueryBuilder();
-            if ($group) {
-                $query->groupBy($group);
-            }
-            $query->get($this->tableName(), 1, $str);
-            $ret = static::callQuery($query,$this->onQuery)->getResult();
-            $this->reset();
-            if (empty($ret)) {
-                if ($multiFields) {
-                    return [];
-                }
-                return 0;
-            }
-            $ret = $ret[0];
-            if ($multiFields) {
-                if ($force) {
-                    foreach ($ret as &$row) {
-                        $row = (float) $row;
-                    }
-                    unset($row);
-                }
-                return $ret;
-            } else {
-                $ret = array_values($ret)[0] ?: 0;
-                if ($force) {
-                    return (float) $ret;
-                }
-                return $ret;
-            }
         } finally {
             // 成功、失败或提前返回均消费本次查询配置，实体数据及比较基准不受影响。
             $this->reset();
@@ -502,7 +336,6 @@ abstract class AbstractEntity implements \JsonSerializable
             $query = $this->queryLimit()->__getQueryBuilder();
             $query->delete($this->tableName());
             $ret = static::callQuery($query,$this->onQuery);
-            $this->reset();
             return $ret->getAffectedRows() >= 1;
         } finally {
             // 成功、失败或提前返回均消费本次查询配置，实体数据及比较基准不受影响。
@@ -583,8 +416,6 @@ abstract class AbstractEntity implements \JsonSerializable
                 }
             }
             if(empty($data)){
-                // 本次保存已消费查询配置，即使没有变化也不把字段限制带入下次操作。
-                $this->reset();
                 return true;
             }
             $pk = $this->primaryKeyCheck('update');
@@ -597,7 +428,6 @@ abstract class AbstractEntity implements \JsonSerializable
                     if ($result->getException() !== null || !($result->getAffectedRows() > 0)) { return; }
                     $this->entityState->accept(array_intersect_key($compareValues, $data));
                 });
-            $this->reset();
             return $ret->getAffectedRows() > 0;
         } finally {
             // 成功、失败或提前返回均消费本次查询配置，实体数据及比较基准不受影响。
@@ -665,24 +495,6 @@ abstract class AbstractEntity implements \JsonSerializable
         return self::writeBatch($rows, $updateColumns, $tableName, $onQuery, $batchSize);
     }
 
-    private static function writeBatch(iterable $rows, ?array $updates, ?string $tableName,
-        ?callable $onQuery, int $batchSize): int|string
-    {
-        $db = FastDb::getInstance();
-        $entryConnection = $db->selectConnection();
-        return BatchWriter::write($rows, $updates, $batchSize,
-            static function () use ($db, $entryConnection, $tableName): array {
-                if ($tableName !== null && $tableName !== '') { return [$tableName, $entryConnection]; }
-                $visible = $db->selectConnection();
-                $db->selectConnection($entryConnection);
-                try {
-                    $table = (new static())->tableName();
-                    return [$table, $db->selectConnection()];
-                } finally { $db->selectConnection($visible); }
-            },
-            static fn (QueryBuilder $query, string $connection) => static::callQuery($query, $onQuery, null, $connection));
-    }
-
     function insert(array|null $updateDuplicateCols = null)
     {
         try {
@@ -693,7 +505,7 @@ abstract class AbstractEntity implements \JsonSerializable
                     return false;
                 }
             }
-            // 先完成输出转换；普通 null 字段省略，让数据库使用默认值。
+            // 生成写入值和比较基准；普通 null 字段省略，让数据库使用默认值。
             $compareValues = [];
             $data = FieldCodec::values($this, $entityRef->allProperties(), true, $compareValues);
             $fields = $this->queryLimit()->getFields()['fields'] ?? null;
@@ -727,31 +539,6 @@ abstract class AbstractEntity implements \JsonSerializable
             $this->reset(true);
         }
     }
-
-
-    private function reset(bool $preserveSelection = false):void
-    {
-        // 只清理查询状态，不清空实体属性、比较基准或查询回调。
-        $this->queryBuilder = $preserveSelection ? $this->queryBuilder?->withoutSqlConditions() : null;
-    }
-
-
-    private function primaryKeyCheck(string $op,bool $emptyCheck = true):string
-    {
-        $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
-        $pk = $entityRef->getPrimaryKey();
-        if(empty($pk)){
-            $msg = "can not {$op} entity without primary key set";
-            throw new RuntimeError($msg);
-        }
-        // 关联元数据解析只需要主键名称，可以关闭主键值检查。
-        if(empty($this->{$pk}) && $emptyCheck){
-            $msg = "can not {$op} entity without primary key value";
-            throw new RuntimeError($msg);
-        }
-        return $pk;
-    }
-
 
     public static function findRecord(
         callable|array|string|int $queryLimit,
@@ -853,7 +640,6 @@ abstract class AbstractEntity implements \JsonSerializable
         }
     }
 
-
     public function jsonSerialize(): mixed
     {
         return $this->toArray();
@@ -875,52 +661,18 @@ abstract class AbstractEntity implements \JsonSerializable
         return null;
     }
 
-    /** @internal 调用真实关系方法并截获其查询计划，恢复原查询引用，不执行关联 SQL。 */
+    /** @internal 直接读取关联声明并调用配置方法，不执行业务 getter。 */
     public function __relationPlan(string $method): RelationPlan
     {
-        try {
-            $reflection = new \ReflectionMethod($this, $method);
-        } catch (\ReflectionException $error) {
-            throw new RuntimeError("Relation method {$method} does not exist in " . static::class, 0, $error);
+        $relate = $this->parseRelate(ReflectionCache::getInstance()->parseRelation(static::class, $method));
+        if ($relate->type === null) {
+            throw new RuntimeError('Preloading requires an explicit relation type: ' . $method);
         }
-        if (!$reflection->isPublic() || $reflection->isStatic()
-            || $reflection->getNumberOfRequiredParameters() !== 0
-            || $reflection->getDeclaringClass()->getName() === self::class) {
-            throw new RuntimeError("Relation method {$method} must be a public instance wrapper without required arguments");
-        }
-        // 先确认显式标注的关系入口，避免误调用其他公开业务方法。
-        ReflectionCache::getInstance()->parseRelation(static::class, $method);
-
-        self::$relationPlanScopes ??= new \WeakMap();
-        $previousScope = self::$relationPlanScopes[$this] ?? null;
-        $previousQuery = $this->queryBuilder;
-        $db = FastDb::getInstance();
-        $previousConnection = $db->selectConnection();
-        $frame = (object) ['token' => new \RuntimeException('Internal relation plan capture'), 'plan' => null];
-        self::$relationPlanScopes[$this] = $frame;
-        try {
-            $this->queryBuilder = $previousQuery === null ? null : clone $previousQuery;
-            try {
-                $this->{$method}();
-            } catch (\Throwable $error) {
-                if ($error !== $frame->token) {
-                    if ($frame->plan !== null) {
-                        throw new RuntimeError("Relation method {$method} swallowed or replaced the capture signal", 0, $error);
-                    }
-                    throw $error;
-                }
-                if (!$frame->plan instanceof RelationPlan) {
-                    throw new RuntimeError("Relation method {$method} did not produce a relation plan");
-                }
-                return $frame->plan;
-            }
-            throw new RuntimeError("Relation method {$method} must enter relateOne() or relateMany() without swallowing the capture signal");
-        } finally {
-            $this->queryBuilder = $previousQuery;
-            if ($previousScope === null) { unset(self::$relationPlanScopes[$this]); }
-            else { self::$relationPlanScopes[$this] = $previousScope; }
-            if ($db->selectConnection() !== $previousConnection) { $db->selectConnection($previousConnection); }
-        }
+        $query = $this->queryBuilder === null ? new Query($this) : clone $this->queryBuilder;
+        $this->configureRelation($relate, $query);
+        $target = new $relate->targetEntity();
+        return new RelationPlan($relate->type, $relate, $target->tableName(), $query,
+            FastDb::getInstance()->selectConnection(), $this->{$relate->selfProperty} ?? null);
     }
 
     protected function relateOne(Relate|null $relate = null,string|null $tableName = null):null|array|AbstractEntity
@@ -933,24 +685,230 @@ abstract class AbstractEntity implements \JsonSerializable
         return $this->loadRelation('many', $this->parseRelate($relate), $tableName);
     }
 
+    function setOnQuery(?callable $call):static
+    {
+        $this->onQuery = $call;
+        return $this;
+    }
+
+    // 内部实现按初始化、结果组装、写入与关联处理的顺序集中放置。
+
+    private function init()
+    {
+        $this->entityState = new EntityState();
+        $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
+        // 通过缓存的属性元数据初始化字段，并建立默认值的比较基准。
+        /** @var Property $property */
+        foreach ($entityRef->allProperties() as $property){
+            $defaultValue = $property->defaultValue;
+            // 默认对象按自身 __clone 语义复制，避免实体修改反射缓存中的共享实例；枚举保持原值。
+            if (is_object($defaultValue) && !($defaultValue instanceof \UnitEnum)) {
+                $defaultValue = clone $defaultValue;
+            }
+            if($property->convertObject){
+                // 非空字段即使默认值为 null，也交给转换器生成有效对象；可空字段保留 null。
+                if((!$property->allowNull) || ($defaultValue !== null)){
+                    // 已经是目标类型的默认值不再转换，避免枚举实例被转换成其他枚举值。
+                    /** @var ConvertObjectInterface $object */
+                    $object = $defaultValue instanceof $property->convertObject
+                        ? $defaultValue
+                        : call_user_func([$property->convertObject,'toObject'],$defaultValue);
+                    $this->{$property->name} = $object;
+                    $this->entityState->baseline[$property->name] = $object->toValue();
+                }else{
+                    $this->{$property->name} = null;
+                    $this->entityState->baseline[$property->name] = $defaultValue;
+                }
+            }else{
+                if(($defaultValue !== null) || $property->allowNull){
+                    $this->{$property->name} = $defaultValue;
+                }
+                $this->entityState->baseline[$property->name] = $defaultValue;
+            }
+        }
+        if($entityRef->getOnInitialize()){
+            $this->callHook($entityRef->getOnInitialize());
+        }
+    }
+
+    /** 实体查询及游标分块共用字段隐藏、转换和输出配置传播。 */
+    private function hydrateRows(mixed $rows, Query $selection, bool $returnAsArray, array $hideFields): array
+    {
+        $list = [];
+
+        if($returnAsArray){
+            if ($hideFields === []) {
+                // 按值重建列表，保留重编号、解引用和初始迭代位置的既有语义。
+                foreach ($rows as $item) { $list[] = $item; }
+            } else {
+                foreach ($rows as $item){
+                    foreach ($hideFields as $field){
+                        unset($item[$field]);
+                    }
+                    $list[] = $item;
+                }
+            }
+        }else{
+            foreach ($rows as $item){
+                foreach ($hideFields as $field){
+                    unset($item[$field]);
+                }
+                // 构造实体时完成字段转换，并将查询结果作为后续更新的比较基准。
+                $t = new static($item);
+                if($selection->isPersistFieldLimit()){
+                    $t->queryLimit()->hideFields($hideFields);
+                    if(!empty($selection->getFields())){
+                        $t->queryLimit()->fields(...$selection->getFields());
+                    }
+                }
+                $list[] = $t;
+            }
+        }
+        return $list;
+    }
+
+    /** 使用预取的总数快照，同时保留实体级查询回调对总数查询的通知。 */
+    private function readTotal(QueryResult $result): ?int
+    {
+        $count = FastDb::getInstance()->getTotalResult($result);
+        if ($count === null) {
+            $count = static::callQuery('SELECT FOUND_ROWS() as count', $this->onQuery);
+        } elseif (is_callable($this->onQuery)) {
+            ($this->onQuery)($count);
+        }
+        $value = $count->getResultOne()['count'] ?? null;
+        return $value === null ? null : (int) $value;
+    }
+
+    /** 校验整页后才交付业务回调，拒绝缺失、非标量及未推进的游标。 */
+    private static function chunkCursor(array $rows, string $column, int|string|null $previous): int|string
+    {
+        foreach ($rows as $row) {
+            if (!is_array($row) || !array_key_exists($column, $row)
+                || (!is_int($row[$column]) && !is_string($row[$column]))) {
+                throw new \UnexpectedValueException('The chunk field must be selected under its original name and contain a non-null integer or string');
+            }
+            $current = $row[$column];
+            if ($previous !== null && ((string) $current === (string) $previous
+                || (is_int($current) && is_int($previous) && $current <= $previous))) {
+                throw new \UnexpectedValueException('The chunk field did not advance; use a stable unique field');
+            }
+            $previous = $current;
+        }
+        return $previous;
+    }
+
+    private function aggregate(string $aggregate, string|array $cols, string|null $group = null, bool $force = false): int|array|float
+    {
+        try {
+            $multiFields = false;
+            if (is_string($cols)) {
+                $cols = [$cols];
+            }
+
+            if (count($cols) > 1) {
+                $multiFields = true;
+            }
+
+            $str = "";
+            while ($item = array_shift($cols)) {
+                $str .= "{$aggregate}(`{$item}`) as {$item}";
+                if (!empty($cols)) {
+                    $str .= " , ";
+                }
+            }
+            $query = $this->queryLimit()->__getQueryBuilder();
+            if ($group) {
+                $query->groupBy($group);
+            }
+            $query->get($this->tableName(), 1, $str);
+            $ret = static::callQuery($query,$this->onQuery)->getResult();
+            if (empty($ret)) {
+                if ($multiFields) {
+                    return [];
+                }
+                return 0;
+            }
+            $ret = $ret[0];
+            if ($multiFields) {
+                if ($force) {
+                    foreach ($ret as &$row) {
+                        $row = (float) $row;
+                    }
+                    unset($row);
+                }
+                return $ret;
+            } else {
+                $ret = array_values($ret)[0] ?: 0;
+                if ($force) {
+                    return (float) $ret;
+                }
+                return $ret;
+            }
+        } finally {
+            // 成功、失败或提前返回均消费本次查询配置，实体数据及比较基准不受影响。
+            $this->reset();
+        }
+    }
+
+    private static function writeBatch(iterable $rows, ?array $updates, ?string $tableName,
+        ?callable $onQuery, int $batchSize): int|string
+    {
+        $db = FastDb::getInstance();
+        $entryConnection = $db->selectConnection();
+        return BatchWriter::write($rows, $updates, $batchSize,
+            static function () use ($db, $entryConnection, $tableName): array {
+                if ($tableName !== null && $tableName !== '') { return [$tableName, $entryConnection]; }
+                $visible = $db->selectConnection();
+                $db->selectConnection($entryConnection);
+                try {
+                    $table = (new static())->tableName();
+                    return [$table, $db->selectConnection()];
+                } finally { $db->selectConnection($visible); }
+            },
+            static fn (QueryBuilder $query, string $connection) => static::callQuery($query, $onQuery, null, $connection));
+    }
+
+    private function reset(bool $preserveSelection = false):void
+    {
+        // 只清理查询状态，不清空实体属性、比较基准或查询回调。
+        $this->queryBuilder = $preserveSelection ? $this->queryBuilder?->withoutSqlConditions() : null;
+    }
+
+    private function primaryKeyCheck(string $op,bool $emptyCheck = true):string
+    {
+        $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
+        $pk = $entityRef->getPrimaryKey();
+        if(empty($pk)){
+            $msg = "can not {$op} entity without primary key set";
+            throw new RuntimeError($msg);
+        }
+        // 关联元数据解析只需要主键名称，可以关闭主键值检查。
+        if(empty($this->{$pk}) && $emptyCheck){
+            $msg = "can not {$op} entity without primary key value";
+            throw new RuntimeError($msg);
+        }
+        return $pk;
+    }
+
+    /** 按需加载和预加载共用显式配置；不临时替换实体持有的查询对象。 */
+    private function configureRelation(Relate $relate, Query $query): void
+    {
+        if ($relate->returnAsArray) { $query->returnAsArray(); }
+        if ($relate->configure !== null) {
+            $method = ReflectionCache::getInstance()->relationConfigurator(static::class, $relate->configure);
+            $this->{$method}($query->__getQueryBuilder());
+        }
+    }
+
     private function loadRelation(string $kind, Relate $relate, ?string $tableName): mixed
     {
-        $capture = self::$relationPlanScopes[$this] ?? null;
-        if ($capture !== null) {
-            if ($capture->plan !== null) {
-                throw new RuntimeError('Relation wrappers must not swallow the relation plan capture signal');
-            }
-            // 在 wrapper 的 finally 恢复上下文前确定实际目标表，不能跨父对象缓存动态表名。
-            // 与按需加载一致：即使覆盖表名，也执行目标模型初始化后再记录连接。
-            $target = new $relate->targetEntity();
-            $selfValue = $this->{$relate->selfProperty} ?? null;
-            $resolvedTable = $tableName ?: $target->tableName();
-            $capture->plan = new RelationPlan($kind, clone $relate, $resolvedTable, clone $this->queryLimit(),
-                FastDb::getInstance()->selectConnection(), $selfValue);
-            throw $capture->token;
-        }
         $this->relationLoader ??= new RelationLoader();
         try {
+            if ($relate->type !== null && $relate->type !== $kind) {
+                throw new RuntimeError('Declared relation type does not match its getter');
+            }
+            $this->configureRelation($relate, $this->queryLimit());
             return $this->relationLoader->$kind($this, $relate, $tableName,
                 fn ($query) => static::callQuery($query, $this->onQuery), fn () => $this->reset(), fn ($result) => $this->readTotal($result));
         } finally {
@@ -984,61 +942,49 @@ abstract class AbstractEntity implements \JsonSerializable
         return $relate;
     }
 
-    function setOnQuery(?callable $call):static
-    {
-        $this->onQuery = $call;
-        return $this;
-    }
-
     /** 统一执行模型查询，并在成功或异常时通知本次查询回调。 */
     private static function callQuery(QueryBuilder|string $query,?callable $onQuery = null,?callable $onComplete = null,
         ?string $connection = null):QueryResult
     {
-        $startTick = hrtime(true);
-        $startTime = microtime(true);
-        // 失败时的实体回调也使用发起查询时的连接名，而不是异常回调修改后的选中连接。
         $db = FastDb::getInstance();
-        $connectionName = $connection ?? $db->selectConnection();
-        $queryException = null;
         $ret = null;
         $complete = $onQuery === null && $onComplete === null ? null : static function (QueryResult $result, Connection $connection) use ($onComplete, &$ret): void {
-            // 即使执行或公开观察回调抛错，也保留本次执行器已经冻结的真实结果。
             $ret = $result;
-            if ($result->getException() === null && $onComplete !== null) {
-                $onComplete($result, $connection);
-            }
+            if ($result->getException() === null && $onComplete !== null) { $onComplete($result, $connection); }
         };
+        // 没有实体观察回调时，无需再次捕获执行器已经处理过的异常。
+        if ($onQuery === null) {
+            return $query instanceof QueryBuilder
+                ? $db->query($query, null, $complete, $connection)
+                : $db->rawQuery($query, null, $complete, $connection);
+        }
+
+        $startTick = hrtime(true);
+        $startTime = microtime(true);
+        $connectionName = $connection ?? $db->selectConnection();
+        $error = null;
         try {
             $ret = $query instanceof QueryBuilder
                 ? $db->query($query, null, $complete, $connection)
                 : $db->rawQuery($query, null, $complete, $connection);
-        }catch (\Throwable $exception){
-            $queryException = $exception;
-            throw $exception;
-        }finally{
-            if(is_callable($onQuery)){
-                if($ret === null){
-                    // 借用失败等尚未进入执行器的路径仍提供替代结果，供实体回调定位错误。
-                    $ret = new QueryResult($startTime, $startTick);
-                    $ret->setConnectionName($connectionName);
-                    $ret->finishTiming();
-                    $ret->setException($queryException);
-                    if($query instanceof QueryBuilder){
-                        $ret->setQueryBuilder($query);
-                    }else{
-                        $ret->setRawSql($query);
-                    }
-                }
-                try {
-                    call_user_func($onQuery,$ret);
-                }catch (\Throwable $callbackException){
-                    // 查询已经失败时保留原始异常；查询成功时正常抛出回调自身的异常。
-                    if($queryException === null){
-                        throw $callbackException;
-                    }
-                }
-            }
+        } catch (\Throwable $failure) {
+            $error = $failure;
         }
+        if ($ret === null) {
+            // 借用失败尚未进入执行器，也向实体回调提供错误结果。
+            $ret = new QueryResult($startTime, $startTick);
+            $ret->setConnectionName($connectionName);
+            $ret->finishTiming();
+            $ret->setException($error);
+            if ($query instanceof QueryBuilder) { $ret->setQueryBuilder($query); }
+            else { $ret->setRawSql($query); }
+        }
+        try { $onQuery($ret); }
+        catch (\Throwable $callbackError) {
+            // 执行错误优先于观察回调错误；同一个错误在本层只统一抛出一次。
+            $error ??= $callbackError;
+        }
+        if ($error !== null) { throw $error; }
         return $ret;
     }
 }

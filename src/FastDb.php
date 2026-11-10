@@ -298,21 +298,18 @@ class FastDb
         $startTick = $trace ? hrtime(true) : 0;
         $error = null;
         try {
-            try { $client = $pool->getObj(); }
-            catch (\Throwable $cause) {
-                $message = $cause instanceof PoolEmpty ? 'pool empty' : $cause->getMessage();
-                throw new RuntimeError("connection {$name} error case " . $message, (int) $cause->getCode(), $cause);
-            }
-            if ($client === null) { throw new RuntimeError("connection {$name} error case pool empty"); }
-        } catch (\Throwable $failure) {
-            $error = $failure;
-            throw $failure;
-        } finally {
-            if ($trace) {
-                $duration = (hrtime(true) - $startTick) / 1_000_000_000;
-                $this->diagnostics?->recordAcquire($name, $startTime, microtime(true), $duration, $error);
-            }
+            $client = $pool->getObj();
+            if ($client === null) { $error = new RuntimeError("connection {$name} error case pool empty"); }
+        } catch (\Throwable $cause) {
+            $message = $cause instanceof PoolEmpty ? 'pool empty' : $cause->getMessage();
+            $error = new RuntimeError("connection {$name} error case " . $message, (int) $cause->getCode(), $cause);
         }
+        // 借用错误只捕获一次，完成诊断记录后统一抛出。
+        if ($trace) {
+            $duration = (hrtime(true) - $startTick) / 1_000_000_000;
+            $this->diagnostics?->recordAcquire($name, $startTime, microtime(true), $duration, $error);
+        }
+        if ($error !== null) { throw $error; }
         $client->connectionName = $name;
         $this->currentConnection[$cid][$name] = $client;
         return $client;
