@@ -8,13 +8,13 @@ use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Attributes\Property;
 
 /**
- * @property int $id increment id
- * @property string|null $name name
- * @property int|null $status status
- * @property int|null $score score
- * @property int|null $sex sex
- * @property string|null $address address
- * @property string|null $email email
+ * @property int $id 自增主键
+ * @property string|null $name 姓名
+ * @property int|null $status 状态
+ * @property int|null $score 分数
+ * @property int|null $sex 性别
+ * @property string|null $address 地址
+ * @property string|null $email 邮箱
  */
 class User extends AbstractEntity
 {

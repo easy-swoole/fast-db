@@ -23,10 +23,9 @@ class Connection extends Client implements ObjectInterface
     public bool $isForceRollback = false;
 
     private ?TransactionContext $transactionContext = null;
-    // 只在回调事务参与期间或标记 rollback-only 时持有，结束后立即释放。
+    // 只在参与回调事务期间或标记为仅可回滚时持有，结束后立即释放。
     private ?TransactionScope $transactionScope = null;
     private ?ExecutionFrame $executionFrame = null;
-    private ?\Closure $userObserver = null;
     // 单调时钟记录最后一次成功通信的结束时间，归还连接时保留，关闭或失败时清除。
     private int|float|null $lastActiveTick = null;
     private const HEALTH_CHECK_IDLE_NANOSECONDS = 3_000_000_000;
@@ -34,17 +33,17 @@ class Connection extends Client implements ObjectInterface
     public function __construct(\EasySwoole\Mysqli\Config $config)
     {
         parent::__construct($config);
-        // 无捕获共享 dispatcher 不持有连接；用户替换回调也无需再包裹每条 SQL。
+        // 父类成功回调专用于内部状态同步；共享分发器不捕获连接实例。
         static $dispatcher = null;
-        $this->onQuery = $dispatcher ??= static function (bool|array $result, Client $client, float $startedAt): void {
-            $client->observeResult($result, $startedAt);
+        $this->onQuery = $dispatcher ??= static function (bool|array $result, Client $client): void {
+            $client->observeResult($result);
         };
     }
 
-    public function onQuery(callable $callback): static
+    /** 阻止继承的公开回调设置方法覆盖内部分发器；直接操作的日志由调用方负责。 */
+    final public function onQuery(callable $callback): static
     {
-        $this->userObserver = \Closure::fromCallable($callback);
-        return $this;
+        throw new \LogicException('Connection-level query observers are not supported; record direct connection operations in caller code');
     }
 
     /** 按当前协程及连接名取得上下文，禁止把未结束事务迁移到其他归属。 */
@@ -126,7 +125,7 @@ class Connection extends Client implements ObjectInterface
         return $this->executeQuery(null, $query, $timeout);
     }
 
-    /** @internal Facade 显式传帧；自定义 query/rawQuery 也只有这一处完成回退。 */
+    /** @internal 门面入口显式传入执行帧；未走驱动回调的自定义查询统一在此补全结果。 */
     final public function runFrame(ExecutionFrame $frame, callable $operation): QueryResult
     {
         $previous = $this->executionFrame;
@@ -155,7 +154,6 @@ class Connection extends Client implements ObjectInterface
         $previous = $this->executionFrame;
         $this->executionFrame = $frame;
         $frame->start();
-        $frame->observer = $this->userObserver;
         try {
             return $builder === null ? parent::rawQuery($sql, $timeout) : parent::query($builder, $timeout);
         } catch (\Throwable $error) {
@@ -172,21 +170,18 @@ class Connection extends Client implements ObjectInterface
         }
     }
 
-    /** Client 唯一的成功入口；已完成的外层帧不能接收旁路/重入操作的完成通知。 */
-    private function observeResult(bool|array $value, float $startedAt): void
+    /** 驱动唯一的成功回调入口；已完成的外层帧不能接收旁路或重入操作的完成通知。 */
+    private function observeResult(bool|array $value): void
     {
         $frame = $this->executionFrame;
-        if ($frame === null || !$frame->started || $frame->completed) {
-            if ($this->userObserver !== null) { ($this->userObserver)($value, $this, $startedAt); }
-            return;
-        }
-        $frame->driverStartedAt = $startedAt;
+        if ($frame === null || !$frame->started || $frame->completed) { return; }
         $this->finishFrame($frame, $value, true);
     }
 
-    /** 冻结结果和状态后再公开通知；COUNT 先读，低层通知仍在主查询观察回调之后。 */
+    /** 冻结结果并同步事务；总数预取和内部完成均早于全局及实体查询回调。 */
     private function finishFrame(ExecutionFrame $frame, bool|array $value, bool $fromDriver): void
     {
+        // 先冻结结果并结束主查询计时，排除总数查询和回调耗时，也防止重入复用当前帧。
         $frame->succeed($this, $value);
         try {
             if ($fromDriver) {
@@ -198,7 +193,7 @@ class Connection extends Client implements ObjectInterface
             if ($value === true && $frame->completionFlags?->releasesConnection()) { $this->close(); }
             $completionError = null;
             if ($frame->wantsTotal()) {
-                $count = $frame->count = new ExecutionFrame(null, 'SELECT FOUND_ROWS() as count', deferObserver: true);
+                $count = $frame->count = new ExecutionFrame(null, 'SELECT FOUND_ROWS() as count');
                 $count->result->setConnectionName($frame->result->getConnectionName());
                 $count->start();
                 try {
@@ -208,33 +203,9 @@ class Connection extends Client implements ObjectInterface
             }
             try { $frame->complete($this); }
             catch (\Throwable $error) { $completionError ??= $error; }
-            if ($fromDriver && !$frame->deferObserver) {
-                $this->restoreMetadata($frame);
-                try { $this->notifyObserver($frame); }
-                catch (\Throwable $error) {
-                    $frame->invalidateTotal();
-                    throw $error;
-                }
-            }
             if ($completionError !== null) { throw $completionError; }
-            if ($frame->count !== null) {
-                try { $this->notifyObserver($frame->count, true); }
-                catch (\Throwable $error) {
-                    $frame->invalidateTotal($error);
-                    throw $error;
-                }
-            }
         } finally {
             $this->restoreMetadata($frame);
-        }
-    }
-
-    private function notifyObserver(ExecutionFrame $frame, bool $useCurrent = false): void
-    {
-        $this->restoreMetadata($frame);
-        $observer = $useCurrent ? $this->userObserver : $frame->observer;
-        if ($observer !== null) {
-            $observer($frame->result->getResult(), $this, $frame->driverStartedAt);
         }
     }
 

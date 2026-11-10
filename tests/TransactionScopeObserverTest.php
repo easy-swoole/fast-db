@@ -235,7 +235,7 @@ final class TransactionScopeObserverTest extends TestCase
         $scope = new TransactionScope($connection->getTransactionContext()); $scope->depth = 1;
         $scope->authorizeBegin('START TRANSACTION'); $outer = $scope->enterExecution($connection, 'START TRANSACTION');
         try {
-            // A custom connection may reenter before handing the outer operation to its wire method.
+            // 自定义连接可能在把外层操作交给实际发送方法前重入查询。
             $connection->isInTransaction = true;
             $inner = $scope->enterExecution($connection, 'SELECT 1');
             $this->assertIsObject($inner);

@@ -32,11 +32,11 @@ final class UpdateConversionTest extends TestCase
         $instance->setValue(null, $db);
         try {
             $entity = new UpdateConversionEntity(['id' => 1, 'payload' => '[1]']);
-            $this->assertTrue($entity->update()); // Loaded value is unchanged.
+            $this->assertTrue($entity->update()); // 从数据库加载的值没有变化。
             $entity->payload = [2];
             $this->assertTrue($entity->update());
             $this->assertSame([2], $entity->payload);
-            $this->assertTrue($entity->update()); // Successful update becomes baseline.
+            $this->assertTrue($entity->update()); // 更新成功后，将当前值作为新的比较基准。
             $entity->payload = [1];
             $this->assertTrue($entity->update());
             $this->assertSame(['[2]', 1], $queries[0]);

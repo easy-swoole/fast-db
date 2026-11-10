@@ -97,7 +97,7 @@ final class ChunkByIdTest extends TestCase
         $this->assertSame(5, (int)$this->connection->database->query('SELECT COUNT(*) FROM keyset_chunk_records WHERE status=1')->fetchColumn());
         $this->assertCount(3, $this->pages());
         $this->assertCount(3, $entityEvents);
-        $this->assertCount(8, $this->events); // Three page reads and five entity updates.
+        $this->assertCount(8, $this->events); // 读取三页数据，并执行五次实体更新。
         foreach ($this->pages() as $page) {
             $this->assertStringNotContainsString('SQL_CALC_FOUND_ROWS', $page['sql']);
             $this->assertNotContains('SQL_CALC_FOUND_ROWS', $page['options']);
@@ -458,7 +458,7 @@ class KeysetChunkNoPrimaryRecord extends KeysetChunkRecord
     #[Property] public int $id;
 }
 
-/** Actual SQLite execution with the normal FastDb executor, result snapshots and public observers. */
+/** 使用真实 SQLite、正常 FastDb 执行器、结果快照及公开查询回调。 */
 class KeysetChunkSqliteConnection extends Connection
 {
     public array $queries = [];

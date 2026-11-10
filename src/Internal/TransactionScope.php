@@ -35,7 +35,7 @@ final class TransactionScope
             && (!$requireActive || $client->isInTransaction);
     }
 
-    /** Owner 的初始 BEGIN 只允许 Facade 和实际 wire 各通过一次。 */
+    /** 拥有者首次开始事务时，只允许门面预检与实际发送检查各通过一次。 */
     public function authorizeBegin(string $sql): void
     {
         $tokens = self::tokens($sql);
@@ -49,7 +49,7 @@ final class TransactionScope
         $this->wireTicket = null;
     }
 
-    /** Facade 的无 SQL 快捷返回也要受保护；此预检不消费 owner 授权。 */
+    /** 门面入口未发送 SQL 的快捷返回也要检查；预检不消耗拥有者的首次开始授权。 */
     public function assertControl(Connection $client, string $sql): void
     {
         if ($this->beginPermit !== null && $this->beginPermit === $sql) {
@@ -84,7 +84,7 @@ final class TransactionScope
     public function assertWire(Connection $client, ?string $sql): void
     {
         $ticket = $this->wireTicket;
-        // 其他协程或改名连接的失败调用不能消费 owner 尚未使用的票据。
+        // 其他协程或改名连接的失败调用不能消耗拥有者尚未使用的授权票据。
         if ($ticket !== null) { $this->assertCurrent($client, false); }
         $this->wireTicket = null;
         if ($ticket !== null && $ticket->sql === $sql) { return; }
@@ -155,7 +155,7 @@ final class TransactionScope
         return false;
     }
 
-    /** 完整扫描边界，但普通 DML 只保留少量前缀 token，避免大批 INSERT 建完整语法树。 */
+    /** 完整扫描语句边界，普通数据操作只保留开头的少量标记，避免为批量写入构建完整语法树。 */
     private static function tokens(string $sql): array
     {
         $tokens = [];

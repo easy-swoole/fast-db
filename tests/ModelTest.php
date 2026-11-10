@@ -67,7 +67,7 @@ final class ModelTest extends BaseTestCase
 
     private function createStudentFixture(): StudentModel
     {
-        // truncate
+        // 执行 truncate 清空测试表。
         $this->truncateTable($this->tableName);
         $model       = new StudentModel();
         $model->id   = 1;
@@ -176,7 +176,7 @@ final class ModelTest extends BaseTestCase
     //            $this->assertStringStartsWith('easyswoole', $user['email']);
     //        }
     //
-    //        // not replace
+    //        // 不替换已有记录。
     //        $this->truncateTable($model->tableName());
     //        $list = [
     //            ['id' => 1, 'name' => 'easyswoole-1', 'email' => 'easyswoole1@qq.com'],
@@ -192,7 +192,7 @@ final class ModelTest extends BaseTestCase
     //            $this->assertStringStartsWith('easyswoole', $user->email);
     //        }
     //
-    //        // not transaction
+    //        // 不启用事务。
     //        $this->truncateTable($model->tableName());
     //        $list = [
     //            ['id' => 1, 'name' => 'easyswoole-1', 'email' => 'easyswoole1@qq.com'],
@@ -213,7 +213,7 @@ final class ModelTest extends BaseTestCase
     {
         $model = $this->createStudentFixture();
 
-        // Update an existing record
+        // 更新已有记录。
         // eg.1
         $updateName  = 'EasySwoole11';
         $model->name = $updateName;
@@ -240,7 +240,7 @@ final class ModelTest extends BaseTestCase
         $result        = $student->update();
         $this->assertTrue($result);
 
-        // Update a record that does not exist
+        // 更新不存在的记录。
         $model = new StudentModel(['id' => 999]);
         // or
         // $model->id = 999;
@@ -265,7 +265,7 @@ final class ModelTest extends BaseTestCase
     //        });
     //        $this->assertSame(1, $result);
     //
-    //        // Update a record that does not exist
+    //        // 更新不存在的记录。
     //        $result = $model->updateWithLimit([
     //            'name' => 'easyswoole1_update',
     //        ], ['id' => 999]);
@@ -277,17 +277,17 @@ final class ModelTest extends BaseTestCase
         $id = 1;
         $this->createStudentFixture();
 
-        // 1. with data in array format as update conditions
+        // 1. 使用数组指定更新条件。
         $arrayUpdateWhere = ['id' => $id];
         $update           = ['name' => 'EasySwoole666'];
         $result           = StudentModel::fastUpdate($arrayUpdateWhere, $update);
         $this->assertIsInt($result);
         $this->assertSame(1, $result);
-        // check update result
+        // 检查更新结果。
         $student = $this->checkRowExists(['id' => 1]);
         $this->assertSame($update['name'], $student->name);
 
-        // 2. with callable as update conditions
+        // 2. 使用回调指定更新条件。
         $callableUpdateWhere = function (QueryBuilder $queryBuilder) use ($id) {
             $queryBuilder->where('id', $id);
         };
@@ -295,35 +295,35 @@ final class ModelTest extends BaseTestCase
         $result              = StudentModel::fastUpdate($callableUpdateWhere, $update);
         $this->assertIsInt($result);
         $this->assertSame(1, $result);
-        // check update result
+        // 检查更新结果。
         $student = $this->checkRowExists(['id' => 1]);
         $this->assertSame($update['name'], $student->name);
 
-        // 3. with primary key id
+        // 3. 使用主键 id 指定更新条件。
         $this->createStudentFixture();
         $primaryKeyId = 1;
         $update       = ['name' => 'EasySwoole777'];
         $result       = StudentModel::fastUpdate($primaryKeyId, $update);
         $this->assertIsInt($result);
         $this->assertSame(1, $result);
-        // check update result
+        // 检查更新结果。
         $student = $this->checkRowExists(['id' => 1]);
         $this->assertSame($update['name'], $student->name);
 
-        // 4. with the given table name
+        // 4. 使用指定表名。
         $this->createStudentFixture();
         $primaryKeyIdStr = '1';
         $result          = StudentModel::fastDelete($primaryKeyIdStr, 'student');
         $this->assertIsInt($result);
         $this->assertSame(1, $result);
-        // check exists
+        // 检查记录是否存在。
         $student = $this->find(['id' => 1]);
         $this->assertNull($student);
     }
 
     public function testDelete(): void
     {
-        // eg.1 Delete an existing record
+        // 示例 1：删除已有记录。
         $student = $this->find(['id' => 1]);
         if (is_null($student)) {
             $student = $this->createStudentFixture();
@@ -347,16 +347,16 @@ final class ModelTest extends BaseTestCase
         $this->assertNull($student);
 
         // eg.1.2
-        // first insert
+        // 先插入记录。
         $model = $this->createStudentFixture();
-        // then delete
+        // 再删除记录。
         $result = $model->delete();
         $this->assertTrue($result);
 
         $student = $this->find(['id' => 1]);
         $this->assertNull($student);
 
-        // eg.2 Delete a record that does not exist
+        // 示例 2：删除不存在的记录。
         $model = new StudentModel(['id' => 999]);
         // or
         // $model->id = 999;
@@ -368,17 +368,17 @@ final class ModelTest extends BaseTestCase
     {
         $id = 1;
 
-        // 1. with array
+        // 1. 使用数组指定删除条件。
         $this->createStudentFixture();
         $arrayWhere = ['id' => $id];
         $result     = StudentModel::fastDelete($arrayWhere);
         $this->assertIsInt($result);
         $this->assertSame(1, $result);
-        // check exists
+        // 检查记录是否存在。
         $student = $this->find(['id' => 1]);
         $this->assertNull($student);
 
-        // 2. with callable
+        // 2. 使用回调指定删除条件。
         $this->createStudentFixture();
         $callableWhere = function (QueryBuilder $queryBuilder) use ($id) {
             $queryBuilder->where('id', $id);
@@ -386,27 +386,27 @@ final class ModelTest extends BaseTestCase
         $result        = StudentModel::fastDelete($callableWhere);
         $this->assertIsInt($result);
         $this->assertSame(1, $result);
-        // check exists
+        // 检查记录是否存在。
         $student = $this->find(['id' => 1]);
         $this->assertNull($student);
 
-        // 3. with primary key id
+        // 3. 使用主键 id 指定删除条件。
         $this->createStudentFixture();
         $primaryKeyId = 1;
         $result       = StudentModel::fastDelete($primaryKeyId);
         $this->assertIsInt($result);
         $this->assertSame(1, $result);
-        // check exists
+        // 检查记录是否存在。
         $student = $this->find(['id' => 1]);
         $this->assertNull($student);
 
-        // 4. with the given table name
+        // 4. 使用指定表名。
         $this->createStudentFixture();
         $primaryKeyIdStr = '1';
         $result          = StudentModel::fastDelete($primaryKeyIdStr, 'student');
         $this->assertIsInt($result);
         $this->assertSame(1, $result);
-        // check exists
+        // 检查记录是否存在。
         $student = $this->find(['id' => 1]);
         $this->assertNull($student);
 
@@ -415,11 +415,11 @@ final class ModelTest extends BaseTestCase
         $result          = StudentModel::fastDelete($primaryKeyIdStr, 'student');
         $this->assertIsInt($result);
         $this->assertSame(1, $result);
-        // check exists
+        // 检查记录是否存在。
         $student = $this->find(['id' => 1]);
         $this->assertNull($student);
 
-        // Delete a record that does not exist
+        // 删除不存在的记录。
         $arrayWhere = ['id' => 888];
         $result     = StudentModel::fastDelete($arrayWhere);
         $this->assertIsInt($result);
@@ -429,19 +429,19 @@ final class ModelTest extends BaseTestCase
     public function testFindRecord(): void
     {
         $this->createStudentFixture();
-        // 1. with primary key as query conditions
+        // 1. 使用主键作为查询条件。
         $student = StudentModel::findRecord(1);
         $this->assertInstanceOf(StudentModel::class, $student);
         $this->assertSame(1, $student->id);
         $this->assertSame('EasySwoole1', $student->name);
 
-        // 2. with array as query conditions
+        // 2. 使用数组作为查询条件。
         $student = StudentModel::findRecord(['name' => 'EasySwoole1']);
         $this->assertInstanceOf(StudentModel::class, $student);
         $this->assertSame(1, $student->id);
         $this->assertSame('EasySwoole1', $student->name);
 
-        // 3. with callable as query conditions
+        // 3. 使用回调作为查询条件。
         $student = StudentModel::findRecord(function (\EasySwoole\Mysqli\QueryBuilder $query) {
             $query->where('name', 'EasySwoole1');
         });
@@ -449,7 +449,7 @@ final class ModelTest extends BaseTestCase
         $this->assertSame(1, $student->id);
         $this->assertSame('EasySwoole1', $student->name);
 
-        // Query a record that does not exist
+        // 查询不存在的记录。
         $arrayWhere = ['name' => 'EasySwoole888'];
         $result     = StudentModel::findRecord($arrayWhere);
         $this->assertNull($result);
@@ -465,7 +465,7 @@ final class ModelTest extends BaseTestCase
     //        $this->assertSame(1, $result->id);
     //        $this->assertSame('EasySwoole1', $result->name);
     //
-    //        // Query a record that does not exist
+    //        // 查询不存在的记录。
     //        $studentModel = new StudentModel();
     //        $studentModel->queryLimit()->where('name', 'EasySwoole888');
     //        $result = $studentModel->find();
@@ -477,7 +477,7 @@ final class ModelTest extends BaseTestCase
         $this->createStudentFixture();
         // (new StudentModel())->insertAll([['id' => 2, 'name' => 'EasySwoole2']], false);
         (new StudentModel())->setData(['id' => 2, 'name' => 'EasySwoole2'])->insert();
-        // 1. with primary key str as query conditions
+        // 1. 使用主键字符串作为查询条件。
         $list = StudentModel::findAll('1,2', null, true);
         $this->assertIsArray($list);
         $this->assertEquals(2, count($list));
@@ -486,7 +486,7 @@ final class ModelTest extends BaseTestCase
             $this->assertStringStartsWith('EasySwoole', $student['name']);
         }
 
-        // 2. with array as query conditions
+        // 2. 使用数组作为查询条件。
         $list = StudentModel::findAll(['name' => 'EasySwoole1'], null, true);
         $this->assertIsArray($list);
         $this->assertEquals(1, count($list));
@@ -495,7 +495,7 @@ final class ModelTest extends BaseTestCase
             $this->assertSame('EasySwoole1', $student['name']);
         }
 
-        // 3. with callable as query conditions
+        // 3. 使用回调作为查询条件。
         $list = StudentModel::findAll(function (\EasySwoole\Mysqli\QueryBuilder $query) {
             $query->where('name', 'EasySwoole1')->limit(3)->orderBy('id', 'asc');
         });
@@ -506,7 +506,7 @@ final class ModelTest extends BaseTestCase
             $this->assertSame('EasySwoole1', $student->name);
         }
 
-        // Query not exist records
+        // 查询不存在的记录。
         $list = StudentModel::findAll(['name' => 'easyswoole666']);
         $this->assertIsArray($list);
         $this->assertEmpty($list);
@@ -516,7 +516,7 @@ final class ModelTest extends BaseTestCase
     {
         $this->truncateTable($this->tableName);
 
-        // get empty list
+        // 返回空列表。
         $model      = new StudentModel();
         $listResult = $model->all();
         $this->assertInstanceOf(ListResult::class, $listResult);
@@ -527,7 +527,7 @@ final class ModelTest extends BaseTestCase
         $this->assertEmpty($listResult->list());
         $this->assertEmpty($listResult->toArray());
 
-        // ready data
+        // 准备测试数据。
         $this->createStudentFixture();
         $model       = new StudentModel();
         $model->id   = 2;
@@ -535,7 +535,7 @@ final class ModelTest extends BaseTestCase
         $result      = $model->insert();
         $this->assertTrue($result);
 
-        // get one
+        // 查询单条记录。
         $model = new StudentModel();
         $model->queryLimit()->where('id', 1);
         $listResult = $model->all();
@@ -545,7 +545,7 @@ final class ModelTest extends BaseTestCase
         $this->assertInstanceOf(StudentModel::class, $student);
         $this->assertSame($student->id, 1);
 
-        // get all
+        // 查询全部记录。
         $model      = new StudentModel();
         $listResult = $model->all();
         $this->assertSame(2, $listResult->count());
@@ -618,7 +618,7 @@ final class ModelTest extends BaseTestCase
             // $user->updateWithLimit(['status' => 1]);
         }, 1);
 
-        // check the result after chunk
+        // 检查 chunk 处理后的结果。
         $list = User::findAll();
         foreach ($list as $model) {
             $this->assertSame(1, $model->status);

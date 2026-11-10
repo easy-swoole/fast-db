@@ -47,7 +47,7 @@ final class TransactionRunner
             $value = $callback($db);
             if (!$scope->isCurrent($client)) { throw new RuntimeError('The scoped transaction connection or generation changed during the callback'); }
             if ($scope->rollbackOnly) { throw new RuntimeError('Transaction is marked rollback-only by an inner scope'); }
-            // 回调已经退出；结束 owner 后旧 scope 不再限制提交观察回调的新事务。
+            // 回调已经退出；拥有者结束事务后，旧作用域不再限制提交回调中开启的新事务。
             $scope->depth--;
             $left = true;
             if ($owner) {

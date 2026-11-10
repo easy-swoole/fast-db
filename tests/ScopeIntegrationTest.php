@@ -16,7 +16,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Swoole\Coroutine;
 
-/** Real-server tests use only one uniquely named InnoDB table per case; no shared fixture tables. */
+/** 每个真实数据库用例只使用一张名称唯一的 InnoDB 表，不使用共享测试表。 */
 final class ScopeIntegrationTest extends TestCase
 {
     private ?\ReflectionProperty $singleton = null;
@@ -336,7 +336,7 @@ final class ScopeIntegrationTest extends TestCase
             $this->assertSame(0, $this->value());
             $this->assertSame(['START', 'ROLLBACK'], $this->commands('a'));
         } finally {
-            // Restore only this borrowed session, outside the managed scope, even after an assertion fails.
+            // 即使断言失败，也要在托管作用域外恢复当前借用会话的设置。
             $this->db->query((new QueryBuilder())->raw('SET SESSION sql_mode = ?', [$saved]));
         }
     }
@@ -374,7 +374,7 @@ final class ScopeIntegrationTest extends TestCase
             $this->assertSame(0, $this->value());
             $this->assertSame(['START', 'ROLLBACK'], $this->commands('a'));
         } finally {
-            // Restore the session setting only after any owned transaction has been rolled back.
+            // 先回滚仍由本用例持有的事务，再恢复会话设置。
             if ($this->db->isInTransaction()) { $this->assertTrue($this->db->rollback()); }
             $this->db->query((new QueryBuilder())->raw('SET SESSION autocommit = ?', [$saved]));
         }

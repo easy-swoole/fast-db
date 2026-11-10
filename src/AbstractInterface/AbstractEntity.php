@@ -35,7 +35,7 @@ abstract class AbstractEntity implements \JsonSerializable
     // 缓存仅属于当前实体实例；键包含连接、关联类型、执行 SQL、参数和返回形式。
     private ?RelationLoader $relationLoader = null;
 
-    // 仅预加载捕获期间登记；普通实体不保存捕获状态，也不分配 frame。
+    // 仅预加载捕获期间登记；普通实体不保存捕获状态，也不分配捕获帧。
     private static ?\WeakMap $relationPlanScopes = null;
 
     /** 外部数据变化后，可主动清空当前实体的全部关联缓存。 */

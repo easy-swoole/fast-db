@@ -49,7 +49,7 @@ final class FastDbTest extends BaseTestCase
         }
         $config->setName($name);
         $fastDb->addDb($config);
-        // debug
+        // 调试输出示例。
 //        $fastDb->setOnQuery(function (QueryResult $queryResult) {
 //            if ($queryResult->getQueryBuilder()) {
 //                echo $queryResult->getQueryBuilder()->getLastQuery() . "\n";
@@ -123,7 +123,7 @@ final class FastDbTest extends BaseTestCase
 //            $fastDb->recycleContext();
 //            $result = $fastDb->currentConnection();
 //            $this->assertNull($result);
-//            // business
+//            // 执行业务操作。
 //            $this->mockTransactionBusiness($fastDb);
 //            $fastDb->commit();
 //        } catch (\Throwable $throwable) {
@@ -152,11 +152,11 @@ final class FastDbTest extends BaseTestCase
     {
         $fastDb = $this->getFastDb();
 
-        // not invoke client
+        // 不通过 invoke，直接使用当前连接。
         try {
             $result = $fastDb->begin();
             $this->assertSame(true, $result);
-            // business
+            // 执行业务操作。
             $this->mockTransactionBusiness($fastDb);
             $fastDb->commit();
         } catch (\Throwable $throwable) {
@@ -164,12 +164,12 @@ final class FastDbTest extends BaseTestCase
             throw $throwable;
         }
 
-        // not invoke client begin multiple times
+        // 不通过 invoke，在当前连接上多次调用 begin。
         try {
             $fastDb->begin();
             $result = $fastDb->begin();
             $this->assertSame(true, $result);
-            // business
+            // 执行业务操作。
             $this->mockTransactionBusiness($fastDb);
             $fastDb->commit();
         } catch (\Throwable $throwable) {
@@ -177,12 +177,12 @@ final class FastDbTest extends BaseTestCase
             throw $throwable;
         }
 
-        // invoke client
+        // 通过 invoke 显式传入客户端。
         $fastDb->invoke(function (Connection $client) use ($fastDb) {
             try {
                 $result = $fastDb->begin($client);
                 $this->assertSame(true, $result);
-                // business
+                // 执行业务操作。
                 $this->mockTransactionBusiness($fastDb);
                 $fastDb->commit($client);
             } catch (\Throwable $throwable) {
@@ -191,13 +191,13 @@ final class FastDbTest extends BaseTestCase
             }
         });
 
-        // invoke client with begin multiple times
+        // 通过 invoke 显式传入客户端，并多次调用 begin。
         $fastDb->invoke(function (Connection $client) use ($fastDb) {
             try {
                 $fastDb->begin($client);
                 $result = $fastDb->begin($client);
                 $this->assertSame(true, $result);
-                // business
+                // 执行业务操作。
                 $this->mockTransactionBusiness($fastDb);
                 $fastDb->commit($client);
             } catch (\Throwable $throwable) {
@@ -206,7 +206,7 @@ final class FastDbTest extends BaseTestCase
             }
         });
 
-        // error pool
+        // 验证连接池获取连接失败。
         $errorFastDb = $this->getFastDb(self::ERROR_NAME)->selectConnection(self::ERROR_NAME);
         $this->expectException(RuntimeError::class);
         $this->expectExceptionMessage('Access denied');
@@ -217,10 +217,10 @@ final class FastDbTest extends BaseTestCase
     {
         $fastDb = $this->getFastDb();
 
-        // not invoke client
+        // 不通过 invoke，直接使用当前连接。
         try {
             $fastDb->begin();
-            // business
+            // 执行业务操作。
             $this->mockTransactionBusiness($fastDb);
             $result = $fastDb->commit();
             $this->assertSame(true, $result);
@@ -229,11 +229,11 @@ final class FastDbTest extends BaseTestCase
             throw $throwable;
         }
 
-        // invoke client
+        // 通过 invoke 显式传入客户端。
         $fastDb->invoke(function (Connection $client) use ($fastDb) {
             try {
                 $fastDb->begin($client);
-                // business
+                // 执行业务操作。
                 $this->mockTransactionBusiness($fastDb);
                 $result = $fastDb->commit($client);
                 $this->assertSame(true, $result);
@@ -243,7 +243,7 @@ final class FastDbTest extends BaseTestCase
             }
         });
 
-        // not in transaction
+        // 当前没有活动事务。
         $result = $fastDb->commit();
         $this->assertSame(true, $result);
     }
@@ -252,23 +252,23 @@ final class FastDbTest extends BaseTestCase
     {
         $fastDb = $this->getFastDb();
 
-        // not invoke client
+        // 不通过 invoke，直接使用当前连接。
         $fastDb->begin();
-        // business
+        // 执行业务操作。
         $this->mockTransactionBusiness($fastDb);
         $result = $fastDb->rollback();
         $this->assertSame(true, $result);
 
-        // invoke client
+        // 通过 invoke 显式传入客户端。
         $fastDb->invoke(function (Connection $client) use ($fastDb) {
             $fastDb->begin($client);
-            // business
+            // 执行业务操作。
             $this->mockTransactionBusiness($fastDb);
             $result = $fastDb->rollback($client);
             $this->assertSame(true, $result);
         });
 
-        // not in transaction
+        // 当前没有活动事务。
         $result = $fastDb->rollback();
         $this->assertSame(true, $result);
     }

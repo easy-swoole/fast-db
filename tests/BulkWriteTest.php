@@ -193,7 +193,7 @@ final class BulkWriteTest extends TestCase
     {
         $this->connection->database->exec("INSERT INTO bulk_write_records VALUES (1,'old',5,'[99]')");
         $rows = $this->rows(2);
-        $this->connection->affectedRows = [3]; // MySQL: one changed duplicate (2) plus one inserted row (1).
+        $this->connection->affectedRows = [3]; // MySQL：一条重复记录发生变化（计 2 行），再新增一条记录（计 1 行）。
         $this->assertSame(3, BulkWriteFixtureRecord::fastUpsert($rows, ['name', 'count'], batchSize: 2));
         $this->assertSame([
             ['id' => 1, 'name' => 'raw-1', 'count' => 10, 'payload' => '[99]'],
@@ -245,7 +245,7 @@ final class BulkWriteTest extends TestCase
             }
         };
         $this->connection->beforeQuery = function (int $batch) use (&$yielded): void { $this->assertSame($batch === 1 ? 500 : 501, $yielded); };
-        $this->connection->affectedRows = [501, 1]; // MySQL update/insert counts, independent of SQLite's conflict row count.
+        $this->connection->affectedRows = [501, 1]; // 使用 MySQL 的更新/新增影响行数，不依赖 SQLite 的冲突记录计数。
         $this->assertSame(502, BulkWriteFixtureRecord::fastUpsert($source(), ['name', 'count']));
         $this->assertCount(2, $this->connection->queries);
         $this->assertSame([2000, 4], array_map(static fn(array $query): int => count($query['parameters']), $this->connection->queries));
@@ -495,7 +495,7 @@ class BulkWriteFixtureList extends ConvertList
     public function toValue(): string { self::$valueCalls++; return parent::toValue(); }
 }
 
-/** Logs original MySQL SQL; only the SQLite execution copy rewrites its upsert grammar. */
+/** 记录原始 MySQL SQL，仅在交给 SQLite 执行的副本中改写 upsert 语法。 */
 class BulkWriteFixtureConnection extends Connection
 {
     public array $queries = [];

@@ -8,7 +8,7 @@ class ConvertDateTime extends \DateTime implements ConvertObjectInterface
     public static function toObject(mixed $data): static
     {
         if($data instanceof \DateTimeInterface){
-            // Copy rather than sharing mutable state; DATETIME has no timezone.
+            // 复制日期对象以隔离可变状态；MySQL DATETIME 本身不保存时区。
             return new static($data->format('Y-m-d H:i:s.u'), $data->getTimezone());
         }
         if(is_int($data)){
@@ -23,7 +23,7 @@ class ConvertDateTime extends \DateTime implements ConvertObjectInterface
             throw new \InvalidArgumentException('ConvertDateTime expects a date/time string, DateTimeInterface, integer timestamp or null');
         }
 
-        // DateTime otherwise silently normalizes impossible MySQL calendar dates.
+                // DateTime 会自动纠正不存在的日期，因此先校验 MySQL 日期各字段。
         if(preg_match('/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?$/D', $data, $matches)){
             $format = isset($matches[2]) ? '!Y-m-d H:i:s.u' : '!Y-m-d H:i:s';
             $parsed = \DateTimeImmutable::createFromFormat($format, $data);

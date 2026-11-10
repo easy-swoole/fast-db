@@ -267,7 +267,7 @@ final class EntityReentryTest extends TestCase
         $this->assertArrayNotHasKey('secret', $entity->all()->first()->toArray());
     }
 
-    public function testLowLevelConnectionObserverAcceptsTheWriteBeforeReentry(): void
+    public function testProtocolCompletionAcceptsTheWriteBeforeGlobalObserverReentry(): void
     {
         $check = function (): void {
             [$socket, $peer] = swoole_coroutine_socketpair(AF_UNIX, SOCK_STREAM, 0);
@@ -283,14 +283,17 @@ final class EntityReentryTest extends TestCase
             $this->bindConnection($client);
             $entity = $this->entity();
             $entered = false;
-            $client->onQuery(function () use ($entity, &$entered): void {
+            $this->db->setOnQuery(function (QueryResult $result) use ($entity, &$entered): void {
                 if ($entered) { return; }
                 $entered = true;
+                $this->assertSame(1, $result->getAffectedRows());
+                $this->assertNull($result->getException());
+                $this->assertSame(1, $this->baseline($entity)['a']);
                 $entity->a = 0;
                 $this->assertTrue($entity->update());
             });
             try {
-                // Each UPDATE binds a value and its primary key. Prepare metadata uses its own sequence.
+                // 每条 UPDATE 都绑定字段值和主键；预处理元数据使用独立的报文序号。
                 foreach ([7, 8] as $id) {
                     $packets = [[1, "\0" . pack('VvvCv', $id, 0, 2, 0, 0)], [2, 'parameter'], [3, 'parameter'],
                         [4, "\xfe\0\0\x02\0"], [1, "\0\x01\0\x02\0\0\0"]];
@@ -331,7 +334,7 @@ class EntityReentryRecord extends AbstractEntity
 
 class EntityReentryChildRecord extends EntityReentryRecord {}
 
-/** Real SQL execution and FastDb's actual executor, with connection acquisition kept offline. */
+/** 使用真实 SQL 和 FastDb 执行器，仅替换连接获取过程以避免联网。 */
 class EntityReentrySqliteConnection extends Connection
 {
     public array $writes = [];

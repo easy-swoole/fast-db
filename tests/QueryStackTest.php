@@ -19,17 +19,12 @@ final class QueryStackTest extends TestCase
 {
     private function database(int $capacity = 256): FastDb
     {
-        $db = (new FastDb())->isEnableQueryStack(true, $capacity);
-        $this->bindClient($db);
-        return $db;
-    }
-
-    private function bindClient(FastDb $db): void
-    {
         $client = $this->createStub(Connection::class);
         $client->method('rawQuery')->willReturn([]);
+        $db = (new FastDb())->isEnableQueryStack(true, $capacity);
         (new \ReflectionProperty(FastDb::class, 'currentConnection'))
             ->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $client]]);
+        return $db;
     }
 
     private function sql(FastDb $db): ?array
@@ -236,7 +231,7 @@ final class QueryStackTest extends TestCase
         try {
             for ($i = 0; $i < 3; $i++) {
                 try { $db->rawQuery('SELECT never_sent'); $this->fail('Fixture acquisition must fail'); }
-                catch (RuntimeError) { /* Each failed acquire occupies one diagnostic slot. */ }
+                catch (RuntimeError) { /* 每次获取连接失败都会占用一个诊断记录位置。 */ }
             }
             $this->assertNull($db->currentConnection());
             $this->assertCount(2, $db->getQueryStack());
@@ -290,7 +285,7 @@ final class QueryStackTest extends TestCase
             $this->assertSame('b', $ready->pop(2));
             $this->assertNull($db->getQueryStack(), 'The parent coroutine cannot see either child stack.');
             $db->isEnableQueryStack(true, 2);
-            // A subsequent increase must not resurrect records that were already trimmed.
+            // 后续调大容量不能恢复已经裁掉的记录。
             $db->isEnableQueryStack(true, 4);
             $resume->push(true);
             $resume->push(true);
@@ -302,72 +297,6 @@ final class QueryStackTest extends TestCase
                 $this->assertNull($entries[$name]->get(), 'Coroutine exit must release its diagnostic events.');
             }
         } finally { $db->reset(); }
-    }
-
-    public function testClonedDatabaseHasIndependentDiagnosticCapacityAndEnabledFlag(): void
-    {
-        $original = $this->database(3);
-        $original->rawQuery('SELECT 1');
-        $copy = clone $original;
-        $this->assertNull($copy->getQueryStack(), 'Clones do not inherit diagnostic history.');
-        $this->bindClient($copy);
-        $copy->isEnableQueryStack(false, 1);
-        $original->rawQuery('SELECT 2');
-        $copy->rawQuery('SELECT ignored');
-        $this->assertSame(['SELECT 1', 'SELECT 2'], $this->sql($original));
-        $this->assertNull($copy->getQueryStack());
-        $copy->isEnableQueryStack(true, 1);
-        $copy->rawQuery('SELECT copy');
-        $this->assertSame(['SELECT copy'], $this->sql($copy));
-        $this->assertSame(['SELECT 1', 'SELECT 2'], $this->sql($original));
-    }
-
-    public function testClonedDatabaseCanReplaceItsObserverWithoutChangingTheOriginal(): void
-    {
-        $original = $this->database();
-        $originalObserved = $copyObserved = [];
-        $original->setOnQuery(static function ($result) use (&$originalObserved): void { $originalObserved[] = $result->getRawSql(); });
-        $copy = clone $original;
-        $this->bindClient($copy);
-        $copy->setOnQuery(static function ($result) use (&$copyObserved): void { $copyObserved[] = $result->getRawSql(); });
-        $original->rawQuery('SELECT original');
-        $copy->rawQuery('SELECT copy');
-        $this->assertSame(['SELECT original'], $originalObserved);
-        $this->assertSame(['SELECT copy'], $copyObserved);
-    }
-
-    public function testCloneRegistersItsOwnCoroutineCleanupAfterTheOriginalAlreadySelectedAConnection(): void
-    {
-        $finished = new Coroutine\Channel(1);
-        $copy = $originalPool = $copyPool = $event = $failure = null;
-        Coroutine::create(function () use ($finished, &$copy, &$originalPool, &$copyPool, &$event, &$failure): void {
-            Coroutine::defer(static fn () => $finished->push(null));
-            try {
-                $config = new Config(['maxObjectNum' => 2, 'minObjectNum' => 0, 'intervalCheckTime' => 0]);
-                $original = (new FastDb())->addDb($config, 'named')->isEnableQueryStack(true);
-                $original->selectConnection('named');
-                $originalPool = new QueryStackLifecyclePool($config);
-                (new \ReflectionProperty(FastDb::class, 'pools'))->setValue($original, ['named' => $originalPool]);
-                $copy = clone $original;
-                $this->assertSame('named', $copy->selectConnection());
-                $this->assertNotSame($original->getConfig('named'), $copy->getConfig('named'));
-                $copyPool = new QueryStackLifecyclePool($copy->getConfig('named'));
-                (new \ReflectionProperty(FastDb::class, 'pools'))->setValue($copy, ['named' => $copyPool]);
-                $copy->rawQuery('SELECT clone');
-                $this->assertSame(['connectionAcquire', 'query'], array_column($copy->getQueryStack(), 'type'));
-                $event = \WeakReference::create($copy->getQueryStack(0));
-            } catch (\Throwable $error) { $failure = $error; }
-        });
-        try {
-            $this->assertNull($finished->pop(2));
-            if ($failure !== null) { throw $failure; }
-            $this->assertSame(0, $originalPool->recycles);
-            $this->assertSame(1, $copyPool->recycles, 'The clone must have its own defer and return its borrowed connection.');
-            $this->assertNull($event->get(), 'The clone must clear its coroutine diagnostic history on exit.');
-        } finally {
-            $originalPool?->destroy();
-            $copyPool?->destroy();
-        }
     }
 }
 
@@ -385,10 +314,4 @@ class QueryStackConnection extends Connection
 class QueryStackPool extends Pool
 {
     protected function createObject(): ObjectInterface { return new QueryStackConnection(new DriverConfig()); }
-}
-
-class QueryStackLifecyclePool extends QueryStackPool
-{
-    public int $recycles = 0;
-    public function recycleObj($obj): bool { $this->recycles++; return parent::recycleObj($obj); }
 }

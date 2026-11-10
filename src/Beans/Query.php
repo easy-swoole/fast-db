@@ -217,7 +217,7 @@ class Query
 
     function __clone()
     {
-        //chunk 的时候，复用query builder
+        // 分块读取时复用底层查询构造器。
         $this->queryBuilder = $this->queryBuilder === null ? null : clone $this->queryBuilder;
         $this->selection = clone $this->selection;
     }

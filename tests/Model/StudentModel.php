@@ -16,7 +16,7 @@ use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Attributes\Relate;
 
 /**
- * Class StudentModel
+ * StudentModel 测试模型。
  *
  * @package EasySwoole\FastDb\Tests\Model
  * @property int    $id

@@ -6,21 +6,15 @@ use EasySwoole\FastDb\Beans\QueryStack;
 use EasySwoole\FastDb\Mysql\QueryResult;
 use Swoole\Coroutine;
 
-/** @internal Optional query observers and bounded, coroutine-local diagnostic events. */
+/** @internal 管理可选查询回调，以及按协程隔离、具有容量上限的诊断事件。 */
 final class QueryDiagnostics
 {
     private bool $enabled = false;
     private int $maxStackSize = 256;
     private mixed $onQuery = null;
     private array $stacks = [];
-    /** The oldest slot in each full ring; partially filled rings start at zero. */
+    /** 记录每个满环中最旧事件的槽位；未满时从零开始顺序追加。 */
     private array $offsets = [];
-
-    public function __clone()
-    {
-        $this->stacks = [];
-        $this->offsets = [];
-    }
 
     public function configure(bool $enabled, int $maxStackSize = 256): void
     {

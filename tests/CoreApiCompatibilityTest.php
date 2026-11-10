@@ -13,7 +13,7 @@ final class CoreApiCompatibilityTest extends TestCase
     {
         $contracts = json_decode(file_get_contents(__DIR__ . '/fixtures/core-public-api.json'), true, 512, JSON_THROW_ON_ERROR);
         $reflection = new \ReflectionClass(AbstractEntity::class);
-        // Only established entity entry points are fixed; additions and internal refactors are allowed.
+        // 只固定现有实体公开入口，允许新增方法和重构内部实现。
         foreach ($contracts[AbstractEntity::class]['methods'] as $name => $expected) {
             $this->assertTrue($reflection->hasMethod($name), AbstractEntity::class . '::' . $name);
             $method = $reflection->getMethod($name);

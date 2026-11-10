@@ -66,7 +66,7 @@ final class ConnectionHealthTest extends TestCase
             } catch (QueryException $error) {
                 $this->assertSame(1064, $error->getCode());
             }
-            // Failed prepared execution still closes its statement; consume its commands.
+            // 预处理执行失败后仍会关闭语句；读取这些命令以清空测试端数据。
             $this->drainQuery($peer, $mode);
             $this->assertNull($this->tick($connection));
             $this->reply($peer, $this->ok());
@@ -144,7 +144,7 @@ final class ConnectionHealthTest extends TestCase
         });
     }
 
-    /** Use the real protocol over a socket pair, with response packets queued before each operation. */
+    /** 通过成对 Socket 使用真实协议，并在每次操作前预置响应报文。 */
     private function withConnection(callable $test): void
     {
         $check = function () use ($test): void {
@@ -168,7 +168,7 @@ final class ConnectionHealthTest extends TestCase
     private function query(Connection $connection, Socket $peer, string $mode, string $result): void
     {
         if ($mode === 'prepared') {
-            // COM_STMT_PREPARE success: statement 7, no columns and no parameters.
+            // COM_STMT_PREPARE 成功响应：语句编号为 7，没有结果列和参数。
             $this->reply($peer, "\0" . pack('VvvCv', 7, 0, 0, 0, 0));
         }
         $this->reply($peer, $result);

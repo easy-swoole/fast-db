@@ -37,7 +37,7 @@ final class RequiredWhereTest extends TestCase
             (1, 1, 1, 0, 'own'), (2, 2, 1, 0, 'other'),
             (3, 1, 0, 1, 'own second'), (4, 2, 0, 1, 'other second')");
 
-        // Execute the actual prepared SQL; canned rows would conceal OR precedence bugs.
+        // 执行实际的预处理 SQL；固定返回结果会掩盖 OR 优先级问题。
         $affected = 0;
         $client = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()
             ->onlyMethods(['query', 'getLastAffectRows', 'getLastInsertId'])->getMock();

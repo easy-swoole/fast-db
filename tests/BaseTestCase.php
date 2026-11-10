@@ -25,7 +25,7 @@ class BaseTestCase extends TestCase
 
         FastDb::getInstance()->selectConnection('default');
 
-        // check table exists
+        // 检查测试表是否存在。
         $this->createTestTable();
     }
 

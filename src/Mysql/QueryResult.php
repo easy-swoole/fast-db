@@ -4,7 +4,7 @@ namespace EasySwoole\FastDb\Mysql;
 
 use EasySwoole\Mysqli\QueryBuilder;
 
-/** 保存单次执行的结果快照，不持有数据库连接，也不承担事务登记职责。 */
+/** 保存单次执行的数据与元数据快照，不直接持有数据库连接，也不承担事务登记职责。 */
 class QueryResult
 {
     protected float $endTime;
@@ -12,7 +12,7 @@ class QueryResult
     // 单调时钟仅用于计算耗时，不能作为日期时间使用。
     protected int|float $startTick;
     protected float $duration = 0.0;
-    // count 不回指主结果，查询结束后不会保留连接或执行闭包。
+    // 仅保存总数查询结果，不主动保存其主查询、连接或执行闭包的引用。
     private ?self $totalResult = null;
     protected mixed $result = null;
     protected ?\Throwable $exception = null;

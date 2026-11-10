@@ -8,7 +8,7 @@ use EasySwoole\FastDb\Mysql\TransactionContext;
 use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\Mysqli\Transaction\TransactionCompletionFlags;
 
-/** 一次执行的临时状态；结果不回指 frame 或连接，执行退出即可释放回调和请求。 */
+/** 集中保存单次执行状态；结果不直接引用执行帧或连接，完成回调在调用前解除登记。 */
 final class ExecutionFrame
 {
     public readonly QueryResult $result;
@@ -16,8 +16,6 @@ final class ExecutionFrame
     public bool $completed = false;
     public ?self $count = null;
     public ?\Throwable $failure = null;
-    public ?\Closure $observer = null;
-    public float $driverStartedAt = 0.0;
     public ?string $transactionCommand = null;
     public ?TransactionCompletionFlags $completionFlags = null;
     public ?TransactionContext $transactionContext = null;
@@ -30,7 +28,6 @@ final class ExecutionFrame
         public readonly ?string $sql = null,
         ?callable $onComplete = null,
         public readonly bool $captureTotal = false,
-        public readonly bool $deferObserver = false,
     ) {
         $this->result = new QueryResult(microtime(true));
         $this->result->setRawSql($sql);
@@ -43,7 +40,7 @@ final class ExecutionFrame
             && ($builder !== null || $this->sql === $sql);
     }
 
-    /** 工厂及作用域预检完成后才授权本次 wire，重入构建不能提前消费外层帧。 */
+    /** 工厂及作用域预检完成后才授权本次发送，重入构建不能提前消费外层帧。 */
     public function start(): void { $this->started = true; }
 
     public function succeed(Connection $client, bool|array $value): void
@@ -68,7 +65,7 @@ final class ExecutionFrame
         }
     }
 
-    /** 在任何公开观察回调之前消费；失败回调不能被重入的另一条 SQL 再次调用。 */
+    /** 在公开查询回调前取出并清空，保证完成回调只调用一次并及时解除捕获对象的登记。 */
     public function complete(Connection $client): void
     {
         $callback = $this->onComplete;
@@ -80,19 +77,6 @@ final class ExecutionFrame
     {
         return $this->captureTotal && $this->builder !== null
             && in_array('SQL_CALC_FOUND_ROWS', $this->result->getQueryBuilder()->getLastQueryOptions(), true);
-    }
-
-    public function invalidateTotal(?\Throwable $error = null): void
-    {
-        $this->result->setTotalResult(null);
-        if ($error === null) { $this->count = null; return; }
-        $count = $this->count?->result;
-        if ($count !== null) {
-            $count->setResult(null);
-            $count->setAffectedRows(null);
-            $count->setInsertId(null);
-            $count->setException($error);
-        }
     }
 
     private function snapshot(): void

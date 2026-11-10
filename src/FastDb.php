@@ -26,6 +26,7 @@ class FastDb
 {
     use Singleton;
 
+    // 未配置诊断时保持为空；读取和清理都不应额外创建诊断对象。
     private ?QueryDiagnostics $diagnostics = null;
 
     protected array $configs = [];
@@ -33,22 +34,9 @@ class FastDb
     protected array $currentConnection = [];
     protected array $selectConnection = [];
 
-    // 每个协程只登记一次退出清理；提前回收后仍保留登记，防止 defer 累积。
+    // 每个协程只登记一次退出清理；提前回收后仍保留登记，防止退出回调累积。
     // false 表示只登记了外部连接/选库，本实例尚未承担池连接的归还责任。
     private array $contextCleanupRegistered = [];
-
-    public function __clone()
-    {
-        $selected = $this->selectConnection();
-        foreach ($this->configs as $name => $config) { $this->configs[$name] = clone $config; }
-        // 借用、池和 defer 归属不能随配置复制到另一个管理器。
-        $this->pools = [];
-        $this->currentConnection = [];
-        $this->selectConnection = [];
-        $this->contextCleanupRegistered = [];
-        if ($this->diagnostics !== null) { $this->diagnostics = clone $this->diagnostics; }
-        $this->selectConnection($selected);
-    }
 
     public function isEnableQueryStack(bool $bool, int $maxStackSize = 256): static
     {
@@ -181,7 +169,7 @@ class FastDb
         return ($connection ?? $this->currentConnection())?->isInTransaction ?? false;
     }
 
-    /** completion 直接属于本次执行；指定连接不会改变回调可见的选库。 */
+    /** 完成回调直接属于本次执行；指定连接不会改变回调可见的选库。 */
     public function query(QueryBuilder|callable $queryBuilder, ?float $timeout = null,
         ?callable $onComplete = null, ?string $connection = null): QueryResult
     {
@@ -232,10 +220,11 @@ class FastDb
             return $client->runFrame($frame, $operation);
         } finally {
             try {
-                // 工厂或低层回调中首次启用诊断，也适用于本次已完成的 SQL。
+                // 工厂或完成回调中首次启用诊断，也适用于本次已完成的 SQL。
                 $this->diagnostics?->notify($frame->result);
                 if ($frame->count !== null) { $this->diagnostics?->notify($frame->count->result); }
             } catch (\Throwable $error) {
+                // 查询或完成回调已失败时保留原异常，只有原流程成功才抛出日志回调异常。
                 if ($frame->failure === null) { throw $error; }
             }
         }
@@ -336,7 +325,7 @@ class FastDb
         $config = $this->getConfig($name);
         if ($config === false) { throw new RuntimeError("connection {$name} not register yet"); }
         $pool = $this->pools[$name] ??= new Pool($config);
-        // 仅在借用入口已开启 trace 时计时；计时值始终在本方法内消费。
+        // 仅在借用入口已开启查询跟踪时计时；计时值始终在本方法内消费。
         $trace = $this->diagnostics?->enabled() ?? false;
         $startTime = $trace ? microtime(true) : 0.0;
         $startTick = $trace ? hrtime(true) : 0;

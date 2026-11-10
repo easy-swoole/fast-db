@@ -106,7 +106,7 @@ final class TransactionTest extends TestCase
         $this->db->setOnQuery(function () use (&$nested): void {
             if (!$nested) {
                 $nested = true;
-                // Overwrite metadata on the original connection, then select another one.
+                // 覆盖原连接的查询元数据，再切换到另一连接。
                 $this->db->rawQuery("UPDATE `{$this->table}` SET value=0 WHERE id=-1");
                 $this->db->selectConnection('other');
                 $this->db->rawQuery('SELECT 1');
@@ -435,7 +435,7 @@ final class TransactionTest extends TestCase
     public function testRealQueryTimeoutAndReconnectForBothProtocols(): void
     {
         foreach (['raw', 'prepared'] as $mode) {
-            $this->db->rawQuery('SELECT 1'); // Acquire and connect before timing.
+            $this->db->rawQuery('SELECT 1'); // 开始计时前先获取并建立连接。
             $client = $this->db->currentConnection();
             $started = microtime(true);
             try {
@@ -489,7 +489,7 @@ final class TransactionTest extends TestCase
         $this->db->recycleContext(false);
         $this->assertFalse($client->isInTransaction);
         $this->assertTrue($this->db->begin());
-        $this->write(3); // Waits for the disconnected session to release its row lock.
+        $this->write(3); // 等待服务端释放已断开会话持有的行锁。
         $this->assertTrue($this->db->rollback());
         $this->assertSame(0, $this->value());
         $this->assertTrue($entity->update());
@@ -538,7 +538,7 @@ final class TransactionTest extends TestCase
             }
             $other->recycleContext(false);
             $this->db->rollback();
-            // Locks synchronize with server processing the closed session.
+            // 通过锁竞争等待服务端处理关闭的会话。
             $this->db->begin();
             $this->write(0);
             $this->db->commit();
@@ -726,7 +726,7 @@ final class TransactionTest extends TestCase
                 }
                 $db->recycleContext(false);
                 $this->assertTrue($finished->pop(3.0));
-                // Response delay happens after forwarding the command: COMMIT may succeed on the server.
+                // 命令转发后才延迟响应，因此服务端可能已经成功执行 COMMIT。
                 $this->assertSame($operation === 'commit' ? 1 : 0, $this->value());
             } finally { $db->recycleContext(false); $db->reset(); }
         }

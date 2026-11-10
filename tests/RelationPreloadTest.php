@@ -164,7 +164,7 @@ final class RelationPreloadTest extends TestCase
         $this->connection->database->exec("INSERT INTO preload_parents VALUES (4,NULL,'null group')");
         $this->connection->database->exec("INSERT INTO preload_children VALUES (14,4,NULL,'null child','[14]')");
         $lazyParent = new PreloadFixtureParent(['id' => 4, 'group_code' => null, 'name' => 'null group']);
-        // The current driver compiles '= NULL'; preloading must preserve that lazy-query result.
+        // 当前驱动生成 '= NULL'；预加载必须与按需查询的结果保持一致。
         $this->assertSame([], $lazyParent->groupChildren()->list());
         $this->assertCount(1, $this->connection->queries);
         $parents = $this->parents('groupChildren');
@@ -249,7 +249,7 @@ final class RelationPreloadTest extends TestCase
         (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db,
             [Coroutine::getCid() => ['default' => $this->connection, 'other' => $other]]);
 
-        // The existing lazy path constructs the target before choosing its execution connection.
+        // 现有按需加载流程先构造目标模型，再确定执行连接。
         $lazy = new PreloadFixtureParent(['id' => 1]);
         $this->assertSame([111], array_map(static fn(PreloadFixtureConstructorChild $child): int => $child->id, $lazy->constructorChildren()->list()));
         $this->assertCount(1, $other->queries);
@@ -282,7 +282,7 @@ final class RelationPreloadTest extends TestCase
         $this->assertSame([12], array_map(static fn(PreloadFixtureChild $child): int => $child->id, $parents[0]->dynamicChildren()->list()));
         $this->assertSame([31], array_map(static fn(PreloadFixtureChild $child): int => $child->id, $parents[1]->dynamicChildren()->list()));
         $this->assertSame([], $parents[2]->dynamicChildren()->list());
-        // The normal-table filters differ, and the archived table is a third compatible-plan group.
+        // 常规表的筛选条件各不相同，归档表另形成第三组可合并的查询计划。
         $this->assertCount(4, $this->connection->queries);
         $this->assertCount(4, $this->events);
     }
@@ -377,7 +377,7 @@ final class RelationPreloadTest extends TestCase
         $this->assertSame([1500], $seen[500]);
         $this->assertSame([1505], $seen[505]);
         $this->assertSame(505, array_sum(array_map('count', $seen)));
-        $this->assertCount(4, $this->connection->queries); // Parent SELECT plus 250/250/5-key batches.
+        $this->assertCount(4, $this->connection->queries); // 父表执行一次 SELECT，关联键再按 250/250/5 分批查询。
         $this->assertCount(4, $this->events);
     }
 

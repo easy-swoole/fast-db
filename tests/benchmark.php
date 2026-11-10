@@ -45,7 +45,7 @@ Coroutine\run(function () use (&$exit): void {
                                 for ($index = 0; $index < $iterations; $index++) {
                                     $t = microtime(true); $attempts++;
                                     try {
-                                        // invoke releases after every operation, so 64 workers share a 32-connection pool.
+                                        // invoke 在每次操作后归还连接，因此 64 个工作协程共用容量为 32 的连接池。
                                         $db->invoke(function () use ($db, $table, $worker, $index, $mode, &$commits, &$rollbacks, &$sql): void {
                                             $id = $mode === 'contended_transaction' ? 1 : $worker + 1;
                                             if (str_contains($mode, 'transaction')) {

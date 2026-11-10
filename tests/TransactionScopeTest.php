@@ -100,7 +100,7 @@ final class TransactionScopeTest extends TestCase
         }
         (new \ReflectionProperty(FastDb::class, 'pools'))->setValue($db, $pools);
         try {
-            // Borrow B first through the facade: a rejection must preflight all clients before recycling any.
+            // 先通过 FastDb 借用 B：拒绝回收前必须检查全部连接，不能提前归还任何客户端。
             $db->selectConnection('b');
             $db->rawQuery('SELECT 1');
             $db->selectConnection('a');
@@ -147,7 +147,7 @@ final class TransactionScopeTest extends TestCase
         $exitCaught = false;
         try {
             Coroutine::create(function () use ($db, $finished, &$context, &$scope, &$businessFinally, &$exitCaught): void {
-                // FastDb's later defer must complete before this notification.
+                // FastDb 后登记的 defer 必须先完成，再发送此通知。
                 Coroutine::defer(static fn() => $finished->push(true));
                 $db->selectConnection('a');
                 try {
@@ -489,7 +489,7 @@ final class TransactionScopeTest extends TestCase
                 $entity->amount = 10;
                 $this->assertTrue($entity->update());
                 try { $this->db->transaction(static function (): void { throw new \RuntimeException('joined failure'); }); }
-                catch (\RuntimeException) { /* Outer application catches it; the transaction still cannot commit. */ }
+                catch (\RuntimeException) { /* 外层业务捕获了异常，事务仍然不能提交。 */ }
             });
             $this->fail('A rollback-only owner must fail');
         } catch (RuntimeError) { $this->addToAssertionCount(1); }
@@ -593,7 +593,7 @@ class TransactionScopeLedgerRecord extends AbstractEntity
     public function tableName(): string { return 'scope_ledger'; }
 }
 
-/** Uses real SQLite transactions; records forwarded SQL/timeout while emulating only MySQL control syntax. */
+/** 使用真实 SQLite 事务并记录 SQL/timeout 参数，仅模拟 MySQL 的事务控制语法。 */
 class TransactionScopeSqliteClient extends Connection
 {
     public array $queries = [];
@@ -606,7 +606,7 @@ class TransactionScopeSqliteClient extends Connection
     public function intervalCheck(): bool { return true; }
     public function close(): bool
     {
-        // Closing a real MySQL session rolls its transaction back; emulate that physical effect in SQLite.
+        // 关闭真实 MySQL 会话会回滚其事务；这里用 SQLite 模拟这一效果。
         if ($this->database->inTransaction()) { $this->database->rollBack(); }
         $this->closed = true;
         return parent::close();
@@ -634,7 +634,7 @@ class TransactionScopeSqliteClient extends Connection
     }
 }
 
-/** Real AbstractPool allocation/restore lifecycle, with only the network client factory substituted. */
+/** 使用真实 AbstractPool 分配和归还流程，仅替换网络客户端的创建方法。 */
 class TransactionScopeLifecyclePool extends Pool
 {
     public int $borrows = 0;
@@ -657,7 +657,7 @@ class TransactionScopeLifecyclePool extends Pool
     public function reset(): AbstractPool { $this->resets++; return parent::reset(); }
 }
 
-/** A failed physical close deliberately leaves the original context and SQLite transaction untouched. */
+/** 模拟物理关闭失败时，保留原上下文和 SQLite 事务。 */
 class TransactionScopeCleanupFailureClient extends TransactionScopeSqliteClient
 {
     public bool $allowClose = false;
