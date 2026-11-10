@@ -42,7 +42,6 @@ final class EntityReentryTest extends TestCase
     {
         if ($this->singleton === null) { return; }
         if ($this->connection->database->inTransaction()) { $this->connection->database->rollBack(); }
-        $this->connection->finishTransaction(false);
         $this->db->setOnQuery(static function (): void {});
         (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db, []);
         $this->singleton->setValue(null, $this->originalInstance);
@@ -71,7 +70,7 @@ final class EntityReentryTest extends TestCase
     public static function observerModes(): array { return [['global'], ['entity']]; }
     public static function sameFieldCases(): array { return [['global', 2], ['entity', 2], ['global', 0], ['entity', 0]]; }
 
-    public function testTransactionRestorationStaysIndependentAcrossModelsAndDoesNotRetainReleasedEntities(): void
+    public function testRollbackKeepsSuccessfulBaselinesAndBusinessCanReloadBeforeRetry(): void
     {
         $first = $this->entity();
         $second = new EntityReentryChildRecord(['id' => 1, 'a' => 4, 'b' => 0]);
@@ -87,9 +86,16 @@ final class EntityReentryTest extends TestCase
         $this->assertNull($reference->get());
 
         $this->assertTrue($this->db->rollback());
-        $this->assertSame(0, $this->baseline($first)['a']);
-        $this->assertSame(4, $this->baseline($second)['a']);
+        $this->assertSame(1, $this->baseline($first)['a']);
+        $this->assertSame(5, $this->baseline($second)['a']);
         $this->assertSame([1, 5], [$first->a, $second->a]);
+        $before = count($this->connection->writes);
+        $this->assertTrue($second->update());
+        $this->assertCount($before, $this->connection->writes);
+        $this->assertSame(0, $this->connection->row()['a']);
+        // 业务显式重载数据库状态，再应用需要重试的修改。
+        $second->setData($this->connection->row(), true);
+        $second->a = 5;
         $this->assertTrue($second->update());
         $this->assertSame(5, $this->connection->row()['a']);
     }
@@ -193,7 +199,7 @@ final class EntityReentryTest extends TestCase
     }
 
     #[DataProvider('observerModes')]
-    public function testRollbackAndNewTransactionKeepTheInnerWriteAndOldTokenOutcome(string $mode): void
+    public function testRollbackAndNewTransactionDoNotChangeEitherSuccessfulUpdateResult(string $mode): void
     {
         $entity = $this->entity();
         $this->assertTrue($this->db->begin());
@@ -203,24 +209,28 @@ final class EntityReentryTest extends TestCase
             if ($entered || $result->getQueryBuilder() === null) { return; }
             $entered = true;
             $this->assertTrue($this->db->rollback());
-            $this->assertSame(0, $this->baseline($entity)['a']);
+            $this->assertSame(1, $this->baseline($entity)['a']);
             $this->assertTrue($this->db->begin());
             $entity->a = 2;
             $this->assertTrue($entity->update());
         });
 
-        $this->assertFalse($entity->update());
+        $this->assertTrue($entity->update());
         $this->assertSame(2, $this->connection->row()['a']);
         $this->assertSame(2, $this->baseline($entity)['a']);
         $this->assertTrue($this->db->rollback());
         $this->assertSame(0, $this->connection->row()['a']);
-        $this->assertSame(0, $this->baseline($entity)['a']);
+        $this->assertSame(2, $this->baseline($entity)['a']);
+        $this->assertTrue($entity->update());
+        $this->assertSame(0, $this->connection->row()['a']);
+        $entity->setData($this->connection->row(), true);
+        $entity->a = 2;
         $this->assertTrue($entity->update());
         $this->assertSame(2, $this->connection->row()['a']);
     }
 
     #[DataProvider('observerModes')]
-    public function testFirstImplicitTransactionWriteIsRegisteredBeforeRollbackObservers(string $mode): void
+    public function testImplicitTransactionRollbackDoesNotUndoTheSuccessfulUpdateBaseline(string $mode): void
     {
         $entity = $this->entity();
         $this->db->rawQuery('SET autocommit=0');
@@ -232,9 +242,13 @@ final class EntityReentryTest extends TestCase
             $this->assertTrue($this->db->rollback());
         });
 
-        $this->assertFalse($entity->update());
+        $this->assertTrue($entity->update());
         $this->assertSame(0, $this->connection->row()['a']);
-        $this->assertSame(0, $this->baseline($entity)['a']);
+        $this->assertSame(1, $this->baseline($entity)['a']);
+        $this->assertTrue($entity->update());
+        $this->assertSame(0, $this->connection->row()['a']);
+        $entity->setData($this->connection->row(), true);
+        $entity->a = 1;
         $this->assertTrue($entity->update());
         $this->assertSame(1, $this->connection->row()['a']);
     }
@@ -337,6 +351,7 @@ class EntityReentryChildRecord extends EntityReentryRecord {}
 /** 使用真实 SQL 和 FastDb 执行器，仅替换连接获取过程以避免联网。 */
 class EntityReentrySqliteConnection extends Connection
 {
+    public function isInTransaction(): bool { return $this->database->inTransaction(); }
     public array $writes = [];
     private bool $implicitTransactions = false;
     public function __construct(public \PDO $database) { parent::__construct(new Config()); }
@@ -347,7 +362,7 @@ class EntityReentrySqliteConnection extends Connection
         $parameters = $builder->getLastBindParams();
         if (str_starts_with($sql, 'UPDATE')) {
             if ($this->implicitTransactions && !$this->database->inTransaction()) {
-                $this->database->beginTransaction(); $this->isInTransaction = true;
+                $this->database->beginTransaction();
             }
             $this->writes[] = $parameters;
         }
@@ -362,15 +377,15 @@ class EntityReentrySqliteConnection extends Connection
         $this->lastAffectRows = $this->lastInsertId = 0;
         if ($query === 'SET autocommit=0') { $this->implicitTransactions = true; return true; }
         if (str_starts_with($query, 'START TRANSACTION')) {
-            $this->database->beginTransaction(); $this->isInTransaction = true; return true;
+            $this->database->beginTransaction(); return true;
         }
         if (str_starts_with($query, 'ROLLBACK')) {
             if ($this->database->inTransaction()) { $this->database->rollBack(); }
-            $this->isInTransaction = false; return true;
+            return true;
         }
         if (str_starts_with($query, 'COMMIT')) {
             if ($this->database->inTransaction()) { $this->database->commit(); }
-            $this->isInTransaction = false; return true;
+            return true;
         }
         throw new \LogicException('Unexpected SQL: ' . $query);
     }

@@ -31,7 +31,8 @@ final class BulkConnectionTest extends TestCase
         $this->previousDb = $singleton->getValue(); $this->db = new FastDb(); $singleton->setValue(null, $this->db);
         BulkPinnedRecord::$constructions = 0;
         foreach (['default', 'other'] as $name) {
-            $client = $this->createStub(Connection::class); $client->connectionName = $name;
+            $client = $this->createStub(BulkPinnedConnection::class); $client->connectionName = $name;
+            $client->method('isInTransaction')->willReturnCallback(static fn(): bool => $client->transactionActive);
             $client->method('getLastAffectRows')->willReturnCallback(static fn () => (new \ReflectionProperty(Client::class, 'lastAffectRows'))->getValue($client));
             $client->method('getLastInsertId')->willReturnCallback(static fn () => (new \ReflectionProperty(Client::class, 'lastInsertId'))->getValue($client));
             $client->method('query')->willReturnCallback(function (QueryBuilder $query) use ($client, $name): bool {
@@ -48,7 +49,7 @@ final class BulkConnectionTest extends TestCase
 
     protected function tearDown(): void
     {
-        foreach ($this->clients as $client) { $client->finishTransaction(false); }
+        foreach ($this->clients as $client) { $client->transactionActive = false; }
         $this->db->setOnQuery(static function (): void {}); $this->bind([]);
         (new \ReflectionProperty(FastDb::class, 'instance'))->setValue(null, $this->previousDb);
     }
@@ -58,8 +59,8 @@ final class BulkConnectionTest extends TestCase
     #[DataProvider('methods')]
     public function testCallbacksCanSelectAnotherConnectionAndExplicitlyReturnToTheEntryConnection(string $method): void
     {
-        $this->clients['default']->isInTransaction = true;
-        $token = $this->clients['default']->getTransactionContext()->token(); $seen = [];
+        $this->clients['default']->transactionActive = true;
+        $seen = [];
         $this->db->setOnQuery(function (QueryResult $result) use (&$seen): void {
             $seen[] = [$result->getConnectionName(), $this->db->selectConnection()];
             $this->db->selectConnection(count($seen) === 1 ? 'other' : 'default');
@@ -69,8 +70,7 @@ final class BulkConnectionTest extends TestCase
         $this->assertSame([[1, 2], [3]], $this->writes['default']);
         $this->assertArrayNotHasKey('other', $this->writes);
         $this->assertSame('default', $this->db->selectConnection());
-        $this->assertTrue($this->clients['default']->isInTransaction);
-        $this->assertSame($token, $this->clients['default']->getTransactionContext()->token());
+        $this->assertTrue($this->clients['default']->isInTransaction());
         $this->assertSame(0, BulkPinnedRecord::$constructions);
     }
 
@@ -138,7 +138,7 @@ final class BulkConnectionTest extends TestCase
     public function testSqlFailureRestoresVisibilityBeforeBothObserversAndKeepsTheOriginalException(string $method): void
     {
         $failure = new \RuntimeException('SQL rejected');
-        $client = $this->createStub(Connection::class); $client->connectionName = 'default';
+        $client = $this->createStub(BulkPinnedConnection::class); $client->connectionName = 'default';
         $client->method('query')->willThrowException($failure);
         $this->clients['default'] = $client; $this->bind($this->clients);
         $rows = (function (): \Generator { $this->db->selectConnection('producer'); yield ['id' => 1]; })();
@@ -179,4 +179,11 @@ class BulkPinnedRecord extends AbstractEntity
 class BulkRoutedRecord extends BulkPinnedRecord
 {
     public function __construct(?array $data = null) { parent::__construct($data); FastDb::getInstance()->selectConnection('other'); }
+}
+
+/** 离线连接桩自行模拟事务状态，不向生产 Connection 写入重复状态。 */
+class BulkPinnedConnection extends Connection
+{
+    public bool $transactionActive = false;
+    public function isInTransaction(): bool { return $this->transactionActive; }
 }

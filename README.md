@@ -11,10 +11,9 @@ FastDb 是面向 Swoole 协程环境的 MySQL 数据访问库，组合连接池�
 | 组件 | 职责 |
 | --- | --- |
 | `Internal\ExecutionFrame` | 保存单次执行的结果、计时与完成回调状态；分页总数在外部回调前读取 |
-| `Mysql\Connection` | 执行查询、同步事务状态、保存成功时点的结果快照 |
+| `Mysql\Connection` | 执行查询、读取底层协议事务状态、保存成功时点的结果快照 |
 | `Internal\QueryDiagnostics` | 按需保存全局查询回调和每协程有界事件栈；分别记录查询执行与连接获取 |
-| `Mysql\TransactionContext` | 按协程与实际连接保存事务基准，使用事务代次和操作令牌区分连续事务 |
-| `Internal\EntityState` | 字段比较基准、变更检测、主键保护和成功写入后的基准更新 |
+| `AbstractInterface\AbstractEntity` | 字段比较基准、变更检测、主键保护和成功写入后的基准更新 |
 | `Internal\FieldCodec` | 加载赋值转换、写入值转换；与序列化隐藏字段分别处理 |
 | `Internal\FieldSelection` | 保存字段白名单、隐藏字段和输出限制，不混入 SQL 构建状态 |
 | `Internal\RelationLoader` | 关联结果构造、唯一性检查及实体实例范围的关联缓存 |
@@ -32,9 +31,9 @@ FastDb 通过 `FastDb::getInstance()` 获取固定实例并长期复用。需要
 
 上述约束要求 `easyswoole/mysqli` 提供 `QueryBuilder::groupExistingWhere()`。升级 FastDb 前，应先安装包含该接口的 mysqli 版本；驱动缺少接口时，实体写入及关联查询会明确抛出 `RuntimeError`，不会执行缺少分组保护的 SQL。
 
-普通查询与原始 SQL 都会同步协议的事务状态；原始 `START TRANSACTION` 开启的事务也受回收检查保护。实体 `update()` 成功后、公开查询回调执行前同步字段比较基准，回调重入更新同一实体时按 SQL 实际完成顺序处理。回调中回滚当前事务后，比较基准恢复，`update()` 返回 false；可重新开启事务后重试完整业务操作。`autocommit=0` 下首条更新隐式开启的事务也会登记回滚基准。事务令牌按需创建，只随尚在执行的操作保留，不建立无限增长的历史事务表。普通查询不分配令牌；事务结束只结算已创建的令牌，下次需要时再创建。实体基准仍只登记本事务中的首次状态，恢复回调由全部实体共用且不捕获实体引用。
+`Connection::isInTransaction(): bool` 直接读取底层协议的事务状态；`FastDb::isInTransaction()` 转发到当前或指定连接，不另外保存事务布尔副本。实体 `update()` 在数据库 SQL 成功后、公开查询回调前接受字段比较基准；返回值按本次 SQL 是否成功确定。后续事务回滚不会恢复模型属性或比较基准，需要由业务重新加载、重建对象或显式修改字段后再保存。
 
-`all()` 持有本次查询的输出配置，回调重入查询不会丢失外层的隐藏字段及字段限制；回调对当前查询配置的显式修改仍可生效。成功 SQL 的事务状态、查询元数据及分页总数在 FastDb/实体查询回调前保存，不会被回调中的嵌套查询覆盖；主查询与总数查询的公开回调仍按原有顺序通知。`close()` 成功后清理本地未完成事务及上下文；关闭失败时保留原状态。提交超时等结果不明的场景仍需由业务核实数据库最终状态。
+`all()` 持有本次查询的输出配置，回调重入查询不会丢失外层的隐藏字段及字段限制；回调对当前查询配置的显式修改仍可生效。成功 SQL 的查询元数据及分页总数在 FastDb/实体查询回调前保存，不会被回调中的嵌套查询覆盖；主查询与总数查询的公开回调仍按原有顺序通知。`close()` 成功后释放底层连接；事务状态同样由协议 getter 读取。提交超时等结果不明的场景仍需由业务核实数据库最终状态。
 
 `insert()` 不再把 `hideFields()` 当作数据库写入过滤器；写入白名单仍使用 `fields()`。没有待更新字段时也会消费本次查询配置，不会把一次性的字段限制带到下次保存。
 
@@ -66,7 +65,7 @@ FastDb 通过 `FastDb::getInstance()` 获取固定实例并长期复用。需要
 
 - 每个数据库配置维护独立连接池，同一协程、同一连接名复用当前连接。
 - 协程结束后自动归还连接，也可通过 `invoke()` 或 `recycleContext()` 提前归还。
-- 连接归还时回滚未提交事务，成功回滚后清理事务状态；回滚失败的连接由连接池丢弃。
+- 连接归还时回滚未提交的数据库事务；回滚失败的连接由连接池丢弃。
 - `#[Property]` 映射属性，支持单主键、默认值、nullable 属性和自定义转换。
 - 查询结果可返回实体、原始数组或支持遍历/计数/数组访问的 `ListResult`。
 - 条件、排序、连接、分组、分页、分块、聚合与 `FOR UPDATE`。
@@ -1337,12 +1336,12 @@ try {
 
 | 方法 | 行为 |
 | --- | --- |
-| `begin($client = null, $flags = TransactionStartFlags::None, $timeout = null)` | 默认获取当前连接并开始事务；事务状态已为 true 时直接返回 true |
+| `begin($client = null, $flags = TransactionStartFlags::None, $timeout = null)` | 默认获取当前连接并开始事务；协议 getter 已报告事务活动时直接返回 true |
 | `commit($client = null, $flags = TransactionCompletionFlags::NoChainNoRelease, $timeout = null)` | 默认提交当前连接；没有连接/没有事务时返回 true |
 | `rollback($client = null, $flags = TransactionCompletionFlags::NoChainNoRelease, $timeout = null)` | 默认回滚当前连接；没有连接/没有事务时返回 true |
-| `isInTransaction($connection = null)` | 读取当前或指定连接的事务状态 |
+| `isInTransaction($connection = null)` | 转发到当前或指定 Connection 的协议状态 getter |
 
-上表描述手动事务入口；使用下面的 `transaction()` 回调事务时，作用域内的同连接事务边界由 helper 管理，不允许再手动调用 begin/commit/rollback。
+上表描述手动事务入口；下面的 `transaction()` 只根据入口连接是否已有事务，决定本层是否负责开始、提交和异常回滚。
 
 ### 指定连接、flags 和超时
 
@@ -1408,7 +1407,7 @@ flags 不接受整数、枚举的 `value` 或错误的枚举类型；这些输�
 | `ChainNoRelease` | `AND CHAIN NO RELEASE` | 开始新事务并保留连接 |
 | `NoChainNoRelease` | `AND NO CHAIN NO RELEASE` | 不开始新事务，保留连接；FastDb 默认值 |
 
-使用默认 `NoChainNoRelease` 可明确结束事务并保留池内连接。显式 Chain / ChainNoRelease 成功后，FastDb 保持事务标记为 true；Release / NoChainRelease 成功后关闭连接。FastDb 对 None / NoRelease 不读取服务端 completion_type 来推断链式事务状态，应用需要链式事务时应显式传 ChainNoRelease。
+使用默认 `NoChainNoRelease` 可明确结束事务并保留池内连接。Chain / ChainNoRelease 会开始新事务，Release / NoChainRelease 会关闭连接；实际事务状态由 Connection 直接读取底层协议。需要明确的结束行为时，应显式选择对应 flags。
 
 FastDb 查询和事务执行超时抛出 `EasySwoole\FastDb\Exception\TimeoutException`，驱动会关闭失步连接。提交超时可能发生在服务端已提交、客户端尚未收到响应时，结果需要结合业务记录核实，不能直接重试提交。事务日志和查询栈中的 SQL 包含 flags 对应的完整语句，例如 `START TRANSACTION READ ONLY`、`COMMIT AND NO CHAIN NO RELEASE`。
 
@@ -1416,17 +1415,17 @@ FastDb 查询和事务执行超时抛出 `EasySwoole\FastDb\Exception\TimeoutExc
 
 连接被回收时，未提交事务会被回滚。`invoke()` 只归还本次调用新获取的连接；复用已有连接或嵌套调用时，连接继续由外层作用域管理。
 
-事务内成功执行 `update()` 后，连接会保存实体在本次事务中首次更新前的字段比较基准。显式回滚或连接回收触发回滚时，会恢复比较基准，保留当前属性值，因此可以再次调用 `update()` 重试保存。提交后清除基准快照。此机制只管理实体 `update()` 的字段比较状态，不撤销属性赋值或其他业务对象状态。
+事务内成功执行 `update()` 后，模型立即接受本次写入字段的比较基准。之后提交、回滚、连接回收或服务端回滚，都不会自动修改模型当前属性、比较基准或已经返回的更新结果。回滚后直接对同一个未修改对象再次 `update()`，可能没有变化可写；应按业务需要重新查询、重建对象，或显式修改字段。
 
-实体更新的事务基准由 `EasySwoole\FastDb\Mysql\TransactionContext`（`src/Mysql/TransactionContext.php`）登记。FastDb 按协程 ID、连接名和实际连接实例区分上下文；提交清除基准，回滚恢复基准，连接回收后不复用旧的登记。`Connection` 不再直接保存实体基准列表。 同一 FastDb 实例在每个协程内只登记一次退出清理；显式回收后不会通过延迟回调继续持有旧连接或旧事务上下文。协程退出时会强制归还仍在使用的连接，并清理未结束事务及上下文登记。
+Connection 直接读取底层协议，不维护额外的本地事务标记，也不保存模型事务快照、归属代次或回滚标记。同一 FastDb 实例在每个协程内只登记一次连接退出清理；归还连接时清理未结束的数据库会话，避免下一次借用继承事务。此资源清理不负责恢复业务对象。
 
-InnoDB 死锁错误（1213）会自动回滚整个事务。连接在收到该错误时会清理事务标记并恢复实体比较基准，之后可调用 `begin()` 开启新事务并重试整个业务操作。错误继续向调用方抛出，不会自动重试。普通 SQL 错误及锁等待超时（1205）不会按死锁处理，仍需显式回滚。死锁识别依赖底层 mysqli 库保留异常错误码；使用已支持该行为的依赖版本。
+死锁、断线等对事务状态的影响以底层协议为准；异常继续向调用方抛出，不自动重试。普通 SQL 错误也不会自动撤销模型状态；需要回滚和重试哪些操作，由业务决定。
 
-事务操作成功后先同步事务状态，再执行日志回调。日志回调异常仍向调用方传播；尤其是 `commit()` 的日志回调抛异常时，数据库已经提交，调用方不能据此认定提交失败或直接重试。
+事务操作成功后，底层协议已读取服务端回复，再执行日志回调；回调中的事务 getter 读取当时的协议状态。日志回调异常仍向调用方传播；尤其是 `commit()` 的日志回调抛异常时，数据库已经提交，调用方不能据此认定提交失败或直接重试。
 
 ### 回调事务 transaction
 
-`transaction(callable $callback, TransactionStartFlags $flags = TransactionStartFlags::None, ?float $timeout = null): mixed` 在当前连接上执行回调事务。回调接收当前 `FastDb` 实例，也可使用不声明参数的闭包；正常完成时返回回调的原始返回值，包括 false、null 或对象。
+`transaction(callable $callback, TransactionStartFlags $flags = TransactionStartFlags::None, ?float $timeout = null): mixed` 在入口选中的实际连接上管理回调事务。回调接收当前 `FastDb` 实例，也可使用无参数闭包；正常完成时返回回调的原始返回值，包括 false、null 或对象。
 
 ```php
 $db = FastDb::getInstance();
@@ -1443,120 +1442,46 @@ $updated = $db->transaction(function (FastDb $db): bool {
 }, flags: TransactionStartFlags::ReadWrite, timeout: 1.0);
 ```
 
-入口连接尚无事务时，本层拥有事务：先开始，回调正常返回后提交；回调抛异常时回滚并继续抛出原异常。回调返回严格的 `false` 也是正常返回值，仍会提交，不表示自动回滚。需要取消业务操作时应抛异常，不能靠返回 false 触发回滚。
+入口连接没有事务时，本层先开始事务，回调正常返回后提交；开始或回调抛异常时，尝试回滚入口的同一个连接，再抛出原异常。开始失败不会执行回调。返回严格的 `false` 也是正常返回，会提交；需要让拥有层回滚时应抛出异常。
 
-#### 同连接嵌套与 rollback-only
+#### 同连接嵌套与已有手动事务
 
-入口连接已有事务时，`transaction()` 加入该事务，不重复发送 BEGIN，也不提前 COMMIT，不建立 savepoint。加入已有事务时只能使用默认的 `flags: TransactionStartFlags::None`、`timeout: null`；传入其他 flags 或非 null timeout 会抛出 `InvalidArgumentException`，不会重新配置外层事务。
+入口连接已经有事务时，本层只执行回调，不发送 BEGIN、COMMIT 或 ROLLBACK。此时传入的 flags 和 timeout 不会重新配置已有事务，也不会因使用非默认选项而拒绝加入；timeout 仍须满足有限正数的基本参数要求。
 
-同连接内层回调抛异常时，该事务代次被标记为 rollback-only。即使业务在外层捕获该异常，最外层拥有者也会回滚并抛出明确异常，不会提交剩余写入：
+同连接的内层异常被外层业务捕获后，外层可以正常提交，包括内层在异常前已经执行的写入。内层异常若继续逃出最外层拥有者，才由该拥有者回滚：
 
 ```php
 $db->transaction(function (FastDb $db): void {
     try {
         $db->transaction(function (FastDb $db): void {
-            $db->rawQuery('UPDATE users SET score = score + 1 WHERE id = 1');
-            throw new DomainException('Cancel this operation');
+            // 与外层使用同一个数据库事务。
+            throw new RuntimeException('Inner operation failed');
         });
-    } catch (DomainException $error) {
-        // 业务可处理异常，但捕获它不会清除 rollback-only。
+    } catch (RuntimeException $error) {
+        // 已捕获异常；外层正常返回时仍会提交。
     }
-}); // 外层不能提交：回滚并抛异常。
-```
-
-也可以加入作用域外手工开启的事务；成功的回调不会替手工事务提交，由原拥有者负责结束：
-
-```php
-$db->begin();
-$connection = $db->currentConnection();
-try {
-    $result = $db->transaction(function (FastDb $db): mixed {
-        return $db->rawQuery('UPDATE users SET score = score + 1 WHERE id = 1');
-    });
-    $db->commit($connection);
-} catch (Throwable $error) {
-    $db->rollback($connection);
-    throw $error;
-}
-```
-
-如果加入手工事务的回调失败，该手工事务同样变成 rollback-only。之后手工 `commit()` 会被拒绝，事务仍保持活动状态供原拥有者显式 `rollback($connection)`；不会因为 helper 已返回就允许提交。完整回滚后，下一代事务不继承这个标记。实体 `update()` 的比较基准也按现有回滚规则恢复，属性值本身不回退。
-
-#### 绑定实际连接与 A → B → A
-
-`transaction()` 固定入口的实际 Connection、事务上下文及代次，结束时始终操作该连接。回调改变选库不会让 helper 提交错误的数据库；但该方法本身不恢复选库副作用，也不会把回调中的全部 SQL 强制路由到入口连接。查询仍使用当时选中的连接，需要自动恢复选库时配合 `withConnection()`。
-
-假设 a、b 已注册，并且都拥有示例 users 表：
-
-```php
-$db->withConnection('a', function (FastDb $db): void {
-    $db->transaction(function (FastDb $db): void {
-        $db->rawQuery('UPDATE users SET score = score + 1 WHERE id = 1'); // A。
-        $db->withConnection('b', function (FastDb $db): void {
-            $db->transaction(function (FastDb $db): void {
-                $db->rawQuery('UPDATE users SET score = score + 1 WHERE id = 1'); // B。
-                $db->withConnection('a', function (FastDb $db): void {
-                    $db->transaction(function (FastDb $db): void {
-                        $db->rawQuery('UPDATE users SET score = score + 1 WHERE id = 2');
-                    }); // 回到原 A 事务，只加入，不再次开始或提前提交。
-                });
-            }); // B 独立提交。
-        });
-    }); // A 的最外层拥有者提交。
 });
 ```
 
-- A → B → A 中，第二次进入 A 会找到仍活动的原 A 事务，不把它当作新事务。
-- 只发生在 B 的异常若已被 A 回调捕获，不会把 A 标为 rollback-only；B 自己回滚，A 可继续完成。
-- 如果异常来自重新加入 A 的内层回调，A 会被标记为 rollback-only，即使 B 或最外层业务捕获异常也不能提交 A。
-- B 已独立提交后，A 随后失败或回滚不会撤销 B。两个连接没有分布式事务协调，也没有自动补偿。
+事务原本由手工 `begin()` 开启时，`transaction()` 同样只加入并执行回调。无论回调返回还是抛异常，都由手工事务的调用方决定何时提交或回滚；框架不额外标记该事务。
 
-#### flags、超时与异常
+#### 连接选择与 A → B → A
 
-新事务拥有者使用 `$flags` 开始事务，枚举与上面的手动 `begin()` 相同。`$timeout` 必须是有限的正数；null 使用配置值。它分别限制本层实际发送的开始、提交、回滚控制 SQL，每条都有自己的单次预算，不是 PHP 回调或整个事务的累计期限。回调里的业务 SQL 仍使用各自查询参数或连接配置；连接池等待也不包含在这个控制 SQL 超时中。
+拥有层固定入口的实际 Connection，结束时始终操作该连接；回调改变选库，不会让 helper 提交其他连接。方法本身不恢复选库，也不会把回调中的全部 SQL 强制路由到入口连接。需要退出时恢复连接名，可配合 `withConnection()`。
 
-开始事务失败时不会运行回调。回调业务异常优先于回滚清理异常；helper 不会因清理失败而用另一个错误覆盖原业务异常。若 COMMIT 已成功而查询观察回调再抛异常，不会追加 ROLLBACK，也不能把异常视为数据尚未提交。提交超时、断线等结果不明场景仍需核实实际业务状态，不自动重试。
+A → B → A 时，A、B 各自尚无事务的外层分别开始一个事务，重新进入 A 的内层只加入 A：
 
-拥有者回滚失败时，会尝试关闭实际连接，仍优先抛出原业务或提交异常。如果扩展连接的 close 也无法确认结束、原事务代次仍活动，会把该作用域标记为 unusable。它与普通 rollback-only 不同：普通 rollback-only 在 helper 退出后仍允许原拥有者发送完整 ROLLBACK；unusable 表示清理结果不确定，所有后续 SQL 都被拒绝，不能隐式重连后进入自动提交。必须显式 close 成功，或通过回收使该连接对象被淘汰，再取得可用连接继续。unusable 只是当前作用域上的一个布尔状态，不维护全局失败历史。
+- 内层 A 的异常被业务捕获后，A、B 都可以继续正常提交；没有自动的局部回滚。
+- 异常逐层逃出时，各个拥有层分别回滚自己的连接。
+- B 已经提交后，A 随后回滚不会撤销 B；两个连接没有分布式事务协调。
 
-作用域内连接被关闭、被底层路径回收、服务端回滚或上下文换代时，会检测为作用域失效。后续经受保护入口的 SQL 会被阻止，helper 不会误提交重新开始的另一代事务；这不意味着能够撤回已经通过更底层接口提交的内容。
+#### flags、超时和提交失败
 
-活动作用域内的 `recycleContext(false)` 和 `reset()` 会在回收或重置连接前被拒绝；`checkTransaction: false` 不能跳过这层保护，避免回调重借连接后落入自动提交。协程退出时仍由 defer 清理未结束的受管会话，再进行连接回收。
+拥有层使用 flags 开始事务，timeout 分别传给本层实际发送的 BEGIN、COMMIT、ROLLBACK。每条控制 SQL 都有独立的单次预算；这不是 PHP 回调或整个事务的累计期限，业务 SQL 仍使用各自查询参数或连接配置。连接池等待也不包含在控制 SQL 超时内。
 
-#### 作用域内的 SQL 边界
+开始或业务回调抛出的异常优先于回滚清理异常，回滚失败不会替换原异常。提交发生在业务回调正常返回之后：提交返回 false 会抛出 `RuntimeError`，提交本身或其日志回调抛出的异常直接向外传播，不自动重试，也不自动追加 ROLLBACK。尤其 COMMIT 已成功后的日志异常不能视为数据库未提交；提交超时、断线等结果不明时，由业务核实最终状态并处理。
 
-活动 `transaction()` 作用域内，同连接的 BEGIN/START TRANSACTION、COMMIT、ROLLBACK、SAVEPOINT/RELEASE，以及会隐式提交的语句由本地 guard 拒绝，抛出 `EasySwoole\FastDb\Exception\RuntimeError`。普通调用 `FastDb::begin/commit/rollback` 或对应 Connection 事务方法也不能绕过；helper 自身的开始和结束由内部拥有者路径执行。
-
-检查采用保守的语句白名单，而不是完整的 MySQL SQL 解析器：
-
-| 语句类别 | 活动作用域内的规则 |
-| --- | --- |
-| 数据操作与读取 | 允许 SELECT、INSERT、UPDATE、DELETE、REPLACE、WITH、DO；WITH 仍需遵循数据库支持的 CTE 语法 |
-| 查询说明与元数据读取 | 允许 SHOW、DESCRIBE/DESC、EXPLAIN、VALUES、TABLE |
-| SET | 允许不涉及危险系统项的 SET；赋值左侧涉及 autocommit、transaction、password，以及 transaction_isolation / transaction_read_only / tx_isolation / tx_read_only 时拒绝，包括 SESSION/GLOBAL 等限定及引用标识符形式 |
-| SQL mode、字符集与排序规则 | 拒绝 SET sql_mode、SET NAMES / CHARACTER SET / CHARSET，以及对 character_set_client / character_set_connection / character_set_results / collation_connection 的赋值，避免在作用域中改变 SQL 识别规则 |
-| 手动事务和 savepoint | 拒绝 BEGIN、START TRANSACTION、COMMIT、ROLLBACK，包括 ROLLBACK TO SAVEPOINT，以及 SAVEPOINT、RELEASE SAVEPOINT |
-| DDL、权限和表锁 | 拒绝 CREATE、ALTER、DROP、TRUNCATE、RENAME、GRANT、REVOKE、LOCK/UNLOCK 等；即使某些 TEMPORARY 表操作不按普通 DDL 隐式提交，也不开放这个例外 |
-| 动态执行及其他管理语句 | 拒绝 CALL、PREPARE、EXECUTE、DEALLOCATE、XA，以及 FLUSH、RESET、ANALYZE、OPTIMIZE、REPAIR、INSTALL/UNINSTALL 等不在白名单内的命令 |
-
-SET 检查区分读值和赋值：`SET @saved = @@autocommit`、`SET @saved_mode = @@sql_mode` 只是读取，普通用户变量也可使用，包括 `@sql_mode`、`@names` 这样的变量名；修改对应系统项才会被拒绝。不要把会改变事务边界或 SQL 识别规则的 SQL 放进回调事务，例如建表、修改表结构、切换 autocommit、SQL mode 或字符集，应在事务外安排。
-
-SET 原文中依赖反斜杠转义引号的写法，在不同 SQL mode 下可能有不同含义，会明确报错；即使只是设置普通用户变量，也应把动态值改用绑定参数：
-
-```php
-$value = "O'Reilly";
-$query = new QueryBuilder();
-$query->raw('SET @x = ?', [$value]);
-$db->query($query);
-```
-
-这条反斜杠限制针对 SET 原文，普通 SELECT/INSERT 等语句中的字符串不会因此被额外拒绝；动态数据仍应使用参数化查询。
-
-每次只接受一条语句，允许结尾的单个分号，不允许多语句拼接。托管事务内拒绝所有 MySQL `/*! ... */` 和 MariaDB `/*M! ... */` 执行注释，因为不同服务端或版本可能跳过注释并改变实际首命令，例如 `/*!99999 SELECT */ COMMIT`。普通注释和 optimizer hint `/*+ ... */` 仍可使用；未启用托管事务时的查询行为不变。字符串中的关键字不会被当作事务命令；未闭合引号或注释会报错。
-
-外部手工事务因加入失败而被标记为普通 rollback-only、未标记 unusable 且已没有活动 helper 时，允许原拥有者发送完整 ROLLBACK 做清理；不能用 COMMIT、重新开始或 savepoint 局部回滚绕过标记。
-
-通过 `FastDb::query(QueryBuilder)` 发起的标准参数化查询仍受保护。限制的是绕过查询入口直接执行 Statement（包括进入作用域前已经准备好的 Statement），或直接使用 `mysqlClient()` 等底层协议对象；不要在作用域内使用这些逃生口。这些路径无法提供同样的发送前检查，事务作用域也不是任意 SQL 的执行沙箱；即使事后检测到事务代次改变，也不能追回已经发生的提交。
+helper 不解析 SQL 白名单，不管理 savepoint，不跟踪事务代次，也不阻止回调手工开始、提交、回滚或执行会隐式提交的 SQL。这些操作对事务边界及业务原子性的影响由调用方负责。
 
 ### 与 invoke 的区别
 
@@ -1639,14 +1564,13 @@ $rows = $db->invoke(function (Connection $connection): array {
 
 ```php
 $db->currentConnection(); // 当前选中连接的 Connection|null，不主动创建连接。
-$db->recycleContext(); // 先检查全部连接；存在活动事务则抛异常，且不回收任何连接。
-$db->recycleContext(false); // 作用域外可跳过普通事务检查；活动 transaction() 作用域内仍拒绝。
-$db->reset(); // 重置连接池和定时器；存在活动 transaction() 作用域时拒绝。
+$db->recycleContext(); // 归还当前协程的全部连接，未结束会话由连接池清理。
+$db->reset(); // 重置连接池和定时器，用于生命周期管理。
 ```
 
-`recycleContext()` 的事务检查覆盖当前协程的全部连接名。只要任意连接的事务尚未结束，就抛出 `RuntimeError`，不回收任何连接，也不清理上下文或查询栈。正常情况下先提交或回滚，再调用默认回收。作用域外明确需要清理未结束的手动事务时，可使用 `recycleContext(checkTransaction: false)`；它只跳过普通事务检查，连接回收流程仍会回滚未提交事务。当前协程任意连接仍被活动 `transaction()` 作用域拥有时，无论 checkTransaction 的值是什么都提前拒绝回收，不能靠强制回收重借新连接。
+`recycleContext(): void` 直接归还当前协程持有的全部连接，并清理其查询栈。未结束的数据库事务由连接池归还流程回滚，回滚失败的连接会被淘汰；模型属性及比较基准不因此改变。
 
-`reset()` 用于关闭、测试或重新初始化阶段，不是正常请求结束的替代动作；应先归还上下文连接，并避免还有协程使用连接池时调用。它会检查该 FastDb 实例已登记的各协程连接，只要存在活动 `transaction()` 作用域，就在重置池前抛出 `RuntimeError`。
+`reset()` 重置全部连接池和定时器，用于关闭、测试或重新初始化阶段。调用前应先归还上下文连接，并避免其他协程仍在使用连接池。
 
 ## 原始 SQL 与底层构建器
 
@@ -2016,13 +1940,13 @@ $config = ConfigModel::findRecord(
 | `begin(?Connection $client = null, TransactionStartFlags $flags = TransactionStartFlags::None, ?float $timeout = null)` | 开始事务；bool |
 | `commit(?Connection $client = null, TransactionCompletionFlags $flags = TransactionCompletionFlags::NoChainNoRelease, ?float $timeout = null)` | 提交事务；bool |
 | `rollback(?Connection $client = null, TransactionCompletionFlags $flags = TransactionCompletionFlags::NoChainNoRelease, ?float $timeout = null)` | 回滚事务；bool |
-| `transaction(callable $callback, TransactionStartFlags $flags = TransactionStartFlags::None, ?float $timeout = null): mixed` | 回调事务；同连接加入，异常标记 rollback-only；返回回调值 |
-| `isInTransaction(?Connection $connection = null)` | bool |
+| `transaction(callable $callback, TransactionStartFlags $flags = TransactionStartFlags::None, ?float $timeout = null): mixed` | 回调事务；已有事务只执行回调，拥有层负责结束；返回回调值 |
+| `isInTransaction(?Connection $connection = null)` | 转发 Connection 的协议状态 getter；bool |
 | `invoke(callable $call)` | 执行并归还连接；返回回调值 |
 | `currentConnection()` | 当前 Connection 或 null |
-| `recycleContext(bool $checkTransaction = true)` | 默认活动事务时拒绝回收；false 只跳过普通检查，活动 transaction() 作用域始终拒绝 |
+| `recycleContext(): void` | 归还当前协程全部连接，未结束数据库事务由池清理 |
 | `preConnect()` | 预热各连接池 |
-| `reset()` | 重置全部连接池；存在活动 transaction() 作用域时拒绝 |
+| `reset()` | 重置全部连接池和定时器 |
 | `setOnQuery(callable $call)` | 设置全局回调；返回管理器 |
 | `isEnableQueryStack(bool $bool, int $maxStackSize = 256): static` | 每协程保留最近 N 条查询/获取连接事件；启停均应用容量，缩小时立即裁剪已有栈 |
 | `getQueryStack(?int $index = null)` | 整栈、单项或 null；事件类型由 type 区分 |
@@ -2101,7 +2025,7 @@ SELECT * FROM users WHERE (status = 0) AND id > 4 ORDER BY id ASC LIMIT 2;
 
 ### 隐藏字段会不会改变数据库写入？
 
-`insert()` 从 `toArray(true)` 构造数据，因此会受 `fields` / `hideFields` 影响。`update()` 的写入白名单是 `fields`，不会自动把 `hideFields` 当成排除写入规则。输出控制与写入规则应按实际操作分别设置。
+`insert()` / `update()` 使用 `fields()` 作为写入白名单；`hideFields()` 控制序列化输出，不会排除数据库写入字段。
 
 ### 查询少量字段后能直接把结果完整写回吗？
 
@@ -2135,23 +2059,23 @@ SELECT * FROM users WHERE (status = 0) AND id > 4 ORDER BY id ASC LIMIT 2;
 
 ### 事务中能使用 invoke() 吗？
 
-可以。`invoke()` 复用当前连接时不会归还外层连接，嵌套调用也不会提前结束外层事务。手动事务仍由原拥有者提交或回滚；使用 `transaction()` 时则由 helper 的拥有层结束，回调内不能手动调用 begin/commit/rollback。手动重复 `begin()` 不提供 savepoint，`transaction()` 的同连接嵌套也不建立独立事务。
+可以。`invoke()` 复用当前连接时不会归还外层连接，嵌套调用也不会提前结束外层事务。手动事务仍由原调用方提交或回滚；使用 `transaction()` 时，只有入口原本没有事务的拥有层负责结束。手动重复 `begin()` 不提供 savepoint，`transaction()` 的同连接嵌套也不建立独立事务。
 
 ### withConnection 会自动提交或归还连接吗？
 
 不会。它只临时选库并在退出时恢复原连接名；连接借还和事务生命周期没有变化。需要回调事务时，在其中调用 `transaction()`；需要本层借用结束后归还连接时，使用原有 `invoke()`。两个新 helper 的回调参数是 FastDb，`invoke()` 的回调参数仍是 Connection。
 
-### transaction 返回 false，或者捕获了内层异常，为什么没有按预期回滚或提交？
+### transaction 返回 false，或捕获内层异常后，会提交吗？
 
-false 是正常业务返回值，不触发回滚；新事务的拥有层会提交并返回 false。业务需要回滚时应抛异常。反过来，同连接加入层已经抛过异常时，事务代次会保留 rollback-only 标记，外层捕获该异常也无法恢复提交资格；最外层拥有者将回滚并报错。这不是 savepoint 局部回滚。
+false 是正常返回值，拥有层会提交并返回 false。同连接的加入层不单独提交或回滚；内层异常被外层捕获后，外层正常返回仍会提交全部已经执行的写入。需要整笔回滚时，让异常逃出拥有层，或由业务显式管理事务结束。
 
-如果事务原本由手工 `begin()` 开启，加入失败后的 `commit()` 同样会被拒绝，但 helper 不会替原拥有者结束事务，需显式 `rollback($connection)`。只在其他连接 B 中发生、并由 A 业务捕获的异常不标记 A；若异常来自 A → B → A 中重新加入 A 的那层，则 A 仍会被标记。
+### 回滚后，为什么同一模型再 update() 没有写入？
+
+模型在 SQL 成功时就接受了新的比较基准，数据库回滚不会恢复模型属性和基准。对象未发生新变化时，再次 `update()` 可能没有字段需要写入；请重新查询、重建对象，或按业务需要显式修改字段。之前 SQL 成功的更新返回值也不会因为后续回滚而改写。
 
 ### transaction 抛异常，是否一定代表所有写入都没有提交？
 
-不能这样推断。正常业务异常会触发拥有者回滚，但 COMMIT 已成功后的观察回调异常、提交超时或低层接口绕过都可能留下已提交或结果不明的状态；B 独立事务已经提交的内容也不会被 A 的回滚撤销。helper 不自动重试、不协调跨库事务，也不能追回绕过保护入口的提交。
-
-在作用域内通过受保护入口手工结束事务、执行被禁止的隐式提交 SQL，会在发送前被拒绝。不要通过直接 Statement/协议调用绕过限制；数据库状态不明时应按业务记录核实，再决定恢复操作。
+不能这样推断。开始或业务回调异常会使拥有层尝试回滚，但业务手工提交、DDL 隐式提交、COMMIT 已成功后的日志异常，以及提交超时或断线，都可能留下已提交或结果不明的状态。提交阶段失败不会自动追加 ROLLBACK；B 独立事务已经提交的内容也不会被 A 的回滚撤销。请按业务记录核实数据库结果，再决定后续处理。
 
 ### 目前没有哪些功能？
 

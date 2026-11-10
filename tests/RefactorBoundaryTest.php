@@ -5,30 +5,11 @@ declare(strict_types=1);
 namespace EasySwoole\FastDb\Tests;
 
 use EasySwoole\FastDb\Beans\ArrayList;
-use EasySwoole\FastDb\Internal\TransactionSql;
 use EasySwoole\FastDb\Tests\Model\User;
-use EasySwoole\FastDb\Internal\EntityState;
-use EasySwoole\FastDb\Mysql\Connection;
-use EasySwoole\Mysqli\Config;
-use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class RefactorBoundaryTest extends TestCase
 {
-    public static function transactionSql(): array
-    {
-        return [['ROLLBACK', false], ['/* trace */ ROLLBACK AND CHAIN', false],
-            ["-- trace\nROLLBACK WORK", false], ['/*!80000 ROLLBACK */', false],
-            ['ROLLBACK TO SAVEPOINT s', null], ['ROLLBACK WORK TO s', null],
-            ['COMMIT AND CHAIN', true], ['START TRANSACTION', true], ['BEGIN', true], ['SELECT 1', null]];
-    }
-
-    #[DataProvider('transactionSql')]
-    public function testTransactionBoundaryRecognition(string $sql, ?bool $expected): void
-    {
-        $this->assertSame($expected, TransactionSql::completion($sql));
-    }
-
     public function testSparseCollectionUsesKeysForIdentityRemoval(): void
     {
         $a = new User(['id' => 1]); $b = new User(['id' => 2]); $c = new User(['id' => 3]);
@@ -72,16 +53,4 @@ final class RefactorBoundaryTest extends TestCase
         } finally { $instance->setValue(null, $original); }
     }
 
-    public function testTransactionTokenDoesNotConfuseLaterRollbackWithEarlierCommit(): void
-    {
-        $client = new Connection(new Config());
-        $context = $client->getTransactionContext();
-        $first = $context->token();
-        $client->finishTransaction(true);
-        $second = $context->token();
-        $client->finishTransaction(false);
-        $this->assertFalse($first->wasRolledBack());
-        $this->assertTrue($second->wasRolledBack());
-        $this->assertNotSame($first, $context->token());
-    }
 }

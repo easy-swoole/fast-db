@@ -592,35 +592,18 @@ abstract class AbstractEntity implements \JsonSerializable
             $this->queryLimit()->whereRequired($pk,$this->entityState->primaryKey($this, $pk));
             $query = $this->queryLimit()->__getQueryBuilder();
             $query->update($this->tableName(),$data);
-            $token = null;
             // 按 SQL 成功顺序接受基准，再通知观察回调；重入保存可据此写回原值。
-            // 也在此处识别 autocommit=0 的首次写入刚开启的事务。
             $ret = static::callQuery($query,$this->onQuery,
-                function (QueryResult $result, ?Connection $connection) use ($data, $compareValues, &$token): void {
+                function (QueryResult $result) use ($data, $compareValues): void {
                     if ($result->getException() !== null || !($result->getAffectedRows() > 0)) { return; }
-                    $context = FastDb::getInstance()->getTransactionContext($connection);
-                    if ($context?->isActive()) {
-                        $token = $context->token();
-                        $context->rememberBaseline($this, $this->entityState->baseline,
-                            self::baselineRestorer());
-                    }
                     $this->entityState->accept(array_intersect_key($compareValues, $data));
                 });
             $this->reset();
-            return $ret->getAffectedRows() > 0 && !($token?->wasRolledBack() ?? false);
+            return $ret->getAffectedRows() > 0;
         } finally {
             // 成功、失败或提前返回均消费本次查询配置，实体数据及比较基准不受影响。
             $this->reset();
         }
-    }
-
-    /** 全部事务登记共用无捕获回调，避免每个实体分别保留一份闭包。 */
-    private static function baselineRestorer(): \Closure
-    {
-        static $restore = null;
-        return $restore ??= static function (self $entity, array $baseline): void {
-            $entity->entityState->restore($baseline);
-        };
     }
 
     /** 直接写入给定数据，不执行实体的字段转换、变更检测或 OnUpdate 钩子。 */

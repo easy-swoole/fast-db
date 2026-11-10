@@ -32,7 +32,7 @@ final class ConnectionNameTest extends TestCase
     {
         $client = $this->createStub(Connection::class);
         $client->connectionName = 'actual';
-        $client->isInTransaction = in_array($operation, ['commit', 'rollback'], true);
+        $client->method('isInTransaction')->willReturn(in_array($operation, ['commit', 'rollback'], true));
         $db = (new FastDb())->addDb(new Config(), 'other')->isEnableQueryStack(true);
         (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($db,
             [Coroutine::getCid() => ['default' => $client]]);

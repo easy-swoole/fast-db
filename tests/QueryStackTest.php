@@ -219,7 +219,7 @@ final class QueryStackTest extends TestCase
             $this->assertSame('SELECT 1', $db->getQueryStack(-1)->rawQuery);
             $db->rawQuery('SELECT 2');
             $this->assertSame(['SELECT 1', 'SELECT 2'], $this->sql($db));
-        } finally { $db->recycleContext(false); }
+        } finally { $db->recycleContext(); }
     }
 
     public function testRecyclingWithoutABorrowedClientClearsWrappedAcquireFailures(): void
@@ -238,7 +238,7 @@ final class QueryStackTest extends TestCase
             $db->recycleContext();
             $this->assertNull($db->getQueryStack());
             $this->assertNull($db->getQueryStack(-1));
-        } finally { $db->recycleContext(false); }
+        } finally { $db->recycleContext(); }
     }
 
     public function testRecyclingDropsTheWrappedStackAndStartsTheNextBorrowingAtZero(): void
@@ -255,7 +255,7 @@ final class QueryStackTest extends TestCase
             $this->assertSame([0, 1], array_keys($db->getQueryStack()));
             $db->rawQuery('SELECT 5');
             $this->assertSame(['SELECT 4', 'SELECT 5'], $this->sql($db));
-        } finally { $db->recycleContext(false); $db->reset(); }
+        } finally { $db->recycleContext(); $db->reset(); }
     }
 
     public function testResizingAppliesImmediatelyToEveryCoroutineAndExitReleasesItsStack(): void

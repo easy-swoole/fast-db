@@ -7,11 +7,9 @@ use EasySwoole\FastDb\Beans\QueryStack;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\Internal\QueryDiagnostics;
 use EasySwoole\FastDb\Internal\ExecutionFrame;
-use EasySwoole\FastDb\Internal\TransactionRunner;
 use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\Pool;
 use EasySwoole\FastDb\Mysql\QueryResult;
-use EasySwoole\FastDb\Mysql\TransactionContext;
 use EasySwoole\Mysqli\Client;
 use EasySwoole\Mysqli\Config as MysqliConfig;
 use EasySwoole\Mysqli\QueryBuilder;
@@ -127,15 +125,26 @@ class FastDb
         if ($timeout !== null && (!is_finite($timeout) || $timeout <= 0)) {
             throw new \InvalidArgumentException('Transaction timeout must be finite and greater than zero');
         }
-        return TransactionRunner::run($this, $this->getClient(), $callback, $flags, $timeout);
+        $client = $this->getClient();
+        // 已有事务由原调用层负责结束，加入层只执行自己的业务回调。
+        if ($client->isInTransaction()) { return $callback($this); }
+        try {
+            if (!$this->begin($client, $flags, $timeout)) { throw new RuntimeError('Failed to begin transaction'); }
+            $value = $callback($this);
+        } catch (\Throwable $error) {
+            try { $this->rollback($client, timeout: $timeout); } catch (\Throwable) {}
+            throw $error;
+        }
+        // 提交失败交给调用者处理，也不把提交后的日志异常当成业务回调失败。
+        if (!$this->commit($client, timeout: $timeout)) { throw new RuntimeError('Failed to commit transaction'); }
+        return $value;
     }
 
     public function begin(?Connection $client = null, TransactionStartFlags $flags = TransactionStartFlags::None,
         ?float $timeout = null): bool
     {
         $client ??= $this->getClient();
-        $client->__getTransactionScope()?->assertControl($client, $flags->toSql());
-        if ($client->isInTransaction) { return true; }
+        if ($client->isInTransaction()) { return true; }
         return $this->execute($client, static fn () => $client->beginTransaction($flags, $timeout),
             null, $flags->toSql())->getResult() === true;
     }
@@ -156,9 +165,8 @@ class FastDb
         TransactionCompletionFlags $flags, ?float $timeout): bool
     {
         $client ??= $this->currentConnection();
+        if ($client === null || !$client->isInTransaction()) { return true; }
         $sql = ($rollback ? 'ROLLBACK' : 'COMMIT') . $flags->toSqlSuffix();
-        $client?->__getTransactionScope()?->assertControl($client, $sql);
-        if ($client === null || !$client->isInTransaction) { return true; }
         return $this->execute($client, static fn () => $rollback
             ? $client->rollbackTransaction($flags, $timeout) : $client->commitTransaction($flags, $timeout),
             null, $sql)->getResult() === true;
@@ -166,7 +174,7 @@ class FastDb
 
     public function isInTransaction(?Connection $connection = null): bool
     {
-        return ($connection ?? $this->currentConnection())?->isInTransaction ?? false;
+        return ($connection ?? $this->currentConnection())?->isInTransaction() ?? false;
     }
 
     /** 完成回调直接属于本次执行；指定连接不会改变回调可见的选库。 */
@@ -178,17 +186,8 @@ class FastDb
         $builder = $build === null ? $queryBuilder : new QueryBuilder();
         return $this->execute($client, static function (ExecutionFrame $execution) use ($client, $builder, $build, $timeout) {
             if ($build !== null) { $build($builder); }
-            $scope = $client->__getTransactionScope();
-            if ($scope === null) {
-                $execution->start();
-                return $client->query($builder, $timeout);
-            }
-            $frame = $scope->enterExecution($client, $builder->getLastPrepareQuery());
-            try {
-                $execution->start();
-                return $client->query($builder, $timeout);
-            }
-            finally { $scope->leaveExecution($frame); }
+            $execution->start();
+            return $client->query($builder, $timeout);
         }, $builder, null, $onComplete);
     }
 
@@ -202,17 +201,6 @@ class FastDb
     private function execute(Connection $client, callable $operation, ?QueryBuilder $builder = null,
         ?string $sql = null, ?callable $onComplete = null): QueryResult
     {
-        $this->getTransactionContext($client);
-        if ($sql !== null && $client->__getTransactionScope() !== null) {
-            $original = $operation;
-            $operation = static function (ExecutionFrame $execution) use ($client, $sql, $original) {
-                $scope = $client->__getTransactionScope();
-                if ($scope === null) { return $original($execution); }
-                $frame = $scope->enterExecution($client, $sql);
-                try { return $original($execution); }
-                finally { $scope->leaveExecution($frame); }
-            };
-        }
         $frame = new ExecutionFrame($builder, $sql, $onComplete, true);
         $frame->result->setConnectionName($client->connectionName ?? 'default');
         if ($builder === null) { $frame->start(); }
@@ -240,14 +228,6 @@ class FastDb
         return $result->getTotalResult();
     }
 
-    public function getTransactionContext(?Connection $connection = null): ?TransactionContext
-    {
-        $connection ??= $this->currentConnection();
-        if ($connection === null) { return null; }
-        $this->registerContextCleanup(Coroutine::getCid());
-        return $connection->getTransactionContext();
-    }
-
     public function invoke(callable $call): mixed
     {
         $ownsConnection = $this->currentConnection() === null;
@@ -265,19 +245,10 @@ class FastDb
         }
     }
 
-    public function recycleContext(bool $checkTransaction = true): void
+    public function recycleContext(): void
     {
         $cid = Coroutine::getCid();
         $connections = $this->currentConnection[$cid] ?? [];
-        // 在产生回收副作用之前检查全部连接，失败时查询栈和借用均保持原状。
-        foreach ($connections as $name => $client) {
-            if (($client->__getTransactionScope()?->depth ?? 0) > 0) {
-                throw new RuntimeError('Cannot recycle a connection owned by an active transaction() scope');
-            }
-            if ($checkTransaction && $client->isInTransaction) {
-                throw new RuntimeError("Cannot recycle context: connection {$name} has an active transaction");
-            }
-        }
         foreach ($connections as $name => $client) { $this->returnConnection($name, $client); }
         unset($this->currentConnection[$cid]);
         $this->diagnostics?->clear($cid);
@@ -300,14 +271,7 @@ class FastDb
         Coroutine::defer(function () use ($cid): void {
             try {
                 if ($this->contextCleanupRegistered[$cid]) {
-                    foreach ($this->currentConnection[$cid] ?? [] as $client) {
-                        $scope = $client->__getTransactionScope();
-                        if (($scope?->depth ?? 0) > 0) {
-                            try { $client->close(); }
-                            finally { $scope->depth = 0; $client->__setTransactionScope(null); }
-                        }
-                    }
-                    $this->recycleContext(false);
+                    $this->recycleContext();
                 }
             } finally {
                 unset($this->currentConnection[$cid], $this->selectConnection[$cid], $this->contextCleanupRegistered[$cid]);
@@ -348,19 +312,11 @@ class FastDb
         }
         $client->connectionName = $name;
         $this->currentConnection[$cid][$name] = $client;
-        $this->getTransactionContext($client);
         return $client;
     }
 
     public function reset(): void
     {
-        foreach ($this->currentConnection as $connections) {
-            foreach ($connections as $client) {
-                if (($client->__getTransactionScope()?->depth ?? 0) > 0) {
-                    throw new RuntimeError('Cannot reset pools while transaction() scopes are active');
-                }
-            }
-        }
         foreach ($this->pools as $pool) { $pool->reset(); }
     }
 

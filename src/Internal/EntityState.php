@@ -38,6 +38,4 @@ final class EntityState
     {
         foreach ($changes as $key => $value) { $this->baseline[$key] = $value; }
     }
-
-    public function restore(array $baseline): void { $this->baseline = $baseline; }
 }

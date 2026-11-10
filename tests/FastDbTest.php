@@ -99,7 +99,7 @@ final class FastDbTest extends BaseTestCase
         $fastDb->selectConnection($name);
         $selectName = $fastDb->selectConnection();
         $this->assertSame($name, $selectName);
-        $fastDb->recycleContext(false);
+        $fastDb->recycleContext();
         $fastDb->reset();
     }
 
@@ -310,13 +310,13 @@ final class FastDbTest extends BaseTestCase
         $fastDb->rawQuery("show tables");
         $connectionObj = $fastDb->currentConnection();
         $this->assertInstanceOf(Connection::class, $connectionObj);
-        $fastDb->recycleContext(false);
+        $fastDb->recycleContext();
         $fastDb->reset();
 
         $fastDb = $this->getFastDb();
         $connectionObj = $fastDb->currentConnection();
         $this->assertNull($connectionObj);
-        $fastDb->recycleContext(false);
+        $fastDb->recycleContext();
         $fastDb->reset();
     }
 

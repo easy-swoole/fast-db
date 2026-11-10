@@ -130,7 +130,7 @@ final class ConnectionHealthTest extends TestCase
             $this->reply($peer, $this->ok(1));
             $this->assertTrue($connection->beginTransaction(TransactionStartFlags::None));
             $this->assertSame("\x03START TRANSACTION", $this->receive($peer));
-            $this->assertTrue($connection->isInTransaction);
+            $this->assertTrue($connection->isInTransaction());
             $this->assertTrue($connection->beforeUse());
             $this->assertNoCommand($peer);
 
@@ -138,7 +138,7 @@ final class ConnectionHealthTest extends TestCase
             $this->reply($peer, $this->ok());
             $this->assertTrue($connection->rollbackTransaction(TransactionCompletionFlags::NoChainNoRelease));
             $this->assertSame("\x03ROLLBACK AND NO CHAIN NO RELEASE", $this->receive($peer));
-            $this->assertFalse($connection->isInTransaction);
+            $this->assertFalse($connection->isInTransaction());
             $this->assertTrue($connection->intervalCheck());
             $this->assertNoCommand($peer);
         });

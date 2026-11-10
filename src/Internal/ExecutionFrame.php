@@ -4,9 +4,7 @@ namespace EasySwoole\FastDb\Internal;
 
 use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\QueryResult;
-use EasySwoole\FastDb\Mysql\TransactionContext;
 use EasySwoole\Mysqli\QueryBuilder;
-use EasySwoole\Mysqli\Transaction\TransactionCompletionFlags;
 
 /** 集中保存单次执行状态；结果不直接引用执行帧或连接，完成回调在调用前解除登记。 */
 final class ExecutionFrame
@@ -16,11 +14,6 @@ final class ExecutionFrame
     public bool $completed = false;
     public ?self $count = null;
     public ?\Throwable $failure = null;
-    public ?string $transactionCommand = null;
-    public ?TransactionCompletionFlags $completionFlags = null;
-    public ?TransactionContext $transactionContext = null;
-    public int $transactionVersion = 0;
-    public bool $transactionWasActive = false;
     private ?\Closure $onComplete;
 
     public function __construct(
@@ -40,7 +33,7 @@ final class ExecutionFrame
             && ($builder !== null || $this->sql === $sql);
     }
 
-    /** 工厂及作用域预检完成后才授权本次发送，重入构建不能提前消费外层帧。 */
+    /** 工厂构建完成后才标记本次发送，重入构建不能提前消费外层帧。 */
     public function start(): void { $this->started = true; }
 
     public function succeed(Connection $client, bool|array $value): void

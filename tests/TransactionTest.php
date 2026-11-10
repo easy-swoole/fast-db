@@ -38,7 +38,7 @@ final class TransactionTest extends TestCase
     {
         try {
             $this->db->setOnQuery(static function (): void {});
-            $this->db->recycleContext(false);
+            $this->db->recycleContext();
             $this->db->reset();
             $this->observer->query("DROP TABLE IF EXISTS `{$this->table}`");
             $this->observer->close();
@@ -57,27 +57,22 @@ final class TransactionTest extends TestCase
         return (int) $this->observer->query("SELECT value FROM `{$this->table}` WHERE id = 1")->fetch_assoc()['value'];
     }
 
-    public function testDefaultRecycleRejectsTransactionWithoutRollingItBack(): void
+    public function testDefaultRecycleRollsBackTheSessionAndClearsDiagnostics(): void
     {
         $this->db->isEnableQueryStack(true);
         $this->db->begin();
         $this->write(1);
-        $connection = $this->db->currentConnection();
-        $stack = $this->db->getQueryStack();
-        try {
-            $this->db->recycleContext();
-            $this->fail('Expected active transaction guard');
-        } catch (\EasySwoole\FastDb\Exception\RuntimeError $error) {
-            $this->assertStringContainsString('active transaction', $error->getMessage());
-        }
-        $this->assertSame($connection, $this->db->currentConnection());
-        $this->assertTrue($this->db->isInTransaction());
-        $this->assertSame($stack, $this->db->getQueryStack());
-        $this->assertSame(0, $this->value());
-        $this->assertTrue($this->db->commit());
-        $this->assertSame(1, $this->value());
+        $client = $this->db->currentConnection();
+        $this->assertNotNull($this->db->getQueryStack());
         $this->db->recycleContext();
         $this->assertNull($this->db->currentConnection());
+        $this->assertNull($this->db->getQueryStack());
+        $this->assertFalse($client->isInTransaction());
+        $this->assertSame(0, $this->value());
+        $this->assertTrue($this->db->begin());
+        $this->write(2);
+        $this->assertTrue($this->db->commit());
+        $this->assertSame(2, $this->value());
     }
 
     public function testInsertIdSnapshotSurvivesSqlInGlobalLogCallback(): void
@@ -101,7 +96,7 @@ final class TransactionTest extends TestCase
     {
         $this->db->addDb(new Config(MYSQL_CONFIG), 'other');
         $this->db->begin();
-        $context = $this->db->getTransactionContext();
+        $origin = $this->db->currentConnection();
         $nested = false;
         $this->db->setOnQuery(function () use (&$nested): void {
             if (!$nested) {
@@ -116,56 +111,52 @@ final class TransactionTest extends TestCase
         $entity->value = 7;
         $this->assertTrue($entity->update());
         $this->assertSame('other', $this->db->selectConnection());
-        $this->assertNotSame($context, $this->db->getTransactionContext());
+        $this->assertNotSame($origin, $this->db->currentConnection());
         $this->db->setOnQuery(static function (): void {});
         $this->db->selectConnection('default');
-        $this->assertSame($context, $this->db->getTransactionContext());
+        $this->assertSame($origin, $this->db->currentConnection());
         $this->db->rollback();
         $this->assertSame(0, $this->value());
+        $queries = 0;
+        $this->db->setOnQuery(static function () use (&$queries): void { $queries++; });
         $this->assertTrue($entity->update());
+        $this->assertSame(0, $queries);
+        $this->assertSame(7, $entity->value);
+        $this->assertSame(0, $this->value());
+        $reloaded = TransactionEntity::findRecord(1);
+        $reloaded->value = 7;
+        $this->assertTrue($reloaded->update());
         $this->assertSame(7, $this->value());
     }
 
-    public function testCoroutineExitReleasesTransactionContextAfterBusinessError(): void
+    public function testCoroutineExitReturnsTheDatabaseSessionAfterBusinessError(): void
     {
         $db = (new FastDb())->addDb(new Config(MYSQL_CONFIG));
-        $entity = (object) ['value' => 7];
-        $weak = null;
-        $message = null;
+        $weak = $message = null;
         $finished = new \Swoole\Coroutine\Channel(1);
         try {
-            \Swoole\Coroutine::create(function () use ($db, $entity, &$weak, &$message, $finished): void {
-                // 退出通知最后执行，观察者读到结果时自动回滚已经完成。
-                \Swoole\Coroutine::defer(static fn () => $finished->push(true));
+            \Swoole\Coroutine::create(function () use ($db, &$weak, &$message, $finished): void {
+                // 退出通知最后执行，观察者读到结果时会话已归还并回滚未提交写入。
+                \Swoole\Coroutine::defer(static fn() => $finished->push(true));
                 try {
                     $db->begin();
-                    $db->rawQuery("UPDATE `{$this->table}` SET value=7 WHERE id=1");
-                    $context = $db->getTransactionContext();
-                    $weak = \WeakReference::create($context);
-                    $context->rememberBaseline($entity, ['value' => 0], static function ($entity, $baseline): void {
-                        $entity->value = $baseline['value'];
-                    });
+                    $result = $db->rawQuery("UPDATE `{$this->table}` SET value=7 WHERE id=1");
+                    $weak = \WeakReference::create($result);
+                    unset($result);
                     throw new \RuntimeException('business failure');
-                } catch (\Throwable $error) {
-                    $message = $error->getMessage();
-                }
+                } catch (\Throwable $error) { $message = $error->getMessage(); }
             });
             $this->assertTrue($finished->pop(5));
             $this->assertSame('business failure', $message);
             $this->assertSame(0, $this->value());
-            $this->assertSame(0, $entity->value);
             $this->assertNull($weak->get());
             $this->assertNull($db->currentConnection());
             $this->assertNull($db->getQueryStack());
-            // 同一个连接池再次借用，必须能开启并回滚新事务。
             $db->begin();
             $db->rawQuery("UPDATE `{$this->table}` SET value=9 WHERE id=1");
             $db->rollback();
             $this->assertSame(0, $this->value());
-        } finally {
-            $db->recycleContext(false);
-            $db->reset();
-        }
+        } finally { $db->recycleContext(); $db->reset(); }
     }
 
     public function testChangedPrimaryKeyCannotUpdateAnotherRow(): void
@@ -182,7 +173,7 @@ final class TransactionTest extends TestCase
         $this->assertSame(5, (int) $this->observer->query("SELECT value FROM `{$this->table}` WHERE id=2")->fetch_assoc()['value']);
     }
 
-    public function testRollbackInsideLoggerDoesNotAcceptEntityChanges(): void
+    public function testRollbackInsideLoggerDoesNotChangeTheSuccessfulUpdateResultOrBaseline(): void
     {
         $entity = new TransactionEntity(['id' => 1, 'value' => 0]);
         $this->db->begin(); $entity->value = 7; $once = false;
@@ -191,10 +182,18 @@ final class TransactionTest extends TestCase
                 $once = true; $this->db->rollback();
             }
         });
-        $this->assertFalse($entity->update());
-        $this->assertSame(0, $this->value());
-        $this->db->setOnQuery(static function (): void {});
         $this->assertTrue($entity->update());
+        $this->assertSame(0, $this->value());
+        $this->assertSame(7, $entity->value);
+        $queries = 0;
+        $this->db->setOnQuery(static function () use (&$queries): void { $queries++; });
+        $this->assertTrue($entity->update());
+        $this->assertSame(0, $queries);
+        $this->assertSame(0, $this->value());
+        // 回滚后的数据库状态由业务重新加载，再应用待写入值。
+        $reloaded = TransactionEntity::findRecord(1);
+        $reloaded->value = 7;
+        $this->assertTrue($reloaded->update());
         $this->assertSame(7, $this->value());
     }
 
@@ -216,21 +215,20 @@ final class TransactionTest extends TestCase
         $this->assertSame(2, $calls);
     }
 
-    public function testRawTransactionIsGuardedAndForceRecycleRollsItBack(): void
+    public function testRawTransactionIsRolledBackWhenTheSessionIsReturned(): void
     {
         $this->db->rawQuery('START TRANSACTION');
         $this->write(7);
-        $this->assertTrue($this->db->isInTransaction());
-        try { $this->db->recycleContext(); $this->fail('Expected transaction guard'); }
-        catch (\EasySwoole\FastDb\Exception\RuntimeError $error) {
-            $this->assertStringContainsString('active transaction', $error->getMessage());
-        }
-        $this->db->recycleContext(false);
+        $client = $this->db->currentConnection();
+        $this->assertTrue($client->isInTransaction());
+        $this->db->recycleContext();
+        $this->assertFalse($client->isInTransaction());
+        $this->assertNull($this->db->currentConnection());
         $this->db->begin(); $this->db->rollback();
         $this->assertSame(0, $this->value());
     }
 
-    public function testCommentedRawRollbackRestoresEntityBaseline(): void
+    public function testCommentedRawRollbackKeepsTheEntityBaselineUntilBusinessReloads(): void
     {
         $this->db->begin();
         $entity = new TransactionEntity(['id' => 1, 'value' => 0]);
@@ -239,6 +237,11 @@ final class TransactionTest extends TestCase
         $this->assertTrue($this->db->isInTransaction());
         $this->assertTrue($entity->update());
         $this->db->commit();
+        $this->assertSame(0, $this->value());
+        $this->assertSame(7, $entity->value);
+        $reloaded = TransactionEntity::findRecord(1);
+        $reloaded->value = 7;
+        $this->assertTrue($reloaded->update());
         $this->assertSame(7, $this->value());
     }
 
@@ -354,7 +357,7 @@ final class TransactionTest extends TestCase
             $this->assertFalse($other->isInTransaction());
             $this->assertSame(2, $this->value());
         } finally {
-            $other->recycleContext(false);
+            $other->recycleContext();
             $other->reset();
         }
     }
@@ -365,7 +368,7 @@ final class TransactionTest extends TestCase
     }
 
     #[DataProvider('rollbackModes')]
-    public function testRollbackRestoresFirstEntityBaselineForRetry(string $mode): void
+    public function testRollbackRequiresBusinessReloadBeforeRetryingSuccessfulWrites(string $mode): void
     {
         $entity = new TransactionEntity(['id' => 1, 'value' => 0]);
         $updates = function () use ($entity): void {
@@ -376,7 +379,7 @@ final class TransactionTest extends TestCase
             $this->assertTrue($entity->update());
         };
         if($mode === 'invoke'){
-            $this->db->recycleContext(false);
+            $this->db->recycleContext();
             try {
                 $this->db->invoke(static function () use ($updates): void {
                     $updates();
@@ -388,18 +391,25 @@ final class TransactionTest extends TestCase
         } else {
             $updates();
             if($mode === 'recycleContext'){
-                $this->db->recycleContext(false);
+                $this->db->recycleContext();
             }else{
                 $this->db->{$mode}();
             }
         }
         $this->assertSame(0, $this->value());
         $this->assertSame(2, $entity->value);
+        $queries = 0;
+        $this->db->setOnQuery(static function () use (&$queries): void { $queries++; });
         $this->assertTrue($entity->update());
+        $this->assertSame(0, $queries);
+        $this->assertSame(0, $this->value());
+        $reloaded = TransactionEntity::findRecord(1);
+        $reloaded->value = 2;
+        $this->assertTrue($reloaded->update());
         $this->assertSame(2, $this->value());
     }
 
-    public function testCommitClearsSnapshotsBeforeNextRollback(): void
+    public function testCommitAndRollbackLeaveTheLatestSuccessfulComparisonBaseline(): void
     {
         $entity = new TransactionEntity(['id' => 1, 'value' => 0]);
         $this->db->begin();
@@ -410,12 +420,16 @@ final class TransactionTest extends TestCase
         $entity->value = 2;
         $this->assertTrue($entity->update());
         $this->db->rollback();
-        $entity->value = 1;
         $queries = 0;
         $this->db->setOnQuery(static function () use (&$queries): void { $queries++; });
+        $this->assertSame(2, $entity->value);
         $this->assertTrue($entity->update());
         $this->assertSame(0, $queries);
         $this->assertSame(1, $this->value());
+        $reloaded = TransactionEntity::findRecord(1);
+        $reloaded->value = 2;
+        $this->assertTrue($reloaded->update());
+        $this->assertSame(2, $this->value());
     }
 
     public function testSqlExceptionCanBeRolledBack(): void
@@ -486,13 +500,17 @@ final class TransactionTest extends TestCase
         } catch (\EasySwoole\Mysqli\Exception\TransactionLostException $error) {
             $this->assertSame(0, $error->getCode());
         }
-        $this->db->recycleContext(false);
-        $this->assertFalse($client->isInTransaction);
+        $this->db->recycleContext();
+        $this->assertFalse($client->isInTransaction());
         $this->assertTrue($this->db->begin());
         $this->write(3); // 等待服务端释放已断开会话持有的行锁。
         $this->assertTrue($this->db->rollback());
         $this->assertSame(0, $this->value());
         $this->assertTrue($entity->update());
+        $this->assertSame(0, $this->value());
+        $reloaded = TransactionEntity::findRecord(1);
+        $reloaded->value = 1;
+        $this->assertTrue($reloaded->update());
         $this->assertSame(1, $this->value());
     }
 
@@ -516,7 +534,7 @@ final class TransactionTest extends TestCase
             $client = $this->db->currentConnection();
             $this->assertTrue($this->db->$operation($client, \EasySwoole\Mysqli\Transaction\TransactionCompletionFlags::NoChainRelease, 1.0));
             $this->assertNull($client->mysqlClient());
-            $this->assertFalse($client->isInTransaction);
+            $this->assertFalse($client->isInTransaction());
             $this->assertSame(3, $this->value());
         }
     }
@@ -536,7 +554,7 @@ final class TransactionTest extends TestCase
                 $this->assertLessThan(0.5, microtime(true) - $started);
                 $this->assertTrue($other->currentConnection()->mysqlClient()->isTransactionLost());
             }
-            $other->recycleContext(false);
+            $other->recycleContext();
             $this->db->rollback();
             // 通过锁竞争等待服务端处理关闭的会话。
             $this->db->begin();
@@ -544,7 +562,7 @@ final class TransactionTest extends TestCase
             $this->db->commit();
             $this->assertSame(0, $this->value());
         } finally {
-            $other->recycleContext(false);
+            $other->recycleContext();
             $other->reset();
         }
     }
@@ -570,7 +588,7 @@ final class TransactionTest extends TestCase
                 } catch (\Throwable $error) {
                     $result = ['code' => $error->getCode(), 'active' => $db->isInTransaction(), 'value' => $value];
                 } finally {
-                    $db->recycleContext(false);
+                    $db->recycleContext();
                     $db->reset();
                     $done->push($result);
                 }
@@ -604,7 +622,7 @@ final class TransactionTest extends TestCase
                 $db->rawQuery('SELECT 1');
                 $ready->push(true);
                 $release->pop(3.0);
-            } finally { $db->recycleContext(false); $done->push(true); }
+            } finally { $db->recycleContext(); $done->push(true); }
         });
         try {
             $this->assertTrue($ready->pop(3.0));
@@ -623,7 +641,7 @@ final class TransactionTest extends TestCase
         }
         try {
             $this->assertSame(1, $db->rawQuery('SELECT 1 AS value')->getResultOne()['value']);
-        } finally { $db->recycleContext(false); $db->reset(); }
+        } finally { $db->recycleContext(); $db->reset(); }
     }
 
     public function testServerLockWaitTimeoutKeepsTransactionAvailableForRollback(): void
@@ -648,7 +666,7 @@ final class TransactionTest extends TestCase
             $this->assertTrue($other->rollback());
             $this->db->rollback();
             $this->assertSame(0, $this->value());
-        } finally { $other->recycleContext(false); $other->reset(); }
+        } finally { $other->recycleContext(); $other->reset(); }
     }
 
     public function testTransactionCommandTimeoutAgainstRealServerThroughDelayedProxy(): void
@@ -724,11 +742,11 @@ final class TransactionTest extends TestCase
                     $this->assertNull($loggedFailure->getResult());
                     $this->assertSame($error->getRawSql(), $db->getQueryStack(-1)->rawQuery);
                 }
-                $db->recycleContext(false);
+                $db->recycleContext();
                 $this->assertTrue($finished->pop(3.0));
                 // 命令转发后才延迟响应，因此服务端可能已经成功执行 COMMIT。
                 $this->assertSame($operation === 'commit' ? 1 : 0, $this->value());
-            } finally { $db->recycleContext(false); $db->reset(); }
+            } finally { $db->recycleContext(); $db->reset(); }
         }
     }
 

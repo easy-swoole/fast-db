@@ -6,7 +6,6 @@ namespace EasySwoole\FastDb\Tests;
 
 use EasySwoole\FastDb\Config;
 use EasySwoole\FastDb\FastDb;
-use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\Pool;
 use EasySwoole\Mysqli\Config as DriverConfig;
@@ -17,183 +16,160 @@ use Swoole\Coroutine;
 
 final class ContextReleaseTest extends TestCase
 {
-    private function db(int $maxConnections = 1): FastDb
+    private function database(int $capacity = 1): array
     {
-        $config = new Config(['maxObjectNum' => $maxConnections, 'minObjectNum' => 0, 'intervalCheckTime' => 0]);
+        $config = new Config(['maxObjectNum' => $capacity, 'minObjectNum' => 0, 'intervalCheckTime' => 0]);
         $db = (new FastDb())->addDb($config);
-        (new \ReflectionProperty(FastDb::class, 'pools'))->setValue($db, ['default' => new ReleasePool($config)]);
-        return $db;
+        $pool = new ReleasePool($config);
+        (new \ReflectionProperty(FastDb::class, 'pools'))->setValue($db, ['default' => $pool]);
+        return [$db, $pool];
     }
 
     public static function modes(): array { return [['invoke'], ['recycle']]; }
 
     #[DataProvider('modes')]
-    public function testRepeatedBorrowingsReleaseContextsBeforeCoroutineExit(string $mode): void
+    public function testRepeatedBorrowingsReturnTheActualClientAndReleaseQueryResults(string $mode): void
     {
-        $db = $this->db();
-        $refs = new \WeakMap();
+        [$db, $pool] = $this->database();
+        $results = new \WeakMap();
         try {
             for ($i = 0; $i < 2000; $i++) {
                 if ($mode === 'invoke') {
-                    $db->invoke(static function (Connection $client) use ($db, $refs): void {
-                        $refs[$db->getTransactionContext($client)] = true;
+                    $db->invoke(function (Connection $client) use ($db, $results): void {
+                        $this->assertSame($client, $db->currentConnection());
+                        $results[$db->rawQuery('SELECT 1')] = true;
                     });
                 } else {
-                    $db->rawQuery('SELECT 1');
-                    $refs[$db->getTransactionContext()] = true;
+                    $results[$db->rawQuery('SELECT 1')] = true;
                     $db->recycleContext();
                 }
             }
-            $this->assertCount(0, $refs);
+            $this->assertSame(1, $pool->created);
+            $this->assertSame(2000, $pool->recycles);
+            $this->assertCount(0, $results);
             $this->assertNull($db->currentConnection());
-        } finally {
-            $db->recycleContext(false);
-            $db->reset();
-        }
+        } finally { $db->recycleContext(); $db->reset(); }
     }
 
-    public function testGuardPreservesActiveBaselineAndForcedRecycleReleasesIt(): void
+    public function testReturningAnActiveSessionRollsBackBeforeTheNextBorrowing(): void
     {
-        $db = $this->db();
-        $entity = (object) ['value' => 7];
+        [$db, $pool] = $this->database();
         try {
-            $db->begin();
-            $context = $db->getTransactionContext();
-            $weak = \WeakReference::create($context);
-            $context->rememberBaseline($entity, ['value' => 0], static function ($entity, $baseline): void {
-                $entity->value = $baseline['value'];
-            });
-            unset($context);
-            try {
-                $db->recycleContext();
-                $this->fail('Expected transaction guard');
-            } catch (RuntimeError $error) {
-                $this->assertStringContainsString('active transaction', $error->getMessage());
-            }
-            $this->assertNotNull($weak->get());
-            $this->assertTrue($db->isInTransaction());
-            $this->assertSame(7, $entity->value);
-            $db->recycleContext(false);
-            $this->assertSame(0, $entity->value);
-            $this->assertNull($weak->get());
-            $this->assertNull($db->currentConnection());
-            $db->begin();
-            $this->assertTrue($db->getTransactionContext()->isActive());
-            $db->commit();
+            $this->assertTrue($db->begin());
+            $client = $db->currentConnection();
+            $this->assertTrue($client->isInTransaction());
             $db->recycleContext();
-        } finally {
-            $db->recycleContext(false);
-            $db->reset();
-        }
+            $this->assertNull($db->currentConnection());
+            $this->assertFalse($client->isInTransaction());
+            $this->assertSame(1, $client->rollbacks);
+            $db->invoke(function (Connection $borrowed) use ($client): void {
+                $this->assertSame($client, $borrowed);
+                $this->assertFalse($borrowed->isInTransaction());
+            });
+            $this->assertSame(2, $pool->recycles);
+        } finally { $db->recycleContext(); $db->reset(); }
     }
 
-    public function testCommitAndRollbackReleaseBaselinesAcrossBorrowings(): void
+    public function testCommitAndRollbackAllowRepeatedBorrowingWithoutKeepingResults(): void
     {
-        $db = $this->db();
-        $refs = new \WeakMap();
-        $entity = (object) ['value' => 0];
+        [$db, $pool] = $this->database();
+        $results = new \WeakMap();
         try {
-            for ($i = 0; $i < 1000; $i++) {
-                $db->begin();
-                $context = $db->getTransactionContext();
-                $refs[$context] = true;
-                $context->rememberBaseline($entity, ['value' => 0], static function ($entity, $baseline): void {
-                    $entity->value = $baseline['value'];
-                });
-                $entity->value = 7;
-                unset($context);
-                if ($i % 2 === 0) {
-                    $db->commit();
-                    $this->assertSame(7, $entity->value);
-                } else {
-                    $db->rollback();
-                    $this->assertSame(0, $entity->value);
-                }
+            for ($i = 0; $i < 500; $i++) {
+                $this->assertTrue($db->begin());
+                $results[$db->rawQuery('SELECT 1')] = true;
+                $this->assertTrue($i % 2 === 0 ? $db->commit() : $db->rollback());
+                $this->assertFalse($db->isInTransaction());
                 $db->recycleContext();
             }
-            $this->assertCount(0, $refs);
-        } finally {
-            $db->recycleContext(false);
-            $db->reset();
-        }
+            $this->assertCount(0, $results);
+            $this->assertSame(1, $pool->created);
+            $this->assertSame(500, $pool->recycles);
+        } finally { $db->recycleContext(); $db->reset(); }
     }
 
-    public function testCoroutineCleanupDoesNotEndAnotherCoroutineTransaction(): void
+    public function testCoroutineExitReturnsOnlyItsOwnClientAndReleasesItsDiagnostics(): void
     {
-        $db = $this->db(2);
+        [$db, $pool] = $this->database(2);
+        $db->isEnableQueryStack(true);
         $ready = new Coroutine\Channel(2);
         $finished = new Coroutine\Channel(2);
-        $release = [new Coroutine\Channel(1), new Coroutine\Channel(1)];
-        $entities = [(object) ['value' => 7], (object) ['value' => 7]];
-        $weak = [];
+        $resume = [new Coroutine\Channel(1), new Coroutine\Channel(1)];
+        $clients = $entries = $errors = [];
         try {
             foreach ([0, 1] as $index) {
-                Coroutine::create(static function () use ($db, $index, $ready, $finished, $release, $entities, &$weak): void {
-                    Coroutine::defer(static fn () => $finished->push($index));
-                    $db->begin();
-                    $context = $db->getTransactionContext();
-                    $weak[$index] = \WeakReference::create($context);
-                    $context->rememberBaseline($entities[$index], ['value' => 0], static function ($entity, $baseline): void {
-                        $entity->value = $baseline['value'];
-                    });
-                    $ready->push($index);
-                    $release[$index]->pop(2);
+                Coroutine::create(function () use ($db, $index, $ready, $finished, $resume, &$clients, &$entries, &$errors): void {
+                    // 先登记通知，确保 FastDb 的连接归还和诊断清理先完成。
+                    Coroutine::defer(static fn() => $finished->push($index));
+                    try {
+                        $db->begin();
+                        $clients[$index] = $db->currentConnection();
+                        $db->rawQuery('SELECT ' . $index);
+                        $entries[$index] = \WeakReference::create($db->getQueryStack(-1));
+                        $ready->push($index);
+                        $resume[$index]->pop(2);
+                    } catch (\Throwable $error) { $errors[$index] = $error; }
                 });
             }
             $this->assertSame(0, $ready->pop(2));
             $this->assertSame(1, $ready->pop(2));
-            $this->assertTrue($weak[0]->get()->isActive());
-            $this->assertTrue($weak[1]->get()->isActive());
-            $release[0]->push(true);
+            $this->assertNotSame($clients[0], $clients[1]);
+            $this->assertTrue($clients[0]->isInTransaction());
+            $this->assertTrue($clients[1]->isInTransaction());
+            $resume[0]->push(true);
             $this->assertSame(0, $finished->pop(2));
-            $this->assertSame(0, $entities[0]->value);
-            $this->assertNull($weak[0]->get());
-            $this->assertSame(7, $entities[1]->value);
-            $this->assertTrue($weak[1]->get()->isActive());
-            $release[1]->push(true);
+            $this->assertFalse($clients[0]->isInTransaction());
+            $this->assertTrue($clients[1]->isInTransaction());
+            $this->assertNull($entries[0]->get());
+            $this->assertNotNull($entries[1]->get());
+            $this->assertSame(1, $pool->recycles);
+            $resume[1]->push(true);
             $this->assertSame(1, $finished->pop(2));
-            $this->assertSame(0, $entities[1]->value);
-            $this->assertNull($weak[1]->get());
-            $this->assertNull($db->currentConnection());
+            $this->assertFalse($clients[1]->isInTransaction());
+            $this->assertNull($entries[1]->get());
+            $this->assertSame(2, $pool->recycles);
+            $this->assertSame([], $errors);
         } finally { $db->reset(); }
     }
 
-    public function testCoroutineExitRollsBackAndRemovesRegistrations(): void
+    public function testBusinessFailureStillReturnsTheClientWhenTheCoroutineEnds(): void
     {
-        $db = $this->db();
-        $entity = (object) ['value' => 7];
+        [$db, $pool] = $this->database();
         $finished = new Coroutine\Channel(1);
-        $weak = null;
+        $client = $failure = null;
+        Coroutine::create(static function () use ($db, $finished, &$client, &$failure): void {
+            Coroutine::defer(static fn() => $finished->push(true));
+            try {
+                $db->begin(); $client = $db->currentConnection();
+                throw new \RuntimeException('business failure');
+            } catch (\Throwable $error) { $failure = $error; }
+        });
         try {
-            Coroutine::create(static function () use ($db, $entity, $finished, &$weak): void {
-                // 先登记通知，确保它在 FastDb 的退出清理完成后执行。
-                Coroutine::defer(static fn () => $finished->push(true));
-                $db->begin();
-                $context = $db->getTransactionContext();
-                $weak = \WeakReference::create($context);
-                $context->rememberBaseline($entity, ['value' => 0], static function ($entity, $baseline): void {
-                    $entity->value = $baseline['value'];
-                });
-            });
             $this->assertTrue($finished->pop(2));
-            $this->assertSame(0, $entity->value);
-            $this->assertNull($weak->get());
+            $this->assertSame('business failure', $failure->getMessage());
+            $this->assertSame(1, $pool->recycles);
+            $this->assertFalse($client->isInTransaction());
+            $this->assertSame(1, $client->rollbacks);
             $this->assertNull($db->currentConnection());
-            $db->begin();
-            $this->assertTrue($db->getTransactionContext()->isActive());
-            $db->rollback();
+            $this->assertTrue($db->begin());
+            $this->assertTrue($db->rollback());
             $db->recycleContext();
         } finally { $db->reset(); }
     }
 }
 
-/** 走真实连接池生命周期，不建立网络连接。 */
+/** 使用真实连接池生命周期，仅替换网络通信，并记录测试会话的事务状态。 */
 class ReleaseConnection extends Connection
 {
+    public int $rollbacks = 0;
+    private bool $transactionActive = false;
+    public function isInTransaction(): bool { return $this->transactionActive; }
     public function rawQuery(string $query, ?float $timeout = null): bool|array
     {
-        $this->lastAffectRows = 0;
-        $this->lastInsertId = 0;
+        $this->lastAffectRows = $this->lastInsertId = 0;
+        if (str_starts_with($query, 'START TRANSACTION')) { $this->transactionActive = true; }
+        elseif (str_starts_with($query, 'ROLLBACK')) { $this->transactionActive = false; $this->rollbacks++; }
+        elseif (str_starts_with($query, 'COMMIT')) { $this->transactionActive = false; }
         return true;
     }
     public function beforeUse(): bool { return true; }
@@ -202,5 +178,8 @@ class ReleaseConnection extends Connection
 
 class ReleasePool extends Pool
 {
-    protected function createObject(): ObjectInterface { return new ReleaseConnection(new DriverConfig()); }
+    public int $created = 0;
+    public int $recycles = 0;
+    protected function createObject(): ObjectInterface { $this->created++; return new ReleaseConnection(new DriverConfig()); }
+    public function recycleObj($obj): bool { $this->recycles++; return parent::recycleObj($obj); }
 }

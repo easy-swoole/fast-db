@@ -42,22 +42,19 @@ final class ConnectionObserverTest extends TestCase
     }
 
     #[DataProvider('queryModes')]
-    public function testRollbackStateAndBaselinesAreSynchronizedBeforeAGlobalObserverThrows(string $mode): void
+    public function testRollbackStateIsSynchronizedBeforeAGlobalObserverThrows(string $mode): void
     {
         $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer) use ($mode): void {
-            $entity = $this->remember($connection);
             $failure = new \RuntimeException('observer failed');
-            $db->setOnQuery(function (QueryResult $result) use ($connection, $entity, $failure): void {
+            $db->setOnQuery(function (QueryResult $result) use ($connection, $failure): void {
                 $this->assertTrue($result->getResult());
-                $this->assertFalse($connection->isInTransaction);
-                $this->assertSame(0, $entity->value);
+                $this->assertFalse($connection->isInTransaction());
                 throw $failure;
             });
             $this->queueQuery($peer, $mode, $this->ok());
             try { $this->execute($db, $mode, 'ROLLBACK'); $this->fail('Expected observer error'); }
             catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
-            $this->assertFalse($connection->isInTransaction);
-            $this->assertSame(0, $entity->value);
+            $this->assertFalse($connection->isInTransaction());
         }, true);
     }
 
@@ -204,15 +201,14 @@ final class ConnectionObserverTest extends TestCase
     public function testCommitObserverCanBeginANewTransactionWithoutItBeingClearedOnReturn(): void
     {
         $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
-            $this->remember($connection); $once = false;
+            $once = false;
             $db->setOnQuery(function () use ($db, $connection, &$once): void {
-                if (!$once) { $once = true; $this->assertFalse($connection->isInTransaction); $this->assertTrue($db->begin()); }
+                if (!$once) { $once = true; $this->assertFalse($connection->isInTransaction()); $this->assertTrue($db->begin()); }
             });
             $this->queueQuery($peer, 'raw', $this->ok());
             $this->queueQuery($peer, 'raw', $this->ok(1));
             $this->assertTrue($db->commit());
-            $this->assertTrue($connection->isInTransaction);
-            $this->assertTrue($connection->getTransactionContext()->isActive());
+            $this->assertTrue($connection->isInTransaction());
         }, true);
     }
 
@@ -226,15 +222,14 @@ final class ConnectionObserverTest extends TestCase
             $this->queueQuery($peer, 'raw', $this->ok());
             $this->queueQuery($peer, 'raw', $this->ok(1));
             $this->assertTrue($db->rawQuery('COMMIT AND NO CHAIN NO RELEASE')->getResult());
-            $this->assertTrue($connection->isInTransaction);
+            $this->assertTrue($connection->isInTransaction());
         });
     }
 
-    public function testGlobalObserverQueryErrorDoesNotRollbackANewerTransactionTwice(): void
+    public function testGlobalObserverErrorDoesNotChangeANewerTransactionState(): void
     {
         $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
             $once = false; $failure = new \EasySwoole\Mysqli\Exception\Exception('observer error', 1213);
-            $context = $connection->getTransactionContext(); $version = $context->version();
             $db->setOnQuery(static function () use ($db, &$once, $failure): void {
                 if (!$once) { $once = true; $db->begin(); throw $failure; }
             });
@@ -242,9 +237,7 @@ final class ConnectionObserverTest extends TestCase
             $this->queueQuery($peer, 'raw', $this->ok(1));
             try { $db->commit(); $this->fail('Expected observer error'); }
             catch (\EasySwoole\Mysqli\Exception\Exception $error) { $this->assertSame($failure, $error); }
-            $this->assertTrue($connection->isInTransaction);
-            $this->assertTrue($context->isActive());
-            $this->assertSame($version + 1, $context->version());
+            $this->assertTrue($connection->isInTransaction());
         }, true);
     }
 
@@ -258,14 +251,14 @@ final class ConnectionObserverTest extends TestCase
             $this->queueQuery($peer, 'raw', $this->ok(1));
             $this->queueQuery($peer, 'raw', $this->ok());
             $this->assertTrue($db->begin());
-            $this->assertFalse($connection->isInTransaction);
+            $this->assertFalse($connection->isInTransaction());
         });
     }
 
     public function testConnectionObserverRegistrationRejectsPayloadWithoutReplacingTheDispatcher(): void
     {
         $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
-            $entity = $this->remember($connection); $called = false;
+            $called = false;
             $request = (object) ['payload' => str_repeat('r', 1024 * 1024)];
             $weak = \WeakReference::create($request);
             try {
@@ -280,52 +273,40 @@ final class ConnectionObserverTest extends TestCase
             $this->queueQuery($peer, 'raw', $this->ok());
             $this->assertTrue($connection->rawQuery('ROLLBACK'));
             $this->assertFalse($called);
-            $this->assertFalse($connection->isInTransaction);
-            $this->assertSame(0, $entity->value);
+            $this->assertFalse($connection->isInTransaction());
         }, true);
     }
 
-    public function testDirectRawCommitSynchronizesBaselinesWithoutCallingTheFacadeObserver(): void
+    public function testDirectRawCommitSynchronizesStateWithoutCallingTheFacadeObserver(): void
     {
         $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
-            $entity = $this->remember($connection); $token = $connection->getTransactionContext()->token(); $calls = 0;
+            $calls = 0;
             $db->setOnQuery(static function () use (&$calls): void { $calls++; });
             $this->queueQuery($peer, 'raw', $this->ok());
             $this->assertTrue($connection->rawQuery('COMMIT'));
-            $this->assertFalse($connection->isInTransaction);
-            $this->assertFalse($token->wasRolledBack());
-            $this->assertSame(7, $entity->value);
+            $this->assertFalse($connection->isInTransaction());
             $this->assertSame(0, $calls);
         }, true);
     }
 
-    public function testClosingAnUnfinishedTransactionRestoresAndInvalidatesItsContext(): void
+    public function testClosingAnUnfinishedTransactionClearsItsActiveFlag(): void
     {
         $this->withConnection(function (FastDb $db, Connection $connection): void {
-            $entity = $this->remember($connection);
-            $context = $connection->getTransactionContext(); $token = $context->token();
             $this->assertTrue($connection->close());
-            $this->assertFalse($connection->isInTransaction);
-            $this->assertFalse($context->isActive());
-            $this->assertTrue($token->wasRolledBack());
-            $this->assertSame(0, $entity->value);
-            $this->assertNotSame($context, $connection->getTransactionContext());
+            $this->assertFalse($connection->isInTransaction());
         }, true);
     }
 
-    public function testRejectedCloseKeepsTheActiveTransactionAndItsBaselines(): void
+    public function testRejectedCloseKeepsTheActiveTransactionFlag(): void
     {
         $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer, ProtocolConnection $protocol): void {
-            $entity = $this->remember($connection); $context = $connection->getTransactionContext();
             $tickProperty = new \ReflectionProperty(Connection::class, 'lastActiveTick');
             $tick = hrtime(true); $tickProperty->setValue($connection, $tick);
             $busy = new \ReflectionProperty($protocol, 'busy'); $busy->setValue($protocol, true);
             try {
                 try { $connection->close(); $this->fail('Expected concurrent close rejection'); }
                 catch (\EasySwoole\Mysqli\Exception\Exception $error) { $this->assertStringContainsString('Concurrent', $error->getMessage()); }
-                $this->assertTrue($context->isActive());
-                $this->assertSame($context, $connection->getTransactionContext());
-                $this->assertSame(7, $entity->value);
+                $this->assertTrue($connection->isInTransaction());
                 $this->assertTrue($protocol->isConnected());
                 $this->assertSame($tick, $tickProperty->getValue($connection));
             } finally { $busy->setValue($protocol, false); }
@@ -335,44 +316,150 @@ final class ConnectionObserverTest extends TestCase
     public function testReleaseCommitsAndClosesBeforeAGlobalObserverThrows(): void
     {
         $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
-            $entity = $this->remember($connection); $token = $connection->getTransactionContext()->token();
             $failure = new \RuntimeException('release observer');
             $db->setOnQuery(function () use ($connection, $failure): void {
-                $this->assertFalse($connection->isInTransaction);
+                $this->assertFalse($connection->isInTransaction());
                 $this->assertNull($connection->mysqlClient());
                 throw $failure;
             });
             $this->queueQuery($peer, 'raw', $this->ok());
             try { $db->commit(flags: TransactionCompletionFlags::Release); $this->fail('Expected observer error'); }
             catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
-            $this->assertFalse($token->wasRolledBack());
-            $this->assertSame(7, $entity->value);
-            $this->assertFalse($connection->isInTransaction);
+            $this->assertFalse($connection->isInTransaction());
             $this->assertNull($connection->mysqlClient());
         }, true);
     }
 
-    public function testDisconnectedRestoreEndsLocalContextWithoutSendingRollback(): void
+    public function testDisconnectedRestoreClearsTheTransactionWithoutSendingRollback(): void
     {
         $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer, ProtocolConnection $protocol): void {
-            $entity = $this->remember($connection); $context = $connection->getTransactionContext();
             $stream = (new \ReflectionProperty($protocol, 'stream'))->getValue($protocol); $stream->close();
             $connection->objectRestore();
-            $this->assertSame(0, $entity->value);
-            $this->assertFalse($context->isActive());
-            $this->assertFalse($connection->isInTransaction);
+            $this->assertFalse($connection->isInTransaction());
             $this->assertNull($connection->mysqlClient());
             $data = $peer->recv(1, 0.01);
             $this->assertFalse(is_string($data) && $data !== '', 'Disconnected cleanup must not send ROLLBACK');
         }, true);
     }
 
-    private function remember(Connection $connection): object
+    public static function sqlErrorModes(): array
     {
-        $entity = (object) ['value' => 7];
-        $connection->getTransactionContext()->rememberBaseline($entity, ['value' => 0],
-            static function (object $entity, array $baseline): void { $entity->value = $baseline['value']; });
-        return $entity;
+        return [['raw', 1064, true], ['prepared', 1064, true], ['raw', 1205, true],
+            ['prepared', 1205, true], ['raw', 1213, false], ['prepared', 1213, false]];
+    }
+
+    #[DataProvider('sqlErrorModes')]
+    public function testOnlyDeadlocksClearTheActiveFlagOnSqlErrors(string $mode, int $code, bool $active): void
+    {
+        $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer) use ($mode, $code, $active): void {
+            $this->queueQuery($peer, $mode, "\xff" . pack('v', $code) . '#HY000statement failed');
+            try { $this->execute($db, $mode, 'DO 1'); $this->fail('Expected SQL error'); }
+            catch (\EasySwoole\Mysqli\Exception\Exception $error) { $this->assertSame($code, $error->getCode()); }
+            $this->assertSame($active, $connection->isInTransaction());
+            $this->assertTrue($connection->mysqlClient()->isConnected());
+        }, true);
+    }
+
+    public static function rawBoundaries(): array
+    {
+        return [['COMMIT'], ['ROLLBACK'], ['ALTER TABLE scope_rows ADD COLUMN extra INT']];
+    }
+
+    #[DataProvider('rawBoundaries')]
+    public function testRawSqlTrustsTheProtocolTransactionState(string $sql): void
+    {
+        $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer) use ($sql): void {
+            $this->queueQuery($peer, 'raw', $this->ok());
+            $this->assertTrue($connection->rawQuery($sql));
+            $this->assertFalse($connection->isInTransaction());
+            $this->assertFalse($connection->mysqlClient()->inTransaction());
+        }, true);
+    }
+
+    public static function completionModes(): array
+    {
+        return [['commit', TransactionCompletionFlags::Chain, true],
+            ['rollback', TransactionCompletionFlags::Chain, true],
+            ['commit', TransactionCompletionFlags::NoChainNoRelease, false],
+            ['rollback', TransactionCompletionFlags::Release, false]];
+    }
+
+    #[DataProvider('completionModes')]
+    public function testTypedCompletionPreservesChainAndReleaseState(string $operation, TransactionCompletionFlags $flags, bool $active): void
+    {
+        $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer) use ($operation, $flags, $active): void {
+            $this->queueQuery($peer, 'raw', $this->ok($active ? 1 : 2));
+            $this->assertTrue($connection->{$operation . 'Transaction'}($flags));
+            $this->assertSame($active, $connection->isInTransaction());
+            $this->assertSame($flags->releasesConnection(), $connection->mysqlClient() === null);
+        }, true);
+    }
+
+    public function testInheritedStreamsSynchronizeStateWithoutAnExecutionFrame(): void
+    {
+        $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
+            $this->queueQuery($peer, 'raw', $this->ok(1));
+            $this->assertSame([], iterator_to_array($connection->rawIterate('START TRANSACTION')));
+            $this->assertTrue($connection->isInTransaction());
+            $this->assertNotNull((new \ReflectionProperty(Connection::class, 'lastActiveTick'))->getValue($connection));
+            $this->assertNull((new \ReflectionProperty(Connection::class, 'executionFrame'))->getValue($connection));
+            $this->queueQuery($peer, 'raw', $this->ok());
+            $this->assertSame([], iterator_to_array($connection->rawIterate('ROLLBACK')));
+            $this->assertFalse($connection->isInTransaction());
+        });
+    }
+
+    #[DataProvider('queryModes')]
+    public function testStreamStartupDeadlockLetsTheNextHelperStartANewTransaction(string $mode): void
+    {
+        $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer) use ($mode): void {
+            $this->queueQuery($peer, $mode, "\xff" . pack('v', 1213) . '#40001deadlock');
+            try {
+                $mode === 'raw' ? $connection->rawIterate('SELECT 1')
+                    : $connection->iterate((new QueryBuilder())->raw('SELECT 1'));
+                $this->fail('Expected stream startup deadlock');
+            } catch (\EasySwoole\Mysqli\Exception\Exception $error) { $this->assertSame(1213, $error->getCode()); }
+            $this->assertFalse($connection->isInTransaction());
+            $this->assertTrue($connection->mysqlClient()->isConnected());
+            $commands = [];
+            $db->setOnQuery(static function (QueryResult $result) use (&$commands): void { $commands[] = $result->getRawSql(); });
+            $this->queueQuery($peer, 'raw', $this->ok(1));
+            $this->queueQuery($peer, 'raw', $this->ok());
+            $this->assertSame('done', $db->transaction(static fn (): string => 'done'));
+            $this->assertSame(['START TRANSACTION', 'COMMIT AND NO CHAIN NO RELEASE'], $commands);
+            $this->assertFalse($connection->isInTransaction());
+        }, true);
+    }
+
+    public function testInterruptedStreamReadsTheDisconnectedProtocolStateWithoutASuccessCallback(): void
+    {
+        $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
+            $this->reply($peer, "\1");
+            $column = '';
+            foreach (['def', '', '', '', 'id', 'id'] as $part) { $column .= chr(strlen($part)) . $part; }
+            $column .= "\x0c" . pack('vV', 33, 255) . "\x08" . pack('vC', 0, 0) . "\0\0";
+            $this->reply($peer, $column, 2);
+            $this->reply($peer, "\xfe\0\0\1\0", 3);
+            $stream = $connection->rawIterate('SELECT id');
+            $this->assertTrue($connection->isInTransaction());
+            $peer->close();
+            try { iterator_to_array($stream); $this->fail('Expected stream read failure'); }
+            catch (\EasySwoole\Mysqli\Exception\Exception) { $this->addToAssertionCount(1); }
+            $this->assertFalse($connection->mysqlClient()->isConnected());
+            $this->assertFalse($connection->isInTransaction());
+        }, true);
+    }
+
+    public static function healthErrorModes(): array { return [[1064, true], [1213, false]]; }
+
+    #[DataProvider('healthErrorModes')]
+    public function testHealthErrorsReadTheActualProtocolState(int $code, bool $active): void
+    {
+        $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer) use ($code, $active): void {
+            $this->queueQuery($peer, 'raw', "\xff" . pack('v', $code) . '#HY000health query failed');
+            $this->assertFalse($connection->beforeUse());
+            $this->assertSame($active, $connection->isInTransaction());
+        }, true);
     }
 
     private function execute(FastDb $db, string $mode, string $sql): QueryResult
@@ -388,7 +475,7 @@ final class ConnectionObserverTest extends TestCase
             $stream = (new \ReflectionProperty($protocol, 'stream'))->getValue($protocol);
             (new \ReflectionProperty($stream, 'socket'))->setValue($stream, $socket);
             $state = (new \ReflectionProperty($protocol, 'state'))->getValue($protocol); $state->established(); $state->applyServerStatus($transaction ? 1 : 2);
-            $connection = new Connection($config); $connection->connectionName = 'default'; $connection->isInTransaction = $transaction;
+            $connection = new Connection($config); $connection->connectionName = 'default';
             (new \ReflectionProperty(Client::class, 'mysqlClient'))->setValue($connection, $protocol);
             $db = new FastDb(); $current = new \ReflectionProperty(FastDb::class, 'currentConnection');
             $current->setValue($db, [Coroutine::getCid() => ['default' => $connection]]);
@@ -405,5 +492,5 @@ final class ConnectionObserverTest extends TestCase
     }
 
     private function ok(int $status = 2, int $affected = 0, int $insertId = 0): string { return "\0" . chr($affected) . chr($insertId) . pack('v', $status) . "\0\0"; }
-    private function reply(Socket $peer, string $payload): void { $this->assertSame(strlen($payload) + 4, $peer->sendAll(substr(pack('V', strlen($payload)), 0, 3) . "\x01" . $payload, 0.1)); }
+    private function reply(Socket $peer, string $payload, int $sequence = 1): void { $this->assertSame(strlen($payload) + 4, $peer->sendAll(substr(pack('V', strlen($payload)), 0, 3) . chr($sequence) . $payload, 0.1)); }
 }

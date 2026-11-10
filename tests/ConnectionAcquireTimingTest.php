@@ -25,7 +25,7 @@ final class ConnectionAcquireTimingTest extends TestCase
 
     protected function tearDown(): void
     {
-        foreach ($this->databases as $db) { $db->recycleContext(false); }
+        foreach ($this->databases as $db) { $db->recycleContext(); }
     }
 
     public static function queryModes(): array { return [[true], [false]]; }
@@ -414,18 +414,20 @@ final class ConnectionAcquireTimingTest extends TestCase
 
 class AcquireTimingClient extends Connection
 {
+    private bool $transactionActive = false;
     public array $sql = [];
     public ?\Throwable $queryFailure = null;
     public ?\Closure $healthCheck = null;
     public function __construct() { parent::__construct(new ClientConfig()); }
+    public function isInTransaction(): bool { return $this->transactionActive; }
     public function query(QueryBuilder $builder, ?float $timeout = null): bool|array { return $this->rawQuery($builder->getLastPrepareQuery(), $timeout); }
     public function rawQuery(string $query, ?float $timeout = null): bool|array
     {
         $this->sql[] = $query;
         if ($this->queryFailure !== null) { throw $this->queryFailure; }
         $this->lastAffectRows = $this->lastInsertId = 0;
-        if (str_starts_with($query, 'START TRANSACTION')) { $this->isInTransaction = true; return true; }
-        if (str_starts_with($query, 'COMMIT') || str_starts_with($query, 'ROLLBACK')) { return true; }
+        if (str_starts_with($query, 'START TRANSACTION')) { $this->transactionActive = true; return true; }
+        if (str_starts_with($query, 'COMMIT') || str_starts_with($query, 'ROLLBACK')) { $this->transactionActive = false; return true; }
         return $query === 'SELECT FOUND_ROWS() as count' ? [['count' => 37]] : [['id' => 1]];
     }
     public function beforeUse(): bool { return $this->healthCheck === null || ($this->healthCheck)(); }

@@ -77,7 +77,7 @@ final class QueryTimingTest extends TestCase
     public function testTransactionDurationIsRecorded(string $operation, bool $fails): void
     {
         $client = $this->createStub(Connection::class);
-        $client->isInTransaction = $operation !== 'begin';
+        $client->method('isInTransaction')->willReturn($operation !== 'begin');
         $method = match ($operation) {
             'begin' => 'beginTransaction',
             'commit' => 'commitTransaction',

@@ -44,7 +44,6 @@ final class BulkWriteTest extends TestCase
     {
         if ($this->singleton === null) { return; }
         if ($this->connection->database->inTransaction()) { $this->connection->database->rollBack(); }
-        $this->connection->finishTransaction(false);
         $this->db->setOnQuery(static function (): void {});
         (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db, []);
         $this->singleton->setValue(null, $this->originalInstance);
@@ -498,6 +497,7 @@ class BulkWriteFixtureList extends ConvertList
 /** 记录原始 MySQL SQL，仅在交给 SQLite 执行的副本中改写 upsert 语法。 */
 class BulkWriteFixtureConnection extends Connection
 {
+    public function isInTransaction(): bool { return $this->database->inTransaction(); }
     public array $queries = [];
     public array $builders = [];
     public array $rawQueries = [];
@@ -529,14 +529,14 @@ class BulkWriteFixtureConnection extends Connection
     {
         $this->rawQueries[] = $query;
         $this->lastAffectRows = $this->lastInsertId = 0;
-        if (str_starts_with($query, 'START TRANSACTION')) { $this->database->beginTransaction(); $this->isInTransaction = true; return true; }
+        if (str_starts_with($query, 'START TRANSACTION')) { $this->database->beginTransaction(); return true; }
         if (str_starts_with($query, 'ROLLBACK')) {
             if ($this->database->inTransaction()) { $this->database->rollBack(); }
-            $this->isInTransaction = false; return true;
+            return true;
         }
         if (str_starts_with($query, 'COMMIT')) {
             if ($this->database->inTransaction()) { $this->database->commit(); }
-            $this->isInTransaction = false; return true;
+            return true;
         }
         $statement = $this->database->query($query);
         return $statement->columnCount() > 0 ? $statement->fetchAll(\PDO::FETCH_ASSOC) : true;
