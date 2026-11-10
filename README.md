@@ -375,9 +375,10 @@ $rows = User::findAll(['status' => 1], returnAsArray: true);
 
 参数顺序：`findAll($queryLimit = null, $tableName = null, $returnAsArray = false, $selectForUpdate = false, $onQuery = null)`。
 
-`findAll()` 的主键简写参数类型是字符串，不是整数。逗号分隔的主键会转换成整数；UUID、字符串主键列表应使用显式 `IN` 条件：
+`findAll()` 的主键简写参数类型是字符串，不是整数。逗号分隔的主键按字符串原样绑定，保留前导零，也支持 UUID、字符串主键列表；还可以使用显式 `IN` 条件：
 
 ```php
+$users = User::findAll('uuid-a,uuid-b');
 $users = User::findAll(['id' => [['uuid-a', 'uuid-b'], 'IN']]);
 ```
 
@@ -587,6 +588,8 @@ $user->update(); // 只更新 name。
 $user->update(); // 保存尚未写入的 score。
 ```
 
+`toArray()` 在转换前应用 `fields()` 和 `hideFields()`；`insert()` / `update()` 在转换及变更比较前只应用 `fields()`。被排除的字段不会执行 `toValue` 回调或转换对象的 `toValue()`，不会因其转换失败阻止本次操作。部分更新只接受实际写入字段的比较基准，其他修改仍可在后续放开白名单后保存。
+
 `fields(null)` 或 `fields([])` 不限制更新字段。成功执行的更新会重置查询配置，需要每次重新设置限制。影响行数依赖 MySQL 返回结果，不代表是否命中记录的完整信息。
 
 ### 快捷更新
@@ -602,7 +605,14 @@ $affected = User::fastUpdate(function (QueryBuilder $query): void {
 
 签名：`fastUpdate($updateLimit, $data, $tableName = null, $onQuery = null)`，通常返回影响行数。它直接写入 `$data`，不执行实体更新钩子，也不做属性转换或变更比较。
 
-当前 `fastUpdate()` 的条件数组逐项传入 `where($key, $value)`，不支持 `findRecord()` 中的 `[值, 运算符]` 展开简写；复杂条件请用回调。空条件数组会生成无 WHERE 的更新，调用前应明确业务意图。
+`findRecord()`、`findAll()`、`fastUpdate()`、`fastDelete()` 共用条件解析规则：条件数组中的普通值表示等值条件，数组值展开为 `[值, 运算符]`；回调接收原始 QueryBuilder。`findRecord()` 的字符串主键始终是单个值，另外三个方法的逗号主键简写表示 `IN`，各片段保留字符串，不强制转为整数。不做空白裁剪；主键本身包含逗号时，用条件数组显式指定。
+
+```php
+$affected = User::fastUpdate(['score' => [60, '>=']], ['status' => 1]);
+$affected = User::fastUpdate(['id' => [['uuid-a', 'uuid-b'], 'IN']], ['status' => 1]);
+```
+
+空条件数组会生成无 WHERE 的更新，调用前应明确业务意图。
 
 ### 删除
 
@@ -810,7 +820,7 @@ $user->update(); // nullable 属性可清空到 SQL NULL。
 
 本节示例需要把快速开始模型的 `tags` 声明替换为转换属性。实体 `toArray()` 对转换对象使用 `toValue()`，因此这里输出的 `tags` 是 JSON 字符串，不是嵌套数组。
 
-`ConvertList::toObject()` 接收 PHP 数组或解码结果为数组的 JSON 字符串；直接传入 PHP `null` 保留默认空列表约定。非法 JSON 抛出 `JsonException`，其他输入类型或 JSON 标量抛出 `InvalidArgumentException`，不再静默替换成空列表。`append(null)` 不追加。`remove()` 会保留原数组键，删除后 JSON 编码可能呈现对象形式；需要列表 JSON 时可先使用 `array_values()` 整理数据并重新赋值。
+`ConvertList::toObject()` 接收 PHP 数组或解码结果为数组的 JSON 字符串；直接传入 PHP `null` 保留默认空列表约定。非法 JSON 抛出 `JsonException`，其他输入类型或 JSON 标量抛出 `InvalidArgumentException`，不再静默替换成空列表。`append(null)` 不追加。`first()` 返回第一个实际存在的元素，空列表返回 null，不要求数组键从 0 开始。`remove()` 会保留原数组键，删除后 JSON 编码可能呈现对象形式；需要列表 JSON 时可先使用 `array_values()` 整理数据并重新赋值。
 
 #### Bean 列表
 
@@ -1529,7 +1539,39 @@ $db->transaction(function (FastDb $db): void {
 
 拥有层固定入口的实际 Connection，结束时始终操作该连接；回调改变选库，不会让 helper 提交其他连接。方法本身不恢复选库，也不会把回调中的全部 SQL 强制路由到入口连接。需要退出时恢复连接名，可配合 `withConnection()`。
 
-A → B → A 时，A、B 各自尚无事务的外层分别开始一个事务，重新进入 A 的内层只加入 A：
+A → B → A 时，A、B 各自尚无事务的外层分别开始一个事务，重新进入 A 的内层只加入 A。
+
+假设已通过 `addDb()` 注册名为 `A`、`B` 的连接，进入示例前两者都没有事务。下面在 A 写入、切到 B 读取，再回到 A 写入：
+
+```php
+$db = FastDb::getInstance();
+$db->withConnection('A', function (FastDb $db): void {
+    $db->transaction(function (FastDb $db): void {
+        // 开始 A 的事务。
+        User::fastUpdate(1, ['status' => 1]);
+
+        $db->withConnection('B', function (FastDb $db): void {
+            $db->transaction(function (FastDb $db): void {
+                // 开始 B 的独立事务，当前查询使用 B。
+                User::findRecord(1);
+
+                $db->withConnection('A', function (FastDb $db): void {
+                    $db->transaction(function (FastDb $db): void {
+                        // 复用外层 A 的连接和事务，不重复 BEGIN。
+                        User::fastUpdate(1, ['score' => 20]);
+                    }); // 只退出内层回调，不提交 A。
+                }); // 恢复选择 B。
+
+                User::findRecord(2); // 继续使用 B。
+            }); // 正常返回，提交 B。
+        }); // 恢复选择 A。
+
+        User::fastUpdate(1, ['status' => 2]); // 仍在最外层 A 的事务中。
+    }); // 正常返回，提交 A，包括内层 A 的写入。
+}); // 恢复进入示例前的连接名。
+```
+
+发生异常时：
 
 - 内层 A 的异常被业务捕获后，A、B 都可以继续正常提交；没有自动的局部回滚。
 - 异常逐层逃出时，各个拥有层分别回滚自己的连接。
@@ -1817,6 +1859,10 @@ $db->isEnableQueryStack(false, maxStackSize: 2); // 停止追加，保持相同�
 | `duration` | 当前事件耗时，秒；query 为原查询执行阶段（含 query(callable) 工厂），connectionAcquire 为本次 getObj() 的获取总耗时 |
 | `exception` | SQL 执行异常，或连接获取事件中实际向外抛出的借用异常；成功时为 null |
 | `startTime` / `endTime` | 记录的起止 Unix 时间戳，用于日志定位；耗时字段使用单调时钟 |
+
+主查询与 `SELECT FOUND_ROWS() as count` 都生成独立 trace，并分别触发全局 `onQuery`。FastDb 在完成回调之后、全局观察回调之前，先记录两条已执行 SQL；主查询的全局回调抛异常时，总数 SQL 的 trace 仍保留，但沿用通知中断规则，不再调用总数查询的全局回调。SQL 执行异常优先于观察回调异常向外抛出。
+
+因此在全局 `onQuery` 中开关查询栈只影响后续查询，不追溯改变本次主查询与总数查询的记录。回调中执行新 SQL 时，栈顺序是主查询、总数查询、回调内 SQL；若完成回调先执行新 SQL，仍可能先记录该内层查询。
 
 普通 SQL 记录的异常来自该 SQL 执行结果，不把 SQL 成功后日志回调再抛出的错误改记为 SQL 失败。获取连接失败时，栈中的 `exception` 则保留实际向调用方抛出的那个异常。
 
@@ -2119,7 +2165,7 @@ SELECT * FROM users WHERE (status = 0) AND id > 4 ORDER BY id ASC LIMIT 2;
 
 ### 如何批量查询 UUID 主键？
 
-用数组/回调显式构建 `IN`。逗号主键字符串简写会调用 `intval()`，适用于数字主键。
+可以使用 `findAll('uuid-a,uuid-b')`，各主键按字符串原样绑定。也可以用 `findAll(['id' => [['uuid-a', 'uuid-b'], 'IN']])` 或回调显式构建 `IN`；主键值本身包含逗号时使用数组/回调。
 
 ### 事务中能使用 invoke() 吗？
 

@@ -39,6 +39,7 @@ final class InsertStateTest extends TestCase
         $this->singleton->setValue(null, $this->db);
         InsertStateRecord::$assignCalls = InsertStateRecord::$encodeCalls = InsertStateList::$valueCalls = 0;
         InsertStateRecord::$changeNameWhenEncoding = false;
+        InsertStateRecord::$failEncoding = InsertStateList::$failEncoding = false;
     }
 
     protected function tearDown(): void
@@ -148,6 +149,60 @@ final class InsertStateTest extends TestCase
         $this->assertCount(1, $this->client->queries);
     }
 
+    public function testExcludedConvertersCannotBlockOutputInsertOrPartialUpdate(): void
+    {
+        $entity = new InsertStateRecord(['name' => 'before', 'payload' => '[1]', 'items' => '[2]']);
+        $entity->payload = [3]; $entity->items->append(4);
+        InsertStateRecord::$encodeCalls = InsertStateList::$valueCalls = 0;
+        InsertStateRecord::$failEncoding = InsertStateList::$failEncoding = true;
+        $entity->queryLimit()->hideFields(['payload', 'items']);
+        $this->assertSame(['id' => null, 'name' => 'before', 'score' => null, 'moment' => null], $entity->toArray());
+        $entity->queryLimit()->hideFields([])->fields(['name']);
+        $this->assertSame(['name' => 'before'], $entity->toArray());
+        $this->assertTrue($entity->insert());
+        $entity->name = 'after';
+        $entity->queryLimit()->fields(['name']);
+        $this->assertTrue($entity->update());
+        $this->assertSame(0, InsertStateRecord::$encodeCalls);
+        $this->assertSame(0, InsertStateList::$valueCalls);
+        $this->assertNull($this->client->row()['payload']);
+        $this->assertNull($this->client->row()['items']);
+        // 被排除字段仍保留待更新状态，放开白名单后正常保存。
+        InsertStateRecord::$failEncoding = InsertStateList::$failEncoding = false;
+        $this->assertTrue($entity->update());
+        $this->assertSame('[3]', $this->client->row()['payload']);
+        $this->assertSame('[2,4]', $this->client->row()['items']);
+        $this->assertSame('after', $this->client->row()['name']);
+        $this->assertCount(3, $this->client->queries);
+        $this->assertTrue($entity->update());
+        $this->assertCount(3, $this->client->queries);
+    }
+
+    public function testHiddenFieldsStillParticipateInDatabaseWrites(): void
+    {
+        $entity = new InsertStateRecord(['name' => 'hidden', 'payload' => '[1]']);
+        $entity->queryLimit()->hideFields(['name', 'payload']);
+        $this->assertTrue($entity->insert());
+        $this->assertSame('hidden', $this->client->row()['name']);
+        $this->assertSame('[1]', $this->client->row()['payload']);
+        $entity->payload = [2];
+        $this->assertTrue($entity->update());
+        $this->assertSame('[2]', $this->client->row()['payload']);
+    }
+
+    public function testSelectedConverterErrorsPropagateWithoutExecutingSql(): void
+    {
+        $entity = new InsertStateRecord(['name' => 'before', 'payload' => '[1]']);
+        InsertStateRecord::$failEncoding = true;
+        foreach (['toArray', 'insert', 'update'] as $operation) {
+            $entity->payload = [2];
+            $entity->queryLimit()->fields(['payload']);
+            try { $entity->$operation(); $this->fail('Selected converter failure must propagate'); }
+            catch (\RuntimeException $error) { $this->assertSame('payload encoding failed', $error->getMessage()); }
+        }
+        $this->assertCount(0, $this->client->queries);
+    }
+
     public function testSqlFailureDoesNotAcceptFieldsAndKeepsObserverChangesForRetry(): void
     {
         $this->client->database->exec("INSERT INTO insert_state (id,name) VALUES (20,'before')");
@@ -240,6 +295,7 @@ class InsertStateRecord extends AbstractEntity
     public static int $assignCalls = 0;
     public static int $encodeCalls = 0;
     public static bool $changeNameWhenEncoding = false;
+    public static bool $failEncoding = false;
     #[Property(isPrimaryKey: true)] public int $id;
     #[Property] public ?string $name;
     #[Property] public ?int $score;
@@ -252,6 +308,7 @@ class InsertStateRecord extends AbstractEntity
     public static function encode(?array $value, self $entity): ?string
     {
         self::$encodeCalls++;
+        if (self::$failEncoding) { throw new \RuntimeException('payload encoding failed'); }
         if (self::$changeNameWhenEncoding) { $entity->name = 'changed-by-encoder'; }
         return $value === null ? null : json_encode($value, JSON_THROW_ON_ERROR);
     }
@@ -261,7 +318,13 @@ class InsertStateRecord extends AbstractEntity
 class InsertStateList extends ConvertList
 {
     public static int $valueCalls = 0;
-    public function toValue(): string { self::$valueCalls++; return parent::toValue(); }
+    public static bool $failEncoding = false;
+    public function toValue(): string
+    {
+        self::$valueCalls++;
+        if (self::$failEncoding) { throw new \RuntimeException('items encoding failed'); }
+        return parent::toValue();
+    }
 }
 
 /** 通过正常 FastDb 执行路径运行 SQLite SQL，模拟 MySQL 无变化结果及指定单次失败。 */

@@ -4,6 +4,7 @@ namespace EasySwoole\FastDb\Internal;
 
 use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Beans\Query;
+use EasySwoole\Mysqli\QueryBuilder;
 
 /** @internal 根据显式关联声明生成的查询快照，不执行数据库查询。 */
 final class RelationPlan
@@ -16,4 +17,12 @@ final class RelationPlan
         public readonly string $connectionName,
         public readonly mixed $selfValue,
     ) {}
+
+    /** 按需加载及预加载的缓存查询共用关联范围、字段和单条限制规则。 */
+    public static function buildLookup(QueryBuilder $query, string $tableName, Relate $relate,
+        string $kind, mixed $selfValue, ?array $fields): QueryBuilder
+    {
+        return $query->groupExistingWhere()->where($relate->targetProperty, $selfValue)
+            ->get($tableName, $kind === 'one' ? 2 : null, $fields);
+    }
 }

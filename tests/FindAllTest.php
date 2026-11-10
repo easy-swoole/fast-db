@@ -49,7 +49,7 @@ final class FindAllTest extends TestCase
             'single primary key' => ['1', "WHERE  `id` = '1'"],
             'zero primary key' => ['0', "WHERE  `id` = '0'"],
             'string primary key' => ['user-1', "WHERE  `id` = 'user-1'"],
-            'multiple primary keys' => ['1,2', 'WHERE  `id` IN ( 1, 2 )'],
+            'multiple primary keys' => ['1,2', "WHERE  `id` IN ( '1', '2' )"],
             'unfiltered query' => [null, ''],
         ];
     }

@@ -80,8 +80,8 @@ final class RelationLoader
         $query = $selection->__getQueryBuilder();
         $fields = $selection->getFields();
         $returnAsArray = $fields['returnAsArray'] ?? false;
-        $selection->whereRequired($relate->targetProperty, $entity->{$relate->selfProperty} ?? null);
-        $query->get($tableName ?: $target->tableName(), $kind === 'one' ? 2 : null, $fields['fields'] ?? null);
+        RelationPlan::buildLookup($query, $tableName ?: $target->tableName(), $relate, $kind,
+            $entity->{$relate->selfProperty} ?? null, $fields['fields'] ?? null);
         $key = $relate->cacheResult || $this->preloaded !== []
             ? $this->fingerprint($relate, $query, $kind, $returnAsArray, FastDb::getInstance()->selectConnection()) : null;
         return [$target, $query, $returnAsArray, $key];

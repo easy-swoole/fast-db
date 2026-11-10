@@ -58,7 +58,7 @@ final class QueryDiagnostics
         unset($this->stacks[$cid], $this->offsets[$cid]);
     }
 
-    public function notify(QueryResult $result): void
+    public function record(QueryResult $result): void
     {
         if ($this->enabled) {
             $stack = new QueryStack();
@@ -71,9 +71,12 @@ final class QueryDiagnostics
             $stack->rawQuery = $result->getRawSql();
             $this->append($stack);
         }
-        if ($this->onQuery !== null) {
-            ($this->onQuery)($result);
-        }
+    }
+
+    /** 用户观察回调独立于执行记录，异常不影响已执行 SQL 的 trace。 */
+    public function notify(QueryResult $result): void
+    {
+        if ($this->onQuery !== null) { ($this->onQuery)($result); }
     }
 
     public function recordAcquire(string $name, float $startTime, float $endTime, float $duration,

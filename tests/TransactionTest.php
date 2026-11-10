@@ -76,6 +76,27 @@ final class TransactionTest extends TestCase
         $this->assertSame(3, DeclaredMysqlEntity::$getterCalls);
     }
 
+    public function testConditionShortcutsPreserveTextKeysAndShareOperators(): void
+    {
+        $this->observer->query("ALTER TABLE `{$this->table}` MODIFY id VARCHAR(20) NOT NULL");
+        $this->observer->query("INSERT INTO `{$this->table}` VALUES ('01',10),('02',20),('a',30),('b',40),('a,b',50)");
+        $rows = TextKeyMysqlEntity::findAll('01,02,a', returnAsArray: true);
+        $ids = array_column($rows, 'id'); sort($ids);
+        $this->assertSame(['01', '02', 'a'], $ids);
+        $this->assertSame('a,b', TextKeyMysqlEntity::findRecord('a,b')->id);
+        $this->assertSame(2, TextKeyMysqlEntity::fastUpdate(['id' => [['01', 'a'], 'IN'], 'value' => [5, '>']], ['value' => 99]));
+        $this->assertSame(99, TextKeyMysqlEntity::findRecord('01')->value);
+        $this->assertSame(0, TextKeyMysqlEntity::findRecord('1')->value);
+        $this->assertSame(20, TextKeyMysqlEntity::findRecord('02')->value);
+        $this->assertSame(2, TextKeyMysqlEntity::fastDelete('01,a'));
+        $this->assertSame([], TextKeyMysqlEntity::findAll('01,a', returnAsArray: true));
+        $this->assertSame(50, TextKeyMysqlEntity::findRecord('a,b')->value);
+        $this->assertSame(2, TextKeyMysqlEntity::fastUpdate('02,b', ['value' => 77]));
+        $this->assertSame(77, TextKeyMysqlEntity::findRecord('02')->value);
+        $this->assertSame(1, TextKeyMysqlEntity::fastDelete(['value' => [75, '>'], 'id' => '02']));
+        $this->assertSame('b', TextKeyMysqlEntity::findRecord(['value' => [70, '>']])->id);
+    }
+
     public function testDefaultRecycleRollsBackTheSessionAndClearsDiagnostics(): void
     {
         $this->db->isEnableQueryStack(true);
@@ -823,4 +844,11 @@ class DeclaredMysqlEntity extends AbstractEntity
     {
         $query->where('id', $this->id === 1 ? 3 : 4, '>=')->orderBy('id','ASC');
     }
+}
+
+class TextKeyMysqlEntity extends AbstractEntity
+{
+    #[Property(isPrimaryKey: true)] public string $id;
+    #[Property] public int $value;
+    public function tableName(): string { return TransactionEntity::$table; }
 }

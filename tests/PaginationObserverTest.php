@@ -21,6 +21,7 @@ final class PaginationObserverTest extends TestCase
     {
         $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
             $events = [];
+            $db->isEnableQueryStack(true);
             $page = $this->page();
             $sql = $page->getLastPrepareQuery();
             $db->setOnQuery(function (QueryResult $result) use ($db, $page, &$events): void {
@@ -42,10 +43,27 @@ final class PaginationObserverTest extends TestCase
             $this->assertSame($sql, $result->getQueryBuilder()->getLastPrepareQuery());
             $this->assertSame(37, $db->getTotalCount($result));
             $this->assertSame(['global-main', 'global-probe', 'global-count'], $events);
+            $this->assertSame([null, 'SELECT FOUND_ROWS() as count', 'SELECT 1 AS probe'], array_column($db->getQueryStack(), 'rawQuery'));
             $commands = $this->commands($peer, 5);
             $this->assertSame("\x03SELECT FOUND_ROWS() as count", $commands[3]);
             $this->assertSame("\x03SELECT 1 AS probe", $commands[4]);
             $this->assertNextQuerySucceeds($db, $peer);
+        });
+    }
+
+    public function testGlobalObserverCannotChangeRecordingOfTheAlreadyExecutedPage(): void
+    {
+        $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
+            $db->setOnQuery(static function () use ($db): void { $db->isEnableQueryStack(true); });
+            $this->queuePage($peer); $this->textRows($peer, 'count', 37);
+            $db->query($this->page());
+            $this->assertNull($db->getQueryStack());
+            $db->setOnQuery(static function () use ($db): void { $db->isEnableQueryStack(false); });
+            $this->queuePage($peer); $this->textRows($peer, 'count', 37);
+            $db->query($this->page());
+            $this->assertSame([null, 'SELECT FOUND_ROWS() as count'], array_column($db->getQueryStack(), 'rawQuery'));
+            $this->assertNextQuerySucceeds($db, $peer);
+            $this->assertCount(2, $db->getQueryStack());
         });
     }
 
@@ -71,6 +89,7 @@ final class PaginationObserverTest extends TestCase
     {
         $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
             $failure = new \RuntimeException('main global observer'); $global = [];
+            $db->isEnableQueryStack(true);
             $db->setOnQuery(static function (QueryResult $result) use ($failure, &$global): void { $global[] = $result; throw $failure; });
             $this->queuePage($peer); $this->textRows($peer, 'count', 37);
             try { $db->query($this->page()); $this->fail('Expected observer failure'); }
@@ -79,6 +98,8 @@ final class PaginationObserverTest extends TestCase
             $this->assertSame([['id' => 7]], $global[0]->getResult());
             $this->assertNull($global[0]->getException());
             $this->assertSame(37, $db->getTotalCount($global[0]));
+            $this->assertSame([null, 'SELECT FOUND_ROWS() as count'], array_column($db->getQueryStack(), 'rawQuery'));
+            $this->assertNull($db->getQueryStack(-1)->exception);
             $this->assertNextQuerySucceeds($db, $peer);
         });
     }
@@ -129,10 +150,11 @@ final class PaginationObserverTest extends TestCase
     {
         $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
             $failure = new \RuntimeException('global observer failure'); $global = [];
+            $db->isEnableQueryStack(true);
             $db->setOnQuery(static function (QueryResult $result) use ($failure, &$global): void { $global[] = $result; throw $failure; });
             $this->queuePage($peer); $this->reply($peer, "\xff" . pack('v', 1064) . '#42000count failed', 1);
             try { $db->query($this->page()); $this->fail('Expected the original count SQL error'); }
-            catch (\EasySwoole\Mysqli\Exception\Exception $error) { $this->assertSame(1064, $error->getCode()); }
+            catch (\EasySwoole\Mysqli\Exception\Exception $error) { $this->assertSame(1064, $error->getCode()); $this->assertSame($error, $db->getQueryStack(-1)->exception); }
             $this->assertCount(1, $global);
             $this->assertNull($global[0]->getException());
             $this->assertNextQuerySucceeds($db, $peer);

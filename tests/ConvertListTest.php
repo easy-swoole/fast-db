@@ -36,6 +36,7 @@ final class ConvertListTest extends TestCase
         $this->assertSame([['name' => '丙'], ['name' => '乙'], ['name' => '丙']], json_decode($list->toValue(), true));
         $list->remove($bean, true);
         $this->assertSame('[{"name":"乙"}]', json_encode(json_decode($list->toValue(), true), JSON_UNESCAPED_UNICODE));
+        $this->assertSame('乙', $list->first()->name);
         $this->assertSame('乙', UserBeanList::toObject($list->toValue())->first()->name);
     }
 
@@ -81,6 +82,19 @@ final class ConvertListTest extends TestCase
         $list->append(false);
         $this->assertSame([1, ['name' => '甲'], false], $list->toArray());
         $this->assertSame([], UserBeanList::toObject(null)->toArray());
+    }
+
+    public function testFirstUsesTheFirstRemainingKeyWithoutRenumbering(): void
+    {
+        $list = new ConvertList([4 => 10, 'named' => 20, 9 => 30]);
+        $this->assertSame(10, $list->first());
+        $list->remove(10, true);
+        $this->assertSame(20, $list->first());
+        $this->assertSame(['named' => 20, 9 => 30], $list->toArray());
+        $list->remove(20, true);
+        $this->assertSame(30, $list->first());
+        $list->remove(30, true);
+        $this->assertNull($list->first());
     }
 
     public function testInvalidItemIsRejected(): void

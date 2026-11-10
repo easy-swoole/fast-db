@@ -73,9 +73,8 @@ final class RelationPreloader
                 if (preg_match('/\sLIMIT\s+-?\d+(?:\s*,\s*-?\d+)?\s*\z/i', $preview->getLastPrepareQuery())) {
                     throw new \InvalidArgumentException('Preloading does not support per-parent limits or pagination');
                 }
-                $lookup = clone $builder;
-                $lookup->groupExistingWhere()->where($plan->relate->targetProperty, $value)
-                    ->get($table, $plan->kind === 'one' ? 2 : null, $columns);
+                $lookup = RelationPlan::buildLookup(clone $builder, $table, $plan->relate,
+                    $plan->kind, $value, $columns);
                 $mode = (bool) ($fields['returnAsArray'] ?? false);
                 $key = hash('sha256', serialize([$plan->connectionName, $plan->kind,
                     $plan->relate->targetEntity, $plan->relate->targetProperty, $table, $mode,

@@ -99,6 +99,12 @@ class Query
         return $this->selection->fields;
     }
 
+    /** @internal 输出与写入共用字段白名单，隐藏字段仅作用于输出。 */
+    public function filterProperties(array $properties, bool $forOutput = false): array
+    {
+        return $this->selection->filterProperties($properties, $forOutput);
+    }
+
     /** 声明本次查询需要批量加载的关系方法；空数组清除声明。 */
     public function withRelations(string|array $relations): Query
     {

@@ -230,22 +230,9 @@ abstract class AbstractEntity implements \JsonSerializable
     /** 将实体字段转为输出值，同时应用隐藏字段和字段白名单。 */
     function toArray(bool $filterNull = false):array
     {
-        $hideFields = $this->queryLimit()->getHideFields() ?:[];
         $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
-        $temp = FieldCodec::values($this, $entityRef->allProperties(), $filterNull);
-        if ($hideFields !== []) { $temp = array_diff_key($temp, array_flip($hideFields)); }
-
-        $fields = $this->queryLimit()->getFields();
-        if(!empty($fields['fields'])){
-            $fields = $fields['fields'];
-            foreach ($temp as $key => $val){
-                if(!in_array($key,$fields)){
-                    unset($temp[$key]);
-                }
-            }
-        }
-
-        return $temp;
+        $properties = $this->queryLimit()->filterProperties($entityRef->allProperties(), true);
+        return FieldCodec::values($this, $properties, $filterNull);
     }
 
     public function count(string|null $field = '*', string|null $group = null): int|array
@@ -359,39 +346,7 @@ abstract class AbstractEntity implements \JsonSerializable
             $tableName = $entity->tableName();
         }
         $query = new QueryBuilder();
-        if (is_array($deleteLimit)) {
-            foreach ($deleteLimit as $key => $item) {
-                if (is_array($item)) {
-                    $query->where($key, ...$item);
-                } else {
-                    $query->where($key, $item);
-                }
-            }
-        } else if (is_callable($deleteLimit)) {
-            call_user_func($deleteLimit, $query);
-        } else if (is_string($deleteLimit) || is_int($deleteLimit)) {
-            $pk = ReflectionCache::getInstance()->parseEntity(static::class)->getPrimaryKey();
-            if (empty($pk)) {
-                $msg = "entity can not delete record without primary key define";
-                throw new RuntimeError($msg);
-            }
-
-            if (is_string($deleteLimit)) {
-                if (strpos($deleteLimit, ',') !== false) {
-                    $pkIds = explode(',', $deleteLimit);
-                    foreach ($pkIds as &$pkId) {
-                        $pkId = intval($pkId);
-                    }
-                    unset($pkId);
-                    $query->where($pk, $pkIds, 'IN');
-                }else{
-                    $query->where($pk, $deleteLimit);
-                }
-            } else {
-                $query->where($pk, $deleteLimit);
-            }
-        }
-
+        self::applyQueryLimit($query, $deleteLimit, true, 'delete record');
         $query->delete($tableName);
         $ret = static::callQuery($query,$onQuery);
         return $ret->getAffectedRows();
@@ -407,14 +362,9 @@ abstract class AbstractEntity implements \JsonSerializable
                     return  false;
                 }
             }
-            [$data, $compareValues] = $this->entityState->changes($this, $entityRef->allProperties());
+            $properties = $this->queryLimit()->filterProperties($entityRef->allProperties());
+            [$data, $compareValues] = $this->entityState->changes($this, $properties);
 
-            if(!empty($this->queryLimit()->getFields())){
-                $fields = $this->queryLimit()->getFields()['fields'];
-                if(!empty($fields)){
-                    $data = array_intersect_key($data, array_flip($fields));
-                }
-            }
             if(empty($data)){
                 return true;
             }
@@ -448,34 +398,7 @@ abstract class AbstractEntity implements \JsonSerializable
             $tableName = $entity->tableName();
         }
         $query = new QueryBuilder();
-        if(is_array($updateLimit)){
-            foreach ($updateLimit as $key => $item){
-                $query->where($key,$item);
-            }
-        }else if(is_callable($updateLimit)){
-            call_user_func($updateLimit,$query);
-        }else{
-            $pk = ReflectionCache::getInstance()->parseEntity(static::class)->getPrimaryKey();
-            if(empty($pk)){
-                $msg = "entity can not update record without primary key define";
-                throw new RuntimeError($msg);
-            }
-
-            if (is_string($updateLimit)) {
-                if (strpos($updateLimit, ',') !== false) {
-                    $pkIds = explode(',', $updateLimit);
-                    foreach ($pkIds as &$pkId) {
-                        $pkId = intval($pkId);
-                    }
-                    unset($pkId);
-                    $query->where($pk, $pkIds, 'IN');
-                }else{
-                    $query->where($pk, $updateLimit);
-                }
-            } else {
-                $query->where($pk,$updateLimit);
-            }
-        }
+        self::applyQueryLimit($query, $updateLimit, true, 'update record');
         $query->update($tableName,$data);
         $ret = static::callQuery($query,$onQuery);
         return $ret->getAffectedRows();
@@ -507,12 +430,8 @@ abstract class AbstractEntity implements \JsonSerializable
             }
             // 生成写入值和比较基准；普通 null 字段省略，让数据库使用默认值。
             $compareValues = [];
-            $data = FieldCodec::values($this, $entityRef->allProperties(), true, $compareValues);
-            $fields = $this->queryLimit()->getFields()['fields'] ?? null;
-            if (!empty($fields)) {
-                $data = array_intersect_key($data, array_flip($fields));
-                $compareValues = array_intersect_key($compareValues, $data);
-            }
+            $properties = $this->queryLimit()->filterProperties($entityRef->allProperties());
+            $data = FieldCodec::values($this, $properties, true, $compareValues);
             $query = $this->queryLimit()->__getQueryBuilder();
             if($updateDuplicateCols){
                 $query->onDuplicate($updateDuplicateCols);
@@ -552,24 +471,7 @@ abstract class AbstractEntity implements \JsonSerializable
             $tableName = $entity->tableName();
         }
         $query = new QueryBuilder();
-        if (is_array($queryLimit)) {
-            foreach ($queryLimit as $key => $item) {
-                if (is_array($item)) {
-                    $query->where($key, ...$item);
-                } else {
-                    $query->where($key, $item);
-                }
-            }
-        } else if (is_callable($queryLimit)) {
-            call_user_func($queryLimit, $query);
-        } else {
-            $pk = ReflectionCache::getInstance()->parseEntity(static::class)->getPrimaryKey();
-            if (empty($pk)) {
-                $msg = "entity can not find record without primary key define";
-                throw new RuntimeError($msg);
-            }
-            $query->where($pk, $queryLimit);
-        }
+        self::applyQueryLimit($query, $queryLimit, false, 'find record');
         if($selectForUpdate){
             $query->selectForUpdate();
         }
@@ -595,34 +497,7 @@ abstract class AbstractEntity implements \JsonSerializable
             $tableName = $entity->tableName();
         }
         $query = new QueryBuilder();
-        if (is_array($queryLimit)) {
-            foreach ($queryLimit as $key => $item) {
-                if (is_array($item)) {
-                    $query->where($key, ...$item);
-                } else {
-                    $query->where($key, $item);
-                }
-            }
-        } else if (is_callable($queryLimit)) {
-            call_user_func($queryLimit, $query);
-        } else if (is_string($queryLimit)) {
-            $pk = ReflectionCache::getInstance()->parseEntity(static::class)->getPrimaryKey();
-            if (empty($pk)) {
-                $msg = "entity can not find all record without primary key define";
-                throw new RuntimeError($msg);
-            }
-
-            if (strpos($queryLimit, ',') !== false) {
-                $pkIds = explode(',', $queryLimit);
-                foreach ($pkIds as &$pkId) {
-                    $pkId = intval($pkId);
-                }
-                unset($pkId);
-                $query->where($pk, $pkIds, 'IN');
-            } else {
-                $query->where($pk, $queryLimit);
-            }
-        }
+        self::applyQueryLimit($query, $queryLimit, true, 'find all record');
         if($selectForUpdate){
             $query->selectForUpdate();
         }
@@ -848,6 +723,26 @@ abstract class AbstractEntity implements \JsonSerializable
         } finally {
             // 成功、失败或提前返回均消费本次查询配置，实体数据及比较基准不受影响。
             $this->reset();
+        }
+    }
+
+    /** 条件数组统一展开运算符；主键列表保留输入值，不推断或强转主键类型。 */
+    private static function applyQueryLimit(QueryBuilder $query, array|callable|string|int|null $limit,
+        bool $multiple, string $operation): void
+    {
+        if (is_array($limit)) {
+            foreach ($limit as $column => $value) {
+                if (is_array($value)) { $query->where($column, ...$value); }
+                else { $query->where($column, $value); }
+            }
+        } elseif (is_callable($limit)) {
+            $limit($query);
+        } elseif ($limit !== null) {
+            $key = ReflectionCache::getInstance()->parseEntity(static::class)->getPrimaryKey();
+            if ($key === null) { throw new RuntimeError('entity can not ' . $operation . ' without primary key define'); }
+            if ($multiple && is_string($limit) && str_contains($limit, ',')) {
+                $query->where($key, explode(',', $limit), 'IN');
+            } else { $query->where($key, $limit); }
         }
     }
 

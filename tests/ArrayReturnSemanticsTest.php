@@ -90,7 +90,7 @@ final class ArrayReturnSemanticsTest extends TestCase
         $this->assertSame(2, ArrayReturnConvertedRecord::$calls);
         $entity->queryLimit()->hideFields('payload');
         $this->assertSame(['name' => null], $entity->toArray());
-        $this->assertSame(3, ArrayReturnConvertedRecord::$calls);
+        $this->assertSame(2, ArrayReturnConvertedRecord::$calls);
     }
 }
 

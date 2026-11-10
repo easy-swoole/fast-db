@@ -13,12 +13,14 @@ final class EntityState
     public function changes(AbstractEntity $entity, array $properties): array
     {
         $data = $compared = [];
-        foreach ($this->baseline as $key => $old) {
+        foreach ($properties as $key => $property) {
+            if (!array_key_exists($key, $this->baseline)) { continue; }
+            $old = $this->baseline[$key];
             $value = $entity->{$key} ?? null;
             $current = FieldCodec::compare($value);
             if ($current !== $old) {
                 $compared[$key] = $current;
-                $data[$key] = FieldCodec::encode($entity, $properties[$key], $value);
+                $data[$key] = FieldCodec::encode($entity, $property, $value);
             }
         }
         return [$data, $compared];

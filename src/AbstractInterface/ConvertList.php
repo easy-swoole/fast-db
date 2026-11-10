@@ -73,10 +73,8 @@ class ConvertList implements ConvertObjectInterface
 
     function first():mixed
     {
-        if(isset($this->list[0])){
-            return $this->list[0];
-        }
-        return null;
+        $key = array_key_first($this->list);
+        return $key === null ? null : $this->list[$key];
     }
 
     function has(mixed $item,bool $strict = false):bool
