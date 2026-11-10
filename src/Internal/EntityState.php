@@ -28,7 +28,8 @@ final class EntityState
 
     public function primaryKey(AbstractEntity $entity, string $key): mixed
     {
-        $current = $entity->{$key} ?? null;
+        // 转换主键与比较基准统一使用数据库值；不同对象持有相同值时不视为变更。
+        $current = FieldCodec::compare($entity->{$key} ?? null);
         $original = $this->baseline[$key] ?? $current;
         if ($original !== null && $current !== $original) {
             throw new RuntimeError('Cannot change entity primary key: '.$key);

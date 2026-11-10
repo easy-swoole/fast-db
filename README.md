@@ -25,7 +25,7 @@ FastDb 通过 `FastDb::getInstance()` 获取固定实例并长期复用。需要
 
 `Query` 仅在首次添加 SQL 条件或显式读取底层构造器时创建 `QueryBuilder`；只配置输出字段或序列化实体时无需分配 SQL 构造器。序列化保留当前 Query 及其配置；插入后清理 SQL 条件会生成新的 Query，外部持有的旧 Query 和构造器引用保持原有状态。克隆实体时查询所有者和可变配置继续独立。
 
-加载后的实体不允许修改主键再执行 `update()` / `delete()`，以避免定位到其他记录。需要显式修改主键时应自行构造条件明确的 SQL。实体克隆后，比较状态和查询所有者独立。
+加载后的实体不允许修改主键再执行 `update()` / `delete()`，以避免定位到其他记录。需要显式修改主键时应自行构造条件明确的 SQL。实体克隆后，比较状态和查询所有者独立。使用 `convertObject` 的主键按 `toValue()` 返回的数据库值进行比较，并使用原主键数据库值构建 WHERE；替换为持有相同值的新对象可以正常操作，替换或原地修改为不同值仍会被拒绝。
 
 实体 `update()` / `delete()` 和关联查询在最终构建 SQL 前，将全部已有 WHERE 条件整体分组，再以 AND 追加主键或关联外键条件。例如 `WHERE (status = ? OR score = ?) AND id = ?`，附加 OR 条件始终受实体范围约束。该分组也覆盖 `func()`、底层构建器和生命周期钩子添加的条件；`fastUpdate()` / `fastDelete()` 继续按调用方提供的条件批量执行。
 
@@ -536,6 +536,15 @@ $values = (new User())->sum(['score', 'status']);
 
 `count($field = '*', $group = null)` 返回整数；通过 `fields()` 指定多列计数时返回列名到计数的数组。
 
+聚合字段支持普通列名、保留字列名和带表名/别名的列引用；`count()` 还支持 `*`。单列 `count()` 原有的可信 SQL 参数（如 `DISTINCT id`、`CASE WHEN ... END`）仍可使用，表达式内容由调用方负责，不能直接拼接外部输入。字段各段与结果别名分别引用，多列返回值的键保留传入的列名：
+
+```php
+$entity->queryLimit()->fields(['users.id', 'users.order']);
+$counts = $entity->count(); // ['users.id' => ..., 'users.order' => ...]。
+$sum = (new User())->sum('order'); // 列名 order 会正确引用。
+$values = (new User())->sum(['users.score', 'users.order']);
+```
+
 `sum()` / `avg()` / `max()` / `min()` 的签名为 `($cols, $group = null, $force = true)`。单列返回数字，多列返回数组；默认强制转为 float，没有聚合值时单列按 0 处理。金额等精确值可用底层参数化 SQL 获取原始结果，避免浮点精度损失。
 
 这些快捷聚合方法只取第一行。传入 `$group` 或先调用 `groupBy()` 不会返回所有分组；需要完整分组结果时用 `QueryBuilder` 查询。
@@ -612,6 +621,14 @@ $affected = User::fastUpdate(['score' => [60, '>=']], ['status' => 1]);
 $affected = User::fastUpdate(['id' => [['uuid-a', 'uuid-b'], 'IN']], ['status' => 1]);
 ```
 
+字符串参数始终表示主键，即使它恰好是 PHP 函数名，例如 `'is_object'`、`'trim'`，也不会作为回调调用。条件回调支持闭包、数组形式的静态/实例方法和可调用对象；需要使用字符串形式的函数名或静态方法名时，先通过 `Closure::fromCallable()` 转成闭包：
+
+```php
+$affected = User::fastUpdate('is_object', ['status' => 1]); // WHERE id = 'is_object'。
+$rows = User::findAll([$filter, 'configure'], returnAsArray: true);
+$rows = User::findAll(Closure::fromCallable('configureUserQuery'), returnAsArray: true);
+```
+
 空条件数组会生成无 WHERE 的更新，调用前应明确业务意图。
 
 ### 删除
@@ -630,7 +647,7 @@ $affected = User::fastDelete(function (QueryBuilder $query): void {
 
 `delete()` 使用对象主键并触发删除钩子，影响至少一行才返回 `true`。`fastDelete($deleteLimit, $tableName = null, $onQuery = null)` 直接删除并返回影响行数，不触发实体钩子。空数组/空字符串条件直接返回 0；回调如果不添加条件仍可能删除所有记录。
 
-实例 `update()` / `delete()` 用 `empty()` 检查主键值，因此值为 0 / `'0'` 的主键无法通过该检查；必要时使用带显式条件的快捷方法或底层构建器。
+实例 `update()` / `delete()` 仅将未赋值、null 或空字符串视为缺失主键；整数 `0` 和字符串 `'0'` 均可正常更新、删除。`fastDelete(0)` 与 `fastDelete('0')` 都会生成主键等值条件，空数组和空字符串仍直接返回 0。
 
 ### 批量直接写入
 
@@ -1747,7 +1764,7 @@ Connection 的 `getLastAffectRows()` / `getLastInsertId()` 始终表示最后一
 
 影响行数和自增 ID 类型为 `int|string|null`，超大无符号值保留为字符串，未查询或查询失败时为 null。影响行数与自增 ID 在查询成功后、日志回调执行前记录为快照，不会被后续 SQL 覆盖。QueryResult 不再暴露 Connection。`query()` 和 `rawQuery()` 的可选 `$timeout` 已传递给 mysqli 5.x，控制本次查询超时。
 
-分页总数及对应查询结果随主查询的 QueryResult 一起保存，可直接读取 `$result->getTotalCount()` 和 `$result->getTotalResult()`。FastDb 的 `getTotalCount($result)` / `getTotalResult($result)` 仅转发到结果对象，不另外保存总数映射。
+分页总数及对应查询结果随主查询的 QueryResult 一起保存，可直接读取 `$result->getTotalCount()` 和 `$result->getTotalResult()`。实体列表与关联列表根据该次结果的查询快照判断是否读取总数；观察回调复用原构建器执行其他查询，不会改变外层是否返回总数。FastDb 的 `getTotalCount($result)` / `getTotalResult($result)` 仅转发到结果对象，不另外保存总数映射。
 
 `getDuration()` 保留原有查询执行阶段的计时含义，从取得连接后开始，不把获取连接或日志回调算进去。`query(callable)` 的工厂在该执行阶段内运行，因此也包含工厂构建耗时，不能把它等同于纯服务端 SQL 耗时。
 

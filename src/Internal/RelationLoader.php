@@ -64,7 +64,7 @@ final class RelationLoader
             foreach ($rows as $row) {
                 $items[] = $returnAsArray ? $row : new $relate->targetEntity($row);
             }
-            $total = in_array('SQL_CALC_FOUND_ROWS', $query->getLastQueryOptions()) ? $readTotal($result) : null;
+            $total = in_array('SQL_CALC_FOUND_ROWS', $result->getQueryBuilder()?->getLastQueryOptions() ?? [], true) ? $readTotal($result) : null;
             $reset();
             $data = new ListResult($items, $total);
         }

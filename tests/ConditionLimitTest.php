@@ -18,6 +18,17 @@ final class ConditionLimitTest extends TestCase
     {
         foreach (['findRecord', 'findAll', 'fastUpdate', 'fastDelete'] as $operation) {
             yield "$operation scalar" => [$operation, '01', ['01'], '`id` = ?'];
+            yield "$operation string zero" => [$operation, '0', ['0'], '`id` = ?'];
+            if ($operation !== 'findAll') {
+                yield "$operation integer zero" => [$operation, 0, [0], '`id` = ?'];
+            }
+            foreach (['is_object', 'trim', ConditionCallbacks::class . '::filter'] as $key) {
+                yield "$operation string key $key" => [$operation, $key, [$key], '`id` = ?'];
+            }
+            yield "$operation static callback" => [$operation, [ConditionCallbacks::class, 'filter'], [10], '`value` >= ?'];
+            yield "$operation instance callback" => [$operation, [new ConditionCallbacks(), 'filterInstance'], [10], '`value` >= ?'];
+            yield "$operation invokable" => [$operation, new ConditionCallbacks(), [10], '`value` >= ?'];
+            yield "$operation converted string callback" => [$operation, \Closure::fromCallable(ConditionCallbacks::class . '::filter'), [10], '`value` >= ?'];
             yield "$operation equality" => [$operation, ['value' => 10], [10], '`value` = ?'];
             yield "$operation operator" => [$operation, ['value' => [10, '>']], [10], '`value` > ?'];
             yield "$operation IN" => [$operation, ['id' => [['01', 'a'], 'IN']], ['01', 'a'], '`id` IN'];
@@ -66,4 +77,11 @@ class ConditionRecord extends AbstractEntity
     #[Property(isPrimaryKey: true)] public string $id;
     #[Property] public int $value;
     public function tableName(): string { return 'condition_records'; }
+}
+
+class ConditionCallbacks
+{
+    public static function filter(QueryBuilder $query): void { $query->where('value', 10, '>='); }
+    public function filterInstance(QueryBuilder $query): void { self::filter($query); }
+    public function __invoke(QueryBuilder $query): void { self::filter($query); }
 }

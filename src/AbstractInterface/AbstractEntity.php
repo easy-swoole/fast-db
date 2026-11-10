@@ -19,6 +19,7 @@ use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\FastDb\Utility\ReflectionCache;
 use EasySwoole\Mysqli\QueryBuilder;
+use EasySwoole\Mysqli\QueryBuilder\SelectPlanner;
 
 abstract class AbstractEntity implements \JsonSerializable
 {
@@ -118,8 +119,8 @@ abstract class AbstractEntity implements \JsonSerializable
             };
             $ret = static::callQuery($query,$this->onQuery,$completed);
             $total = null;
-            if(in_array('SQL_CALC_FOUND_ROWS',$query->getLastQueryOptions())){
-                // 仅在查询启用总数计算时补查总数，普通列表查询的 total 保持 null。
+            if(in_array('SQL_CALC_FOUND_ROWS', $ret->getQueryBuilder()?->getLastQueryOptions() ?? [], true)){
+                // 依据本次查询快照读取总数，避免回调复用原构建器改变判断。
                 $total = $this->readTotal($ret);
             }
             $hideFields = $selection->getHideFields() ?: [];
@@ -253,12 +254,19 @@ abstract class AbstractEntity implements \JsonSerializable
                 $hasFiled = true;
                 $temp = [];
                 foreach ($fields as $fieldName){
-                    $temp[] = "COUNT(`{$fieldName}`) as $fieldName";
+                    $temp[] = SelectPlanner::aggregateExpression('COUNT', $fieldName, $fieldName, false);
                 }
                 $fields = $temp;
                 $query->get($this->tableName(),1, $fields);
             } else {
-                $query->get($this->tableName(),1, "count({$field}) as count");
+                $column = $field ?? '*';
+                // 普通列交给驱动引用；保留单列 count 原有的 DISTINCT、CASE 等可信 SQL 参数。
+                $identifier = '(?:`(?:``|[^`])+`|[\p{L}_$][\p{L}\p{N}_$]*)';
+                if ($column !== '*' && (in_array(strtoupper($column), ['NULL', 'TRUE', 'FALSE'], true)
+                    || preg_match('/\A' . $identifier . '(?:\.' . $identifier . ')*\z/uD', $column) !== 1)) {
+                    $column = QueryBuilder::rawExpression($column);
+                }
+                $query->get($this->tableName(), 1, [SelectPlanner::aggregateExpression('COUNT', $column, 'count', false)]);
             }
             $ret = static::callQuery($query,$this->onQuery)->getResult();
             if (empty($ret)) {
@@ -337,7 +345,7 @@ abstract class AbstractEntity implements \JsonSerializable
         callable|null $onQuery = null
     ):int|null|string
     {
-        if (empty($deleteLimit) && 0 !== $deleteLimit) {
+        if ($deleteLimit === [] || $deleteLimit === '') {
             return 0;
         }
 
@@ -685,18 +693,16 @@ abstract class AbstractEntity implements \JsonSerializable
                 $multiFields = true;
             }
 
-            $str = "";
-            while ($item = array_shift($cols)) {
-                $str .= "{$aggregate}(`{$item}`) as {$item}";
-                if (!empty($cols)) {
-                    $str .= " , ";
-                }
+            // 复用驱动的字段引用和别名规则，支持限定列名及保留字字段。
+            $fields = [];
+            foreach ($cols as $column) {
+                $fields[] = SelectPlanner::aggregateExpression($aggregate, $column, $column, false);
             }
             $query = $this->queryLimit()->__getQueryBuilder();
             if ($group) {
                 $query->groupBy($group);
             }
-            $query->get($this->tableName(), 1, $str);
+            $query->get($this->tableName(), 1, $fields);
             $ret = static::callQuery($query,$this->onQuery)->getResult();
             if (empty($ret)) {
                 if ($multiFields) {
@@ -726,23 +732,23 @@ abstract class AbstractEntity implements \JsonSerializable
         }
     }
 
-    /** 条件数组统一展开运算符；主键列表保留输入值，不推断或强转主键类型。 */
+    /** 字符串始终作为主键；其余 callable（包括数组回调）优先于条件数组解析。 */
     private static function applyQueryLimit(QueryBuilder $query, array|callable|string|int|null $limit,
         bool $multiple, string $operation): void
     {
-        if (is_array($limit)) {
-            foreach ($limit as $column => $value) {
-                if (is_array($value)) { $query->where($column, ...$value); }
-                else { $query->where($column, $value); }
-            }
-        } elseif (is_callable($limit)) {
-            $limit($query);
-        } elseif ($limit !== null) {
+        if (is_string($limit) || is_int($limit)) {
             $key = ReflectionCache::getInstance()->parseEntity(static::class)->getPrimaryKey();
             if ($key === null) { throw new RuntimeError('entity can not ' . $operation . ' without primary key define'); }
             if ($multiple && is_string($limit) && str_contains($limit, ',')) {
                 $query->where($key, explode(',', $limit), 'IN');
             } else { $query->where($key, $limit); }
+        } elseif (is_callable($limit)) {
+            $limit($query);
+        } elseif (is_array($limit)) {
+            foreach ($limit as $column => $value) {
+                if (is_array($value)) { $query->where($column, ...$value); }
+                else { $query->where($column, $value); }
+            }
         }
     }
 
@@ -774,12 +780,13 @@ abstract class AbstractEntity implements \JsonSerializable
     {
         $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
         $pk = $entityRef->getPrimaryKey();
-        if(empty($pk)){
+        if($pk === null){
             $msg = "can not {$op} entity without primary key set";
             throw new RuntimeError($msg);
         }
         // 关联元数据解析只需要主键名称，可以关闭主键值检查。
-        if(empty($this->{$pk}) && $emptyCheck){
+        // 未赋值、null 和空字符串视为缺失；整数 0 和字符串 '0' 均为有效主键。
+        if($emptyCheck && (!isset($this->{$pk}) || $this->{$pk} === '')){
             $msg = "can not {$op} entity without primary key value";
             throw new RuntimeError($msg);
         }

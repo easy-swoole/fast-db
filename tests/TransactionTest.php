@@ -9,6 +9,7 @@ use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Config;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\QueryResult;
+use EasySwoole\FastDb\Tests\Model\ConvertedKey;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
@@ -95,6 +96,125 @@ final class TransactionTest extends TestCase
         $this->assertSame(77, TextKeyMysqlEntity::findRecord('02')->value);
         $this->assertSame(1, TextKeyMysqlEntity::fastDelete(['value' => [75, '>'], 'id' => '02']));
         $this->assertSame('b', TextKeyMysqlEntity::findRecord(['value' => [70, '>']])->id);
+    }
+
+    public function testFunctionNameKeysAndArrayCallbacksKeepMysqlWritesScoped(): void
+    {
+        $this->observer->query("ALTER TABLE `{$this->table}` MODIFY id VARCHAR(20) NOT NULL");
+        $this->observer->query("INSERT INTO `{$this->table}` VALUES ('is_object',10),('trim',20)");
+        $this->assertSame('trim', TextKeyMysqlEntity::findRecord('trim')->id);
+        $this->assertSame(1, TextKeyMysqlEntity::fastUpdate('is_object', ['value' => 30]));
+        $this->assertSame(0, TextKeyMysqlEntity::fastUpdate('is_null', ['value' => 99]));
+        $this->assertSame(0, TextKeyMysqlEntity::fastDelete('is_null'));
+        $this->assertSame(0, TextKeyMysqlEntity::findRecord('1')->value);
+        $this->assertSame(20, TextKeyMysqlEntity::findRecord('trim')->value);
+        $filter = new class {
+            public function onlyOriginal(\EasySwoole\Mysqli\QueryBuilder $query): void { $query->where('id', '1'); }
+        };
+        $this->assertSame(1, TextKeyMysqlEntity::fastUpdate([$filter, 'onlyOriginal'], ['value' => 7]));
+        $this->assertSame(7, TextKeyMysqlEntity::findRecord('1')->value);
+        $this->assertSame(30, TextKeyMysqlEntity::findRecord('is_object')->value);
+        $this->assertSame(1, TextKeyMysqlEntity::fastDelete('is_object'));
+        $this->assertCount(2, TextKeyMysqlEntity::findAll());
+    }
+
+    public function testMysqlAggregatesQuoteReservedColumnsAndQualifiedAliases(): void
+    {
+        $this->observer->query("ALTER TABLE `{$this->table}` ADD COLUMN `order` INT NULL");
+        $this->observer->query("UPDATE `{$this->table}` SET `order` = 10 WHERE id = 1");
+        $this->observer->query("INSERT INTO `{$this->table}` VALUES (2,5,20),(3,7,NULL)");
+        $entity = new TransactionEntity();
+        $qualified = $this->table . '.order';
+        $this->assertSame(2, $entity->count('order'));
+        $this->assertSame(2, $entity->count($qualified));
+        $this->assertSame(3, $entity->count('1'));
+        $this->assertSame(0, $entity->count('NULL'));
+        $this->assertSame(2, $entity->count('DISTINCT `order`'));
+        $this->assertSame(1, $entity->count('CASE WHEN value > 5 THEN id END'));
+        $entity->queryLimit()->fields(['order', $qualified]);
+        $this->assertSame(['order' => 2, $qualified => 2], $entity->count());
+        foreach (['sum' => 30.0, 'avg' => 15.0, 'min' => 10.0, 'max' => 20.0] as $method => $expected) {
+            $this->assertSame($expected, $entity->$method('order'));
+            $this->assertSame($expected, $entity->$method($qualified));
+            $this->assertSame(['order' => $expected, $qualified => $expected], $entity->$method(['order', $qualified]));
+        }
+        $entity->queryLimit()->join($this->table . ' AS b', $this->table . '.id = b.id', 'INNER')->where('b.id', 2);
+        $this->assertSame(20.0, $entity->sum('b.order'));
+    }
+
+    public function testMysqlPaginationKeepsItsTotalWhenObserverReusesTheBuilder(): void
+    {
+        $this->observer->query("INSERT INTO `{$this->table}` VALUES (2,1),(3,2)");
+        $entity = new TransactionEntity();
+        $entity->queryLimit()->limit(1, true);
+        $builder = $entity->queryLimit()->__getQueryBuilder();
+        $entered = false;
+        $this->db->setOnQuery(function (QueryResult $result) use ($builder, &$entered): void {
+            if ($entered) { return; }
+            $entered = true;
+            $this->assertSame(3, $result->getTotalCount());
+            $this->db->query($builder->raw('SELECT 42 AS probe'));
+        });
+        $page = $entity->all();
+        $this->assertSame(3, $page->totalCount());
+        $this->assertCount(1, $page);
+    }
+
+    public function testZeroPrimaryKeysSupportMysqlEntityAndFastDeletion(): void
+    {
+        $this->observer->query("INSERT INTO `{$this->table}` VALUES (0,5)");
+        $integer = TransactionEntity::findRecord(0);
+        $this->assertSame(0, $integer->id);
+        $integer->value = 6;
+        $this->assertTrue($integer->update());
+        $this->assertSame(6, TransactionEntity::findRecord(0)->value);
+        $this->assertSame(0, $this->value());
+        $this->assertTrue($integer->delete());
+        $this->assertNull(TransactionEntity::findRecord(0));
+
+        $this->observer->query("ALTER TABLE `{$this->table}` MODIFY id VARCHAR(20) NOT NULL");
+        $this->observer->query("INSERT INTO `{$this->table}` VALUES ('0',7)");
+        $string = TextKeyMysqlEntity::findRecord('0');
+        $this->assertSame('0', $string->id);
+        $string->value = 8;
+        $this->assertTrue($string->update());
+        $this->assertSame(8, TextKeyMysqlEntity::findRecord('0')->value);
+        $this->assertTrue($string->delete());
+        foreach ([0, '0'] as $key) {
+            $this->observer->query("INSERT INTO `{$this->table}` VALUES ('0',9)");
+            $this->assertSame(1, TextKeyMysqlEntity::fastDelete($key));
+            $this->assertNull(TextKeyMysqlEntity::findRecord('0'));
+        }
+        $this->assertSame(0, $this->value());
+    }
+
+    public function testConvertedPrimaryKeyUsesTheMysqlValueAndRejectsActualChanges(): void
+    {
+        $this->observer->query("ALTER TABLE `{$this->table}` MODIFY id VARCHAR(20) NOT NULL");
+        $this->observer->query("INSERT INTO `{$this->table}` VALUES ('0',5),('uuid-a',10),('uuid-b',20)");
+        $entity = ConvertedKeyMysqlEntity::findRecord('uuid-a');
+        $entity->id = new ConvertedKey('uuid-a');
+        $entity->value = 11;
+        $this->assertTrue($entity->update());
+        $this->assertSame(11, TextKeyMysqlEntity::findRecord('uuid-a')->value);
+        foreach (['update', 'delete'] as $operation) {
+            $entity->id->value = 'uuid-b';
+            $entity->value = 12;
+            try { $entity->$operation(); $this->fail('Changed primary key must be rejected'); }
+            catch (\EasySwoole\FastDb\Exception\RuntimeError $error) {
+                $this->assertSame('Cannot change entity primary key: id', $error->getMessage());
+            }
+            $this->assertSame(11, TextKeyMysqlEntity::findRecord('uuid-a')->value);
+            $this->assertSame(20, TextKeyMysqlEntity::findRecord('uuid-b')->value);
+            $entity->id = new ConvertedKey('uuid-a');
+        }
+        $this->assertTrue($entity->delete());
+        $this->assertNull(TextKeyMysqlEntity::findRecord('uuid-a'));
+        $zero = ConvertedKeyMysqlEntity::findRecord('0');
+        $zero->value = 6;
+        $this->assertTrue($zero->update());
+        $this->assertSame(6, TextKeyMysqlEntity::findRecord('0')->value);
+        $this->assertTrue($zero->delete());
     }
 
     public function testDefaultRecycleRollsBackTheSessionAndClearsDiagnostics(): void
@@ -849,6 +969,13 @@ class DeclaredMysqlEntity extends AbstractEntity
 class TextKeyMysqlEntity extends AbstractEntity
 {
     #[Property(isPrimaryKey: true)] public string $id;
+    #[Property] public int $value;
+    public function tableName(): string { return TransactionEntity::$table; }
+}
+
+class ConvertedKeyMysqlEntity extends AbstractEntity
+{
+    #[Property(isPrimaryKey: true, convertObject: ConvertedKey::class)] public ?ConvertedKey $id;
     #[Property] public int $value;
     public function tableName(): string { return TransactionEntity::$table; }
 }
