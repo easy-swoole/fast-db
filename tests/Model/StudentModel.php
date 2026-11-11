@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests\Model;
 
+use EasySwoole\FastDb\RelationType;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Attributes\Relate;
@@ -37,7 +38,8 @@ class StudentModel extends AbstractEntity
 
     #[Relate(
         targetEntity: StudentInfoModel::class,
-        targetProperty: 'studentId'
+        targetProperty: 'studentId',
+        type: RelationType::One
     )]
     function studentInfo()
     {
@@ -46,7 +48,8 @@ class StudentModel extends AbstractEntity
 
     #[Relate(
         targetEntity: StudentScoreModel::class,
-        targetProperty: "student_id"
+        targetProperty: "student_id",
+        type: RelationType::Many
     )]
     function score()
     {

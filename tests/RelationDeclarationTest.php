@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests;
 
+use EasySwoole\FastDb\RelationType;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Attributes\Relate;
@@ -16,7 +17,8 @@ final class RelationDeclarationTest extends TestCase
     {
         $parent = new DeclarationParent(['id'=>1, 'tenant'=>7]);
         $plan = $parent->__relationPlan('plain');
-        $this->assertSame('many', $plan->kind);
+        $this->assertSame(RelationType::Many, $plan->kind);
+        $this->assertSame(RelationType::Many, $plan->relate->type);
         $this->assertSame(1, $plan->selfValue);
         $this->assertSame('id', $plan->relate->selfProperty);
         $this->assertSame('children', $plan->tableName);
@@ -31,7 +33,7 @@ final class RelationDeclarationTest extends TestCase
             $held = $parent->queryLimit()->where('existing', 5);
             $builder = $held->__getQueryBuilder();
             $plan = $parent->__relationPlan('configured');
-            $this->assertSame('one', $plan->kind);
+            $this->assertSame(RelationType::One, $plan->kind);
             $this->assertSame($held, $parent->queryLimit());
             $this->assertSame($builder, $held->__getQueryBuilder());
             $this->assertSame([5], $builder->get('children')->getLastBindParams());
@@ -75,7 +77,7 @@ final class RelationDeclarationTest extends TestCase
         $query = $parent->queryLimit()->withRelations(['PROTECTEDGETTER', 'parameterizedGetter', 'protectedGetter']);
         $this->assertSame(['protectedGetter', 'parameterizedGetter'], $query->getRelations());
         foreach ($query->getRelations() as $name) {
-            $this->assertSame('many', $parent->__relationPlan($name)->kind);
+            $this->assertSame(RelationType::Many, $parent->__relationPlan($name)->kind);
         }
     }
 
@@ -85,22 +87,28 @@ final class RelationDeclarationTest extends TestCase
         $this->assertSame([4], $plan->query->__getQueryBuilder()->get('children')->getLastBindParams());
     }
 
-    public function testPreloadStillRequiresAnExplicitRelationType(): void
+    public function testRelationTypeIsRequired(): void
     {
-        $this->expectException(RuntimeError::class);
-        (new DeclarationParent(['id'=>1]))->__relationPlan('legacy');
+        $this->expectException(\ArgumentCountError::class);
+        new Relate(DeclarationTarget::class, 'parent_id');
     }
 
-    public function testInvalidTypeIsRejected(): void
+    public static function mismatchedGetters(): array
     {
-        $this->expectException(\InvalidArgumentException::class);
-        new Relate(DeclarationTarget::class,'parent_id',type:'invalid');
+        return [['mismatchMany'], ['mismatchOne']];
     }
 
-    public function testGetterKindMustMatchTheExplicitDeclaration(): void
+    #[\PHPUnit\Framework\Attributes\DataProvider('mismatchedGetters')]
+    public function testGetterKindMustMatchBeforeConfigurationAndSql(string $method): void
     {
+        $parent = new DeclarationParent(['id'=>1]);
+        $parent->queryLimit()->where('held', 1);
         $this->expectException(RuntimeError::class);
-        (new DeclarationParent(['id'=>1]))->mismatch();
+        $this->expectExceptionMessage('Declared relation type does not match its getter');
+        try { $parent->{$method}(); }
+        finally {
+            $this->assertNull((new \ReflectionProperty(AbstractEntity::class, 'queryBuilder'))->getValue($parent));
+        }
     }
 }
 
@@ -115,32 +123,36 @@ class DeclarationParent extends AbstractEntity
     #[Property(isPrimaryKey:true)] public int $id;
     #[Property] public int $tenant;
     public function tableName(): string { return 'parents'; }
-    #[Relate(DeclarationTarget::class,'parent_id',type:'many')]
+    #[Relate(DeclarationTarget::class,'parent_id',type:RelationType::Many)]
     protected function protectedGetter() { throw new \LogicException('Getter must not run'); }
-    #[Relate(DeclarationTarget::class,'parent_id',type:'many')]
+    #[Relate(DeclarationTarget::class,'parent_id',type:RelationType::Many)]
     public function parameterizedGetter(int $required) { throw new \LogicException('Getter must not run'); }
-    #[Relate(DeclarationTarget::class,'parent_id',type:'many')]
+    #[Relate(DeclarationTarget::class,'parent_id',type:RelationType::Many)]
     public function plain() { throw new \LogicException('Getter must not run'); }
-    #[Relate(DeclarationTarget::class,'parent_id',type:'one',configure:'protectedQuery')]
+    #[Relate(DeclarationTarget::class,'parent_id',type:RelationType::One,configure:'protectedQuery')]
     public function configured() { throw new \LogicException('Getter must not run'); }
     protected function protectedQuery(QueryBuilder $query): void { $query->where('tenant',$this->tenant); }
-    #[Relate(DeclarationTarget::class,'parent_id',type:'many',configure:'publicQuery',returnAsArray:true)]
+    #[Relate(DeclarationTarget::class,'parent_id',type:RelationType::Many,configure:'publicQuery',returnAsArray:true)]
     public function publicConfigured() { return $this->relateMany(); }
     public function publicQuery(QueryBuilder $query): void { $query->where('active',3); }
-    #[Relate(DeclarationTarget::class,'parent_id')]
-    public function legacy() { return $this->relateMany(); }
-    #[Relate(DeclarationTarget::class,'parent_id',type:'many',configure:'hiddenQuery')]
+    #[Relate(DeclarationTarget::class,'parent_id',type:RelationType::Many,configure:'hiddenQuery')]
     public function privateConfig() {}
     private function hiddenQuery(QueryBuilder $query): void {}
-    #[Relate(DeclarationTarget::class,'parent_id',type:'many',configure:'staticQuery')]
+    #[Relate(DeclarationTarget::class,'parent_id',type:RelationType::Many,configure:'staticQuery')]
     public function staticConfig() {}
     public static function staticQuery(QueryBuilder $query): void { $query->where('active',4); }
-    #[Relate(DeclarationTarget::class,'parent_id',type:'many',configure:'missing')]
+    #[Relate(DeclarationTarget::class,'parent_id',type:RelationType::Many,configure:'missing')]
     public function unknownConfig() {}
-    #[Relate(DeclarationTarget::class,'parent_id',type:'many',configure:'failQuery')]
+    #[Relate(DeclarationTarget::class,'parent_id',type:RelationType::Many,configure:'failQuery')]
     public function failing() {}
     protected function failQuery(QueryBuilder $query): void { $query->where('temporary',1);throw new \LogicException('configuration failed'); }
-    #[Relate(DeclarationTarget::class,'parent_id',type:'one')]
-    public function mismatch() { return $this->relateMany(); }
+    #[Relate(DeclarationTarget::class,'parent_id',type:RelationType::One,configure:'rejectMismatchedGetter')]
+    public function mismatchMany() { return $this->relateMany(); }
+    #[Relate(DeclarationTarget::class,'parent_id',type:RelationType::Many,configure:'rejectMismatchedGetter')]
+    public function mismatchOne() { return $this->relateOne(); }
+    protected function rejectMismatchedGetter(QueryBuilder $query): void
+    {
+        throw new \LogicException('Mismatched getter must fail before configuration');
+    }
 }
 class DeclarationChildParent extends DeclarationParent {}

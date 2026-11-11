@@ -81,4 +81,4 @@ docker compose -f tests/docker/compose.yaml down --volumes --remove-orphans
 
 ### 更新测试依赖
 
-根目录 composer.lock 仍不跟踪；`tests/docker/dependencies.lock.json` 是 CI 专用锁文件快照，不影响库使用者解析依赖。修改 composer.json 或主动升级测试依赖后，在 PHP 8.4 的一次性工作区重新解析并验证依赖，将生成的 composer.lock 更新到这个快照，随后运行上述矩阵。不要手工修改锁文件中的版本或 content-hash。
+根目录 composer.lock 不跟踪；`tests/docker/dependencies.lock.json` 是 CI 专用锁文件快照，不影响库使用者解析依赖。修改 composer.json 或主动升级测试依赖后，在 PHP 8.4 的一次性工作区重新解析并验证依赖，将生成的 composer.lock 更新到这个快照，随后运行上述矩阵。不要手工修改锁文件中的版本或 content-hash。

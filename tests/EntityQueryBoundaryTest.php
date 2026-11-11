@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests;
 
+use EasySwoole\FastDb\RelationType;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Attributes\Relate;
@@ -339,7 +340,7 @@ class QueryBoundaryRecord extends AbstractEntity
     #[Property] public int $order;
     #[Property] public int $grp;
     public function tableName(): string { return 'query_boundary'; }
-    #[Relate(self::class, 'grp', 'grp', type: 'many')]
+    #[Relate(self::class, 'grp', selfProperty: 'grp', type: RelationType::Many)]
     public function related() { return $this->relateMany(); }
 }
 
@@ -391,8 +392,8 @@ class ConvertedKeyBoundaryRecord extends AbstractEntity
     #[Property(isPrimaryKey: true, convertObject: ConvertedKey::class)] public ?ConvertedKey $id;
     #[Property] public int $order;
     public function tableName(): string { return 'query_boundary'; }
-    #[Relate(QueryBoundaryRecord::class, 'id', type: 'one', cacheResult: true)]
+    #[Relate(QueryBoundaryRecord::class, 'id', type: RelationType::One, cacheResult: true)]
     public function record() { return $this->relateOne(); }
-    #[Relate(QueryBoundaryRecord::class, 'id', type: 'many', cacheResult: true)]
+    #[Relate(QueryBoundaryRecord::class, 'id', type: RelationType::Many, cacheResult: true)]
     public function records() { return $this->relateMany(); }
 }

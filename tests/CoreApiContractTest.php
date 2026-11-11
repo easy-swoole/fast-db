@@ -7,13 +7,13 @@ namespace EasySwoole\FastDb\Tests;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use PHPUnit\Framework\TestCase;
 
-final class CoreApiCompatibilityTest extends TestCase
+final class CoreApiContractTest extends TestCase
 {
-    public function testExistingEntityPublicMethodSignaturesRemainCompatible(): void
+    public function testEntityPublicMethodsMatchTheirDeclaredContracts(): void
     {
         $contracts = json_decode(file_get_contents(__DIR__ . '/fixtures/core-public-api.json'), true, 512, JSON_THROW_ON_ERROR);
         $reflection = new \ReflectionClass(AbstractEntity::class);
-        // 只固定现有实体公开入口，允许新增方法和重构内部实现。
+        // 校验实体公开入口的签名契约，允许新增方法和重构内部实现。
         foreach ($contracts[AbstractEntity::class]['methods'] as $name => $expected) {
             $this->assertTrue($reflection->hasMethod($name), AbstractEntity::class . '::' . $name);
             $method = $reflection->getMethod($name);

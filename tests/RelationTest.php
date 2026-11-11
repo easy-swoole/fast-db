@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests;
 
+use EasySwoole\FastDb\RelationType;
 use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Config;
 use EasySwoole\FastDb\Exception\RuntimeError;
@@ -88,7 +89,7 @@ final class RelationTest extends BaseTestCase
     {
         $student = new ExplicitRelationStudent(['id' => 1]);
         $student->queryLimit()->fields(['id', 'note'], true);
-        $this->assertSame(['id' => 1, 'note' => 'original'], $student->infoBy(new Relate(StudentInfoModel::class, 'studentId', 'id')));
+        $this->assertSame(['id' => 1, 'note' => 'original'], $student->infoBy(new Relate(StudentInfoModel::class, 'studentId', RelationType::One, selfProperty: 'id')));
         $student->queryLimit()->fields(['score'], true)->orderBy('score', 'ASC');
         $this->assertSame([['score' => 80], ['score' => 90]], $student->score()->list());
     }
@@ -96,7 +97,7 @@ final class RelationTest extends BaseTestCase
     public function testInvalidRelationFields(): void
     {
         $student = new ExplicitRelationStudent(['id' => 1]);
-        foreach ([new Relate(StudentInfoModel::class, 'missing'), new Relate(StudentInfoModel::class, 'studentId', 'missing')] as $relate) {
+        foreach ([new Relate(StudentInfoModel::class, 'missing', RelationType::One), new Relate(StudentInfoModel::class, 'studentId', RelationType::One, selfProperty: 'missing')] as $relate) {
             try {
                 $student->infoBy($relate);
                 $this->fail('Expected invalid relation to fail');
@@ -214,13 +215,13 @@ final class RelationTest extends BaseTestCase
 
 class CachedRelationStudent extends StudentModel
 {
-    #[Relate(targetEntity: StudentInfoModel::class, targetProperty: 'studentId', cacheResult: true)]
+    #[Relate(targetEntity: StudentInfoModel::class, targetProperty: 'studentId', cacheResult: true, type: RelationType::One)]
     public function studentInfo()
     {
         return $this->relateOne();
     }
 
-    #[Relate(targetEntity: StudentScoreModel::class, targetProperty: 'student_id', cacheResult: true)]
+    #[Relate(targetEntity: StudentScoreModel::class, targetProperty: 'student_id', cacheResult: true, type: RelationType::Many)]
     public function score()
     {
         return $this->relateMany();

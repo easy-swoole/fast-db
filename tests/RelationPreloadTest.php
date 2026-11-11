@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests;
 
+use EasySwoole\FastDb\RelationType;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\AbstractInterface\ConvertList;
 use EasySwoole\FastDb\Attributes\Property;
@@ -570,10 +571,10 @@ class PreloadFixtureParent extends AbstractEntity
 
     public function nonRelationOperation() { self::$nonRelationCalls++; return $this->delete(); }
 
-    #[Relate(PreloadFixtureChild::class, 'parent_id', cacheResult: true, type: 'many')]
+    #[Relate(PreloadFixtureChild::class, 'parent_id', cacheResult: true, type: RelationType::Many)]
     public function children() { return $this->relateMany(); }
 
-    #[Relate(PreloadFixtureChild::class, 'parent_id', type: 'many')]
+    #[Relate(PreloadFixtureChild::class, 'parent_id', type: RelationType::Many)]
     public function redirectedChildren()
     {
         $original = $this->id;
@@ -582,52 +583,52 @@ class PreloadFixtureParent extends AbstractEntity
         finally { $this->id = $original; }
     }
 
-    #[Relate(PreloadFixtureProfile::class, 'parent_id', cacheResult: true, type: 'one')]
+    #[Relate(PreloadFixtureProfile::class, 'parent_id', cacheResult: true, type: RelationType::One)]
     public function profile() { return $this->relateOne(); }
 
-    #[Relate(PreloadFixtureChild::class, 'group_code', 'group_code', cacheResult: true, type: 'many')]
+    #[Relate(PreloadFixtureChild::class, 'group_code', selfProperty: 'group_code', cacheResult: true, type: RelationType::Many)]
     public function groupChildren() { return $this->relateMany(); }
 
-    #[Relate(PreloadFixtureChild::class, 'parent_id', 'group_code', cacheResult: true, type: 'many')]
+    #[Relate(PreloadFixtureChild::class, 'parent_id', selfProperty: 'group_code', cacheResult: true, type: RelationType::Many)]
     public function numericChildren() { return $this->relateMany(); }
 
-    #[Relate(PreloadFixtureChild::class, 'parent_id', cacheResult: true, type: 'many', configure: 'configureFilteredChildren')]
+    #[Relate(PreloadFixtureChild::class, 'parent_id', cacheResult: true, type: RelationType::Many, configure: 'configureFilteredChildren')]
     public function filteredChildren() { return $this->relateMany(); }
 
     protected function configureFilteredChildren(QueryBuilder $query): void
     { $query->where('name', 'child-11')->orWhere('name', 'child-13'); }
 
-    #[Relate(PreloadFixtureChild::class, 'parent_id', cacheResult: true, type: 'many', configure: 'configureDynamicChildren')]
+    #[Relate(PreloadFixtureChild::class, 'parent_id', cacheResult: true, type: RelationType::Many, configure: 'configureDynamicChildren')]
     public function dynamicChildren() { return $this->relateMany(); }
 
     protected function configureDynamicChildren(QueryBuilder $query): void
     { $query->where('id', $this->id === 1 ? 12 : 0, '>='); }
 
-    #[Relate(PreloadFixtureDynamicChild::class, 'parent_id', cacheResult: true, type: 'many', configure: 'configureContextChildren')]
+    #[Relate(PreloadFixtureDynamicChild::class, 'parent_id', cacheResult: true, type: RelationType::Many, configure: 'configureContextChildren')]
     public function contextChildren() { return $this->relateMany(); }
 
     protected function configureContextChildren(QueryBuilder $query): void
     { PreloadFixtureDynamicChild::$contextTable = $this->id === 2 ? 'preload_archived_children' : 'preload_children'; }
 
-    #[Relate(PreloadFixtureChild::class, 'parent_id', cacheResult: true, type: 'many', configure: 'configureArrayChildren', returnAsArray: true)]
+    #[Relate(PreloadFixtureChild::class, 'parent_id', cacheResult: true, type: RelationType::Many, configure: 'configureArrayChildren', returnAsArray: true)]
     public function arrayChildren() { return $this->relateMany(); }
 
     protected function configureArrayChildren(QueryBuilder $query): void
     {  }
 
-    #[Relate(PreloadFixtureProfile::class, 'parent_id', cacheResult: true, type: 'one', configure: 'configureArrayProfile', returnAsArray: true)]
+    #[Relate(PreloadFixtureProfile::class, 'parent_id', cacheResult: true, type: RelationType::One, configure: 'configureArrayProfile', returnAsArray: true)]
     public function arrayProfile() { return $this->relateOne(); }
 
     protected function configureArrayProfile(QueryBuilder $query): void
     {  }
 
-    #[Relate(PreloadFixtureChild::class, 'parent_id', cacheResult: true, type: 'many', configure: 'configureSelectedChildren', returnAsArray: true)]
+    #[Relate(PreloadFixtureChild::class, 'parent_id', cacheResult: true, type: RelationType::Many, configure: 'configureSelectedChildren', returnAsArray: true)]
     public function selectedChildren() { return $this->relateMany(); }
 
     protected function configureSelectedChildren(QueryBuilder $query): void
     { $query->fields(['id', 'name', 'payload AS encoded']); }
 
-    #[Relate(PreloadFixtureConstructorChild::class, 'parent_id', cacheResult: true, type: 'many')]
+    #[Relate(PreloadFixtureConstructorChild::class, 'parent_id', cacheResult: true, type: RelationType::Many)]
     public function constructorChildren() { return $this->relateMany(); }
 
 
@@ -704,7 +705,7 @@ class PreloadInheritedScopedParent extends PreloadScopedParent {}
 
 class ReentrantProfileParent extends PreloadFixtureParent
 {
-    #[Relate(ReentrantProfile::class,'parent_id',type:'one')]
+    #[Relate(ReentrantProfile::class,'parent_id',type:RelationType::One)]
     public function reentrantProfile() { return $this->relateOne(); }
 }
 class ReentrantProfile extends AbstractEntity

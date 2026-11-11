@@ -2,6 +2,7 @@
 
 namespace EasySwoole\FastDb\Internal;
 
+use EasySwoole\FastDb\RelationType;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Beans\ListResult;
 use EasySwoole\FastDb\Exception\RuntimeError;
@@ -93,7 +94,7 @@ final class RelationPreloader
             foreach ($entries as $entry) {
                 $matched = $matches[serialize($entry['value'])] ?? [];
                 $plan = $entry['plan'];
-                if ($plan->kind === 'one' && count($matched) > 1) {
+                if ($plan->kind === RelationType::One && count($matched) > 1) {
                     throw new RuntimeError('more than one record hit is no allow in relateOne method');
                 }
                 $arrayMode = $asArray || $entry['arrayMode'];
@@ -158,7 +159,7 @@ final class RelationPreloader
 
     private function materialize(RelationPlan $plan, array $rows, bool $asArray, bool $plainList): mixed
     {
-        if ($plan->kind === 'one') {
+        if ($plan->kind === RelationType::One) {
             if ($rows === []) { return null; }
             return $asArray ? $rows[0] : new ($plan->relate->targetEntity)($rows[0]);
         }

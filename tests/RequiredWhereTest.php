@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests;
 
+use EasySwoole\FastDb\RelationType;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Attributes\Hook\OnDelete;
 use EasySwoole\FastDb\Attributes\Hook\OnUpdate;
@@ -70,7 +71,7 @@ final class RequiredWhereTest extends TestCase
             'orWhere wrapper' => ['wrapper'],
             'explicit OR conjunction' => ['conjunction'],
             'builder access through func' => ['func'],
-            'legacy bound SQL fragment' => ['legacy'],
+            'bound SQL fragment' => ['bound-fragment'],
         ];
     }
 
@@ -82,7 +83,7 @@ final class RequiredWhereTest extends TestCase
             'func' => $query->func(static function (QueryBuilder $builder) use ($secondValue): void {
                 $builder->where('flag_a', 1)->orWhere('flag_b', $secondValue);
             }),
-            'legacy' => $query->where('flag_a=? OR flag_b=?', [1, $secondValue]),
+            'bound-fragment' => $query->where('flag_a=? OR flag_b=?', [1, $secondValue]),
         };
     }
 
@@ -222,9 +223,9 @@ class RequiredWhereParent extends AbstractEntity
 
     public function tableName(): string { return 'required_where_parents'; }
 
-    #[Relate(RequiredWhereRecord::class, 'parent_id')]
+    #[Relate(RequiredWhereRecord::class, 'parent_id', type: RelationType::Many)]
     public function records(): ListResult { return $this->relateMany(); }
 
-    #[Relate(RequiredWhereRecord::class, 'parent_id')]
+    #[Relate(RequiredWhereRecord::class, 'parent_id', type: RelationType::One)]
     public function record(): ?AbstractEntity { return $this->relateOne(); }
 }

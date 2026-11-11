@@ -2,6 +2,7 @@
 
 namespace EasySwoole\FastDb\AbstractInterface;
 
+use EasySwoole\FastDb\RelationType;
 use EasySwoole\FastDb\Attributes\Hook\Call;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Attributes\Relate;
@@ -505,9 +506,6 @@ abstract class AbstractEntity implements \JsonSerializable
     public function __relationPlan(string $method): RelationPlan
     {
         $relate = $this->parseRelate(ReflectionCache::getInstance()->parseRelation(static::class, $method));
-        if ($relate->type === null) {
-            throw new RuntimeError('Preloading requires an explicit relation type: ' . $method);
-        }
         $query = clone $this->queryLimit();
         $this->configureRelation($relate, $query);
         $target = new $relate->targetEntity();
@@ -517,12 +515,12 @@ abstract class AbstractEntity implements \JsonSerializable
 
     protected function relateOne(Relate|null $relate = null,string|null $tableName = null):null|array|AbstractEntity
     {
-        return $this->loadRelation('one', $this->parseRelate($relate), $tableName);
+        return $this->loadRelation(RelationType::One, $this->parseRelate($relate), $tableName);
     }
 
     protected function relateMany(Relate|null $relate = null,string|null $tableName = null)
     {
-        return $this->loadRelation('many', $this->parseRelate($relate), $tableName);
+        return $this->loadRelation(RelationType::Many, $this->parseRelate($relate), $tableName);
     }
 
     function setOnQuery(?callable $call):static
@@ -762,13 +760,14 @@ abstract class AbstractEntity implements \JsonSerializable
         }
     }
 
-    private function loadRelation(string $kind, Relate $relate, ?string $tableName): mixed
+    private function loadRelation(RelationType $kind, Relate $relate, ?string $tableName): mixed
     {
-        $this->relationLoader ??= new RelationLoader();
         try {
-            if ($relate->type !== null && $relate->type !== $kind) {
+            // 声明与调用入口必须一致，在配置、缓存读取和 SQL 执行前拦截。
+            if ($relate->type !== $kind) {
                 throw new RuntimeError('Declared relation type does not match its getter');
             }
+            $this->relationLoader ??= new RelationLoader();
             $this->configureRelation($relate, $this->queryLimit());
             return $this->relationLoader->load($this, $relate, $tableName, $kind,
                 fn ($query) => static::callQuery($query, $this->onQuery), fn () => $this->reset(), fn ($result) => $this->readTotal($result));

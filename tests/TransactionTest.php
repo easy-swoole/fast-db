@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests;
 
+use EasySwoole\FastDb\RelationType;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\AbstractInterface\ConvertList;
 use EasySwoole\FastDb\Attributes\Relate;
@@ -1172,7 +1173,7 @@ class DeclaredMysqlEntity extends AbstractEntity
     #[Property(isPrimaryKey:true)] public int $id;
     #[Property] public int $value;
     public function tableName(): string { return TransactionEntity::$table; }
-    #[\EasySwoole\FastDb\Attributes\Relate(self::class,'value',type:'many',configure:'configureChildren')]
+    #[\EasySwoole\FastDb\Attributes\Relate(self::class,'value',type:RelationType::Many,configure:'configureChildren')]
     public function children(): \EasySwoole\FastDb\Beans\ListResult
     {
         self::$getterCalls++;
@@ -1196,9 +1197,9 @@ class ConvertedKeyMysqlEntity extends AbstractEntity
     #[Property(isPrimaryKey: true, convertObject: ConvertedKey::class)] public ?ConvertedKey $id;
     #[Property] public int $value;
     public function tableName(): string { return TransactionEntity::$table; }
-    #[Relate(TextKeyMysqlEntity::class, 'id', type: 'one', cacheResult: true)]
+    #[Relate(TextKeyMysqlEntity::class, 'id', type: RelationType::One, cacheResult: true)]
     public function record() { return $this->relateOne(); }
-    #[Relate(TextKeyMysqlEntity::class, 'id', type: 'many', cacheResult: true)]
+    #[Relate(TextKeyMysqlEntity::class, 'id', type: RelationType::Many, cacheResult: true)]
     public function records() { return $this->relateMany(); }
 }
 
@@ -1235,7 +1236,7 @@ class ScopedMysqlEntity extends AbstractEntity
         }
         return $query;
     }
-    #[Relate(self::class,'value',type:'many',configure:'configureChildren')]
+    #[Relate(self::class,'value',type:RelationType::Many,configure:'configureChildren')]
     public function children() { return $this->relateMany(); }
     protected function configureChildren(\EasySwoole\Mysqli\QueryBuilder $query): void { $query->orderBy('id','ASC'); }
 }
