@@ -41,12 +41,12 @@ final class ConfigTlsTest extends TestCase
             'tlsCertFile'=>'/certs/client.pem', 'tlsKeyFile'=>'/certs/client.key',
             'tlsKeyPassphrase'=>'test-only-passphrase', 'tlsServerName'=>'mysql.internal.example',
             'tlsVersions'=>[TlsVersion::Tls12,'TLSv1.3']];
-        $config = new Config($settings + ['name'=>'secured', 'maxObjectNum'=>4]);
+        $config = new Config($settings + ['name'=>'secured', 'maxObjectNum'=>32]);
         $exported = $config->toArray();
         $this->assertSame($settings, array_intersect_key($exported, $settings));
         $this->assertSame($mode, $config->getTlsMode());
         $this->assertSame('secured', $exported['name']);
-        $this->assertSame(4, $exported['maxObjectNum']);
+        $this->assertSame(32, $exported['maxObjectNum']);
         // 连接池和 testDb 都通过这条配置转换路径创建驱动配置，无需重复 TLS 解析。
         $driver = new DriverConfig($exported);
         $this->assertSame($expected, $driver->getTlsMode());
