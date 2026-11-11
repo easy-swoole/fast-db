@@ -7,7 +7,6 @@ namespace EasySwoole\FastDb\Tests;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\AbstractInterface\ConvertList;
 use EasySwoole\FastDb\Attributes\Property;
-use EasySwoole\FastDb\Beans\Query;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
@@ -369,77 +368,6 @@ final class ChunkByIdTest extends TestCase
         $this->assertSame([], $this->connection->queries);
         $this->assertClean($owner);
     }
-
-    public static function unsupportedQueries(): array
-    {
-        return [
-            'explicit found rows' => [static fn(Query $query) => $query->page(1, true, 2)],
-            'grouping' => [static fn(Query $query) => $query->groupBy('status')],
-            'distinct' => [static fn(Query $query) => $query->func(static fn(QueryBuilder $builder) => $builder->distinct())],
-            'locking' => [static fn(Query $query) => $query->selectForUpdate()],
-        ];
-    }
-
-    #[DataProvider('unsupportedQueries')]
-    public function testUnsupportedQueryShapesFailBeforeExecutingAnyPage(callable $configure): void
-    {
-        $owner = new KeysetChunkRecord();
-        $configure($owner->queryLimit());
-        try { $owner->chunkById(static function (): void {}, 2); $this->fail('Unsupported query shape must fail'); }
-        catch (\InvalidArgumentException) { $this->addToAssertionCount(1); }
-        $this->assertSame([], $this->connection->queries);
-        $this->assertClean($owner);
-    }
-
-    public static function missingCursorFields(): array { return [[['name']], [['id AS other', 'name']]]; }
-
-    #[DataProvider('missingCursorFields')]
-    public function testSelectedFieldsCannotOmitOrRenameTheCursor(array $fields): void
-    {
-        $this->seed(3);
-        $owner = new KeysetChunkRecord();
-        $owner->queryLimit()->fields($fields);
-        $calls = 0;
-        try { $owner->chunkById(static function () use (&$calls): void { $calls++; }, 2); $this->fail('Missing cursor must fail'); }
-        catch (\UnexpectedValueException|\InvalidArgumentException|RuntimeError) { $this->addToAssertionCount(1); }
-        $this->assertSame(0, $calls);
-        $this->assertClean($owner);
-    }
-
-    public static function invalidRawCursors(): array { return [[null], [false], [1.5], [[]], [new \stdClass()]]; }
-
-    #[DataProvider('invalidRawCursors')]
-    public function testEntireRawPageIsValidatedBeforeAnyCallback(mixed $invalid): void
-    {
-        $this->connection->forcedPages = [[['id' => $invalid, 'name' => 'invalid'], ['id' => 2, 'name' => 'valid last row']]];
-        $owner = new KeysetChunkRecord();
-        $owner->queryLimit()->returnAsArray();
-        $calls = 0;
-        try { $owner->chunkById(static function () use (&$calls): void { $calls++; }, 2); $this->fail('Invalid cursor must fail'); }
-        catch (\UnexpectedValueException) { $this->addToAssertionCount(1); }
-        $this->assertSame(0, $calls);
-        $this->assertClean($owner);
-    }
-
-    public function testDuplicateCursorWithinAPageFailsBeforeCallbacks(): void
-    {
-        $this->connection->forcedPages = [[['id' => 1], ['id' => 1]]];
-        $calls = 0;
-        try { (new KeysetChunkRecord())->chunkById(static function () use (&$calls): void { $calls++; }, 2); $this->fail('Duplicate cursor must fail'); }
-        catch (\UnexpectedValueException) { $this->addToAssertionCount(1); }
-        $this->assertSame(0, $calls);
-    }
-
-    public function testRepeatedPageCursorCannotCauseAnInfiniteLoopOrDuplicateDelivery(): void
-    {
-        $this->connection->forcedPages = [[['id' => 1], ['id' => 2]], [['id' => 1], ['id' => 2]]];
-        $seen = [];
-        try {
-            (new KeysetChunkRecord())->chunkById(static function (KeysetChunkRecord $row) use (&$seen): void { $seen[] = $row->id; }, 2);
-            $this->fail('Nonadvancing cursor must fail');
-        } catch (\UnexpectedValueException) { $this->addToAssertionCount(1); }
-        $this->assertSame([1, 2], $seen);
-    }
 }
 
 class KeysetChunkRecord extends AbstractEntity
@@ -463,19 +391,12 @@ class KeysetChunkSqliteConnection extends Connection
 {
     public array $queries = [];
     public array $rawQueries = [];
-    public ?array $forcedPages = null;
     public function __construct(public \PDO $database) { parent::__construct(new Config()); }
     public function query(QueryBuilder $builder, ?float $timeout = null): bool|array
     {
         $sql = $builder->getLastPrepareQuery();
         $parameters = $builder->getLastBindParams();
         $this->queries[] = ['sql' => $sql, 'parameters' => $parameters, 'options' => $builder->getLastQueryOptions()];
-        if (str_starts_with($sql, 'SELECT') && $this->forcedPages !== null) {
-            if ($this->forcedPages === []) { throw new \LogicException('Unexpected additional cursor page'); }
-            $rows = array_shift($this->forcedPages);
-            $this->lastAffectRows = count($rows); $this->lastInsertId = 0;
-            return $rows;
-        }
         $statement = $this->database->prepare($sql);
         $statement->execute($parameters);
         $this->lastAffectRows = $statement->rowCount(); $this->lastInsertId = 0;

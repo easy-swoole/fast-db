@@ -60,6 +60,54 @@ final class TransactionTest extends TestCase
         return (int) $this->observer->query("SELECT value FROM `{$this->table}` WHERE id = 1")->fetch_assoc()['value'];
     }
 
+    public static function cursorTotalModes(): array { return [[false], [true]]; }
+
+    #[DataProvider('cursorTotalModes')]
+    public function testMysqlCursorQuotesReservedFieldsAndKeepsOrBoundariesLocksAndTotals(bool $withTotal): void
+    {
+        $this->observer->query("ALTER TABLE `{$this->table}` ADD COLUMN `order` INT NOT NULL DEFAULT 10");
+        $this->observer->query("INSERT INTO `{$this->table}` VALUES (2,2,20),(3,3,30),(4,4,40),(5,5,50)");
+        $pages = [];
+        $this->db->setOnQuery(static function (QueryResult $result) use (&$pages): void {
+            $sql = $result->getQueryBuilder()?->getLastPrepareQuery();
+            if ($sql !== null && str_starts_with($sql, 'SELECT')) { $pages[] = $result; }
+        });
+        $seen = [];
+        $this->db->transaction(function () use ($withTotal, &$seen): void {
+            $entity = new CursorMysqlEntity();
+            $entity->queryLimit()->where('value',0)->orWhere('id',4,'>=')->orderBy('id','DESC')
+                ->page(99, $withTotal, 1)->selectForUpdate()->returnAsArray()->hideFields('order');
+            $this->assertSame(3, $entity->chunkById(function (array $row) use (&$seen): void {
+                $this->assertArrayNotHasKey('order', $row);
+                $seen[] = $row['id'];
+                if ($row['id'] === 4) { $this->assertSame(1, TransactionEntity::fastDelete(4)); }
+            }, 2, 'order'));
+        });
+        $this->assertSame([1,4,5], $seen);
+        $this->assertCount(2, $pages);
+        foreach ($pages as $page) {
+            $sql = $page->getQueryBuilder()->getLastPrepareQuery();
+            $this->assertStringContainsString('ORDER BY `order` ASC', $sql);
+            $this->assertStringContainsString('FOR UPDATE', $sql);
+            $this->assertSame($withTotal, $page->getTotalResult() !== null);
+        }
+        if ($withTotal) { $this->assertSame([3,1], array_map(static fn(QueryResult $page) => $page->getTotalCount(), $pages)); }
+    }
+
+    public function testMysqlBulkWritesUseDriverValidationAndIndependentBatchColumns(): void
+    {
+        $this->observer->query("ALTER TABLE `{$this->table}` MODIFY value INT NOT NULL DEFAULT 0");
+        $this->assertSame(3, TransactionEntity::fastInsertAll([
+            ['id'=>2,'value'=>20], ['id'=>3,'value'=>30], ['id'=>4],
+        ], batchSize: 2));
+        $this->assertSame(0, TransactionEntity::findRecord(4)->value);
+        $this->assertSame(5, TransactionEntity::fastUpsert([
+            ['id'=>2,'value'=>21], ['id'=>3,'value'=>31], ['id'=>5,'value'=>50],
+        ], ['value'], batchSize: 2));
+        $rows = $this->observer->query("SELECT id,value FROM `{$this->table}` ORDER BY id")->fetch_all(MYSQLI_ASSOC);
+        $this->assertSame([0,21,31,0,50], array_map('intval', array_column($rows, 'value')));
+    }
+
     public function testDeclaredRelationsShareProtectedConfigurationAcrossLazyAndPreloadedQueries(): void
     {
         $this->observer->query("INSERT INTO `{$this->table}` VALUES (2,1),(3,1),(4,2)");
@@ -1048,4 +1096,9 @@ class EncodingMysqlList extends ConvertList
 {
     public static int $encodes = 0;
     public function toValue(): string { self::$encodes++; return parent::toValue(); }
+}
+
+class CursorMysqlEntity extends DeclaredMysqlEntity
+{
+    #[Property] public int $order;
 }

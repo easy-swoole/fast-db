@@ -15,7 +15,6 @@ final class EntityState
     {
         $data = $compared = [];
         foreach ($properties as $key => $property) {
-            if (!array_key_exists($key, $this->baseline)) { continue; }
             $old = $this->baseline[$key];
             $value = $entity->{$key} ?? null;
             $current = FieldCodec::compare($value);

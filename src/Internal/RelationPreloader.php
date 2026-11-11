@@ -37,7 +37,6 @@ final class RelationPreloader
         $position = 0;
         $class = $source::class;
         foreach ($rows as $row) {
-            if (!is_array($row)) { throw new RuntimeError('Preloaded parent rows must be arrays'); }
             // 数组输出也需要实例配置读取父字段，临时模型不进入返回结果。
             $parent = $asArray ? new $class($row) : $parents[$position];
             foreach ($relations as $method) {
@@ -65,14 +64,9 @@ final class RelationPreloader
                 $db->selectConnection($plan->connectionName);
                 $table = $plan->tableName;
                 $builder = $plan->query->__getQueryBuilder();
-                // 与驱动游标页共用普通 SELECT 检查，不执行生成的游标页。
-                $plan->query->forPageAfterId($plan->relate->targetProperty, null, 1);
                 $fields = $plan->query->getFields();
                 $columns = $fields['fields'] ?? null;
                 $preview = (clone $builder)->get($table, null, $columns);
-                if (preg_match('/\sLIMIT\s+-?\d+(?:\s*,\s*-?\d+)?\s*\z/i', $preview->getLastPrepareQuery())) {
-                    throw new \InvalidArgumentException('Preloading does not support per-parent limits or pagination');
-                }
                 // 数组结果直接附加关联数据，不需要生成用于实体缓存匹配的查询。
                 $lookup = $asArray ? null : RelationPlan::buildLookup(clone $builder, $table, $plan->relate,
                     $plan->kind, $value, $columns);
@@ -153,14 +147,8 @@ final class RelationPreloader
                 ->get($plan->tableName, null, $columns);
             FastDb::getInstance()->selectConnection($plan->connectionName);
             $rows = $execute($builder)->getResult();
-            if (!is_array($rows)) { throw new RuntimeError('Preload queries must return result rows'); }
             foreach ($rows as $row) {
-                if (!is_array($row) || !array_key_exists($indexName, $row)
-                    || (!is_int($row[$indexName]) && !(is_string($row[$indexName]) && preg_match('/\A[0-9]+\z/D', $row[$indexName])))
-                    || !array_key_exists((int) $row[$indexName], $identities)) {
-                    throw new RuntimeError('Preload result is missing its parent matching column');
-                }
-                $identity = $identities[(int) $row[$indexName]];
+                $identity = $identities[$row[$indexName]];
                 unset($row[$indexName]);
                 $matches[$identity][] = $row;
             }

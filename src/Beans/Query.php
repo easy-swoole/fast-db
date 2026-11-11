@@ -4,7 +4,6 @@ namespace EasySwoole\FastDb\Beans;
 
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Internal\FieldSelection;
-use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\Mysqli\QueryBuilder;
 
 class Query
@@ -109,21 +108,8 @@ class Query
     public function withRelations(string|array $relations): Query
     {
         $names = is_string($relations) ? [$relations] : $relations;
-        foreach ($names as $name) {
-            if (!is_string($name) || preg_match('/\A[a-zA-Z_][a-zA-Z0-9_]*\z/D', $name) !== 1) {
-                throw new \InvalidArgumentException('Relations must be a list of method names');
-            }
-        }
         foreach ($names as &$name) {
-            try {
-                $method = new \ReflectionMethod($this->entity, $name);
-                if (!$method->isPublic() || $method->isStatic() || $method->getNumberOfRequiredParameters() !== 0) {
-                    throw new RuntimeError('Preloaded relation getter must be a public instance method without required arguments');
-                }
-                $name = $method->getName();
-            } catch (\ReflectionException $error) {
-                throw new RuntimeError('Unknown relation method: ' . $name, 0, $error);
-            }
+            $name = (new \ReflectionMethod($this->entity, $name))->getName();
         }
         unset($name);
         $this->relations = array_values(array_unique($names));
@@ -200,16 +186,6 @@ class Query
         return $copy;
     }
 
-    /** @internal 创建独立的游标分页 Query，保留输出配置和原模板。 */
-    public function forPageAfterId(string $column, mixed $lastId, int $size): Query
-    {
-        $copy = new Query($this->entity);
-        $copy->queryBuilder = $this->builder()->forPageAfterId($column, $lastId, $size);
-        $copy->selection = clone $this->selection;
-        $copy->relations = $this->relations;
-        return $copy;
-    }
-
     /** 克隆实体时重新绑定所有者，同时复制 SQL 条件和输出配置。 */
     public function forEntity(AbstractEntity $entity): Query
     {
@@ -222,7 +198,7 @@ class Query
 
     function __clone()
     {
-        // 分块读取时复用底层查询构造器。
+        // 查询条件和输出配置分别复制，后续修改不影响原查询。
         $this->queryBuilder = $this->queryBuilder === null ? null : clone $this->queryBuilder;
         $this->selection = clone $this->selection;
     }

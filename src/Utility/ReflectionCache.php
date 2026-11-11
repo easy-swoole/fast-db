@@ -13,14 +13,13 @@ use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Beans\EntityReflection;
 use EasySwoole\FastDb\Exception\RuntimeError;
 
-/** 按类保存字段、关联和配置方法元数据，不保留实体实例。 */
+/** 按类保存字段和关联元数据，不保留实体实例。 */
 class ReflectionCache
 {
     use Singleton;
 
     private array $entityData = [];
     private array $relationData = [];
-    private array $relationConfigurators = [];
 
     /**
      * @throws \ReflectionException
@@ -71,22 +70,6 @@ class ReflectionCache
             $this->relationData[$entityClass][$method] = $attributes[0]->newInstance();
         }
         return clone $this->relationData[$entityClass][$method];
-    }
-
-    /** 配置方法的可见性按类缓存，逐父配置不再重复反射。 */
-    public function relationConfigurator(string $entityClass, string $method): string
-    {
-        if (!isset($this->relationConfigurators[$entityClass][$method])) {
-            try { $reflection = new \ReflectionMethod($entityClass, $method); }
-            catch (\ReflectionException $error) {
-                throw new RuntimeError('Unknown relation configurator: ' . $method, 0, $error);
-            }
-            if ($reflection->isPrivate() || $reflection->isStatic() || $reflection->isAbstract()) {
-                throw new RuntimeError('Relation configurator must be a public or protected instance method');
-            }
-            $this->relationConfigurators[$entityClass][$method] = $reflection->getName();
-        }
-        return $this->relationConfigurators[$entityClass][$method];
     }
 
     protected function parseClassTag(string $targetTag, \ReflectionClass $ref)

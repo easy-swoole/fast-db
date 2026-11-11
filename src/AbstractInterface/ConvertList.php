@@ -15,8 +15,10 @@ class ConvertList implements ConvertObjectInterface
         if ($class !== null && !is_a($class, SplBean::class, true)) {
             throw new \InvalidArgumentException('ConvertList itemClass must extend ' . SplBean::class);
         }
+        // 整批共用元素类型和转换方式，不在逐项转换时重复解析。
+        $convertObject = $class !== null && is_a($class, ConvertObjectInterface::class, true);
         foreach ($list as $key => $item) {
-            $this->list[$key] = $this->convertItem($item);
+            $this->list[$key] = $this->convertItem($item, $class, $convertObject);
         }
     }
 
@@ -27,16 +29,15 @@ class ConvertList implements ConvertObjectInterface
     }
 
     /** 初始化和追加共用转换，已转换的 Bean 保留原实例。 */
-    private function convertItem(mixed $item): mixed
+    private function convertItem(mixed $item, ?string $class, bool $convertObject): mixed
     {
-        $class = static::itemClass();
         if ($class === null || $item instanceof $class) {
             return $item;
         }
         if (!is_array($item)) {
             throw new \InvalidArgumentException('ConvertList Bean items must be arrays or instances of ' . $class);
         }
-        return is_a($class, ConvertObjectInterface::class, true)
+        return $convertObject
             ? $class::toObject($item)
             : new $class($item);
     }
@@ -105,7 +106,9 @@ class ConvertList implements ConvertObjectInterface
     function append(mixed $item):void
     {
         if($item !== null){
-            $this->list[] = $this->convertItem($item);
+            $class = static::itemClass();
+            $this->list[] = $this->convertItem($item, $class,
+                $class !== null && is_a($class, ConvertObjectInterface::class, true));
         }
     }
 }

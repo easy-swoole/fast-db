@@ -40,11 +40,32 @@ final class ConvertListTest extends TestCase
         $this->assertSame('乙', UserBeanList::toObject($list->toValue())->first()->name);
     }
 
+    public function testBatchConstructionResolvesTheItemTypeOnlyOnce(): void
+    {
+        CountingBeanList::$resolutions = 0;
+        $list = new CountingBeanList(array_fill(0, 1000, ['name' => '甲']));
+        $this->assertSame(1, CountingBeanList::$resolutions);
+        $this->assertSame(1000, $list->length());
+        $this->assertInstanceOf(ListUserBean::class, $list->first());
+        $bean = new ListUserBean(['name' => '乙']);
+        $list->append($bean);
+        $this->assertSame(2, CountingBeanList::$resolutions);
+        $this->assertSame($bean, $list->toArray()[1000]);
+        $list->append(['name' => '丙']);
+        $this->assertSame(3, CountingBeanList::$resolutions);
+        $this->assertSame('丙', $list->toArray()[1001]->name);
+        $list->append(null);
+        $this->assertSame(3, CountingBeanList::$resolutions);
+        $this->assertSame(1002, $list->length());
+    }
+
     public function testPlainSplBeanIsSupported(): void
     {
         $list = PlainBeanList::toObject([['name' => '甲']]);
         $this->assertInstanceOf(PlainListBean::class, $list->first());
         $this->assertSame([['name' => '甲']], json_decode($list->toValue(), true));
+        $list->append(['name' => '乙']);
+        $this->assertSame('乙', $list->toArray()[1]->name);
     }
 
     public function testEntityAssignmentSerializationAndNull(): void
@@ -154,4 +175,14 @@ class BeanListEntity extends AbstractEntity
     public function tableName(): string { return "bean_list_test"; }
     #[Property(convertObject: UserBeanList::class)]
     public ?UserBeanList $users;
+}
+
+class CountingBeanList extends UserBeanList
+{
+    public static int $resolutions = 0;
+    protected static function itemClass(): ?string
+    {
+        self::$resolutions++;
+        return parent::itemClass();
+    }
 }

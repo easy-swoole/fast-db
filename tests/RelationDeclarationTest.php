@@ -49,13 +49,13 @@ final class RelationDeclarationTest extends TestCase
 
     public static function invalidConfigurations(): array
     {
-        return [['legacy'],['privateConfig'],['staticConfig'],['unknownConfig']];
+        return [['privateConfig'],['unknownConfig']];
     }
 
     #[\PHPUnit\Framework\Attributes\DataProvider('invalidConfigurations')]
     public function testInvalidDeclarationsFailClearly(string $name): void
     {
-        $this->expectException(RuntimeError::class);
+        $this->expectException(\Error::class);
         (new DeclarationParent(['id'=>1]))->__relationPlan($name);
     }
 
@@ -69,10 +69,26 @@ final class RelationDeclarationTest extends TestCase
         $this->assertSame([9], $held->__getQueryBuilder()->get('children')->getLastBindParams());
     }
 
-    public function testPreloadDeclarationRejectsProtectedGetters(): void
+    public function testPreloadDeclarationReadsProtectedAndParameterizedGettersWithoutCallingThem(): void
+    {
+        $parent = new DeclarationParent(['id'=>1]);
+        $query = $parent->queryLimit()->withRelations(['PROTECTEDGETTER', 'parameterizedGetter', 'protectedGetter']);
+        $this->assertSame(['protectedGetter', 'parameterizedGetter'], $query->getRelations());
+        foreach ($query->getRelations() as $name) {
+            $this->assertSame('many', $parent->__relationPlan($name)->kind);
+        }
+    }
+
+    public function testStaticConfiguratorUsesNormalPhpMethodDispatch(): void
+    {
+        $plan = (new DeclarationParent(['id'=>1]))->__relationPlan('staticConfig');
+        $this->assertSame([4], $plan->query->__getQueryBuilder()->get('children')->getLastBindParams());
+    }
+
+    public function testPreloadStillRequiresAnExplicitRelationType(): void
     {
         $this->expectException(RuntimeError::class);
-        (new DeclarationParent(['id'=>1]))->queryLimit()->withRelations('protectedGetter');
+        (new DeclarationParent(['id'=>1]))->__relationPlan('legacy');
     }
 
     public function testInvalidTypeIsRejected(): void
@@ -100,7 +116,9 @@ class DeclarationParent extends AbstractEntity
     #[Property] public int $tenant;
     public function tableName(): string { return 'parents'; }
     #[Relate(DeclarationTarget::class,'parent_id',type:'many')]
-    protected function protectedGetter() { return $this->relateMany(); }
+    protected function protectedGetter() { throw new \LogicException('Getter must not run'); }
+    #[Relate(DeclarationTarget::class,'parent_id',type:'many')]
+    public function parameterizedGetter(int $required) { throw new \LogicException('Getter must not run'); }
     #[Relate(DeclarationTarget::class,'parent_id',type:'many')]
     public function plain() { throw new \LogicException('Getter must not run'); }
     #[Relate(DeclarationTarget::class,'parent_id',type:'one',configure:'protectedQuery')]
@@ -116,7 +134,7 @@ class DeclarationParent extends AbstractEntity
     private function hiddenQuery(QueryBuilder $query): void {}
     #[Relate(DeclarationTarget::class,'parent_id',type:'many',configure:'staticQuery')]
     public function staticConfig() {}
-    public static function staticQuery(QueryBuilder $query): void {}
+    public static function staticQuery(QueryBuilder $query): void { $query->where('active',4); }
     #[Relate(DeclarationTarget::class,'parent_id',type:'many',configure:'missing')]
     public function unknownConfig() {}
     #[Relate(DeclarationTarget::class,'parent_id',type:'many',configure:'failQuery')]

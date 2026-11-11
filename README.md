@@ -29,7 +29,7 @@ FastDb 通过 `FastDb::getInstance()` 获取固定实例并长期复用。需要
 
 实体 `update()` / `delete()` 和关联查询在最终构建 SQL 前，将全部已有 WHERE 条件整体分组，再以 AND 追加主键或关联外键条件。例如 `WHERE (status = ? OR score = ?) AND id = ?`，附加 OR 条件始终受实体范围约束。该分组也覆盖 `func()`、底层构建器和生命周期钩子添加的条件；`fastUpdate()` / `fastDelete()` 继续按调用方提供的条件批量执行。
 
-本组件直接使用 mysqli 的 `QueryBuilder::groupExistingWhere()` 和 `forPageAfterId()`，查询路径不再逐次探测驱动能力。连接池最小容量维护和创建失败处理沿用上游 pool 的实现。
+本组件直接使用 mysqli 的 `QueryBuilder::groupExistingWhere()`，游标分块由 FastDb 组合 WHERE、ORDER BY 和 LIMIT 实现；查询路径不再逐次探测驱动能力。连接池最小容量维护和创建失败处理沿用上游 pool 的实现。
 
 `Connection::isInTransaction(): bool` 直接读取底层协议的事务状态；`FastDb::isInTransaction()` 转发到当前或指定连接，不另外保存事务布尔副本。实体 `update()` 在数据库 SQL 成功后、公开查询回调前接受字段比较基准；返回值按本次 SQL 是否成功确定。后续事务回滚不会恢复模型属性或比较基准，需要由业务重新加载、重建对象或显式修改字段后再保存。
 
@@ -505,7 +505,7 @@ $processed = $entity->chunkById(function (User $user): void {
 echo $processed; // 已交付给回调的记录数。
 ```
 
-`chunkById(callable $func, int $chunkSize = 10, ?string $column = null): int` 默认使用实体主键，也可通过第三个参数指定稳定、唯一、非 NULL 的整数或字符串列。`$column` 必须是实体已声明为 `Property` 的原始列名，不能填写 SQL 表达式或别名。无主键实体需要显式指定符合条件的列。该入口要求 mysqli 提供 `QueryBuilder::forPageAfterId()`。
+`chunkById(callable $func, int $chunkSize = 10, ?string $column = null): int` 默认使用实体主键，也可通过第三个参数指定稳定、唯一、非 NULL 的整数或字符串列。`$column` 必须是实体已声明为 `Property` 的原始列名，不能填写 SQL 表达式或别名。无主键实体需要显式指定符合条件的列。分页由 FastDb 使用常规 QueryBuilder 接口构建，不依赖 mysqli 的游标分页辅助方法。
 
 始终按该列 ASC 排序，从首批开始，再用“游标列 > 上一批最后的游标值”读取下一批；已有排序及页码偏移不决定遍历顺序和起点。每次回调接收一条实体；启用 `returnAsArray()` 时接收一条数组，与 `chunk()` 一致。
 
@@ -513,9 +513,9 @@ echo $processed; // 已交付给回调的记录数。
 
 使用 `fields()` 时必须显式选中原始游标列，例如 `fields(['id', 'name', 'status'])`，不能只把游标列选为 `id AS cursor` 这样的别名；库不会为遍历悄悄扩大字段白名单。
 
-`hideFields()` 可以隐藏游标列，方法会在公开查询回调前从原始结果校验并保存游标和页大小，再转换实体或隐藏输出字段。因此隐藏游标、修改回调对象或在 `onQuery` 中改写交付数据，都不会改变翻页位置及原始页的结束判断。返回实体后持续隐藏字段仍沿用 `persistFieldLimit()` 的规则。游标缺失、为 NULL 或重复等无效结果会在该批业务回调前抛出 `UnexpectedValueException`。不要在数据库中修改用于本次遍历的游标列。
+`hideFields()` 可以隐藏游标列，方法会在公开查询回调前从原始结果保存末行游标和页大小，再转换实体或隐藏输出字段。因此隐藏游标、修改回调对象或在 `onQuery` 中改写交付数据，都不会改变翻页位置及原始页的结束判断。返回实体后持续隐藏字段仍沿用 `persistFieldLimit()` 的规则。调用者负责选中符合约定的游标列，并保证其稳定、唯一且非 NULL；组件不逐行扫描校验游标。不要在数据库中修改用于本次遍历的游标列。
 
-查询结果必须具有唯一游标；使用 JOIN 时，也要保证连接结果中该列不重复。分组、HAVING、DISTINCT、UNION、子查询 FROM、行锁及显式总数统计不受支持。需要限制扫描范围时，可预先增加游标上界；方法本身不提供跨页的一致性快照。
+查询结果必须具有唯一游标；使用 JOIN 时，也要保证连接结果中该列不重复。额外的查询选项沿用调用方配置；复杂分组、联合或关联查询是否符合游标遍历语义，由调用者保证。需要限制扫描范围时，可预先增加游标上界；方法本身不提供跨页的一致性快照。
 
 ### 计数和聚合
 
@@ -660,7 +660,7 @@ $affected = User::fastInsertAll([
 ], batchSize: 500);
 ```
 
-输入可以是数组、Generator 或其他 iterable。每行必须是非空的数据库字段关联数组，全部输入跨批次也必须使用相同的字段集合；只重排键顺序可以，缺字段或多字段会报错，不会自动补 null。每行按迭代读取时的标量值进入缓冲，后续修改行内标量引用不会改写已读取的行。JSON 等属性应先转成数据库可写的值；不会对每行应用实体转换器、`Property::assignCall` / `toValue` 回调或插入钩子，也不回填自增 ID 或实体比较基准。
+输入可以是数组、Generator 或其他 iterable。每行必须是非空的数据库字段关联数组，同一批内必须使用相同的字段集合，由 mysqli 构建 SQL 时校验；只重排键顺序可以，不会自动补 null。各批独立执行，允许不同批次使用不同字段集合。每行按迭代读取时的标量值进入缓冲，后续修改行内标量引用不会改写已读取的行。JSON 等属性应先转成数据库可写的值；不会对每行应用实体转换器、`Property::assignCall` / `toValue` 回调或插入钩子，也不回填自增 ID 或实体比较基准。
 
 #### 使用生成器控制批次内存
 
@@ -675,7 +675,7 @@ function userRows(): \Generator
 $affected = User::fastInsertAll(userRows(), tableName: 'users', batchSize: 500);
 ```
 
-框架只缓冲当前批次，不会先把整个生成器转成数组，也不逐行创建模型。`batchSize` 按行数控制，默认 500；小于或等于 0 会抛出 `InvalidArgumentException`。参数有效的空输入返回 0，不构造模型、不执行 SQL。非空有效输入省略表名时，在首次写入前仅初始化一个模型来取得表名，这个模型自身的默认初始化与 `OnInitialize` 仍会执行；显式给出有效表名则不构造模型。
+框架只缓冲当前批次，不会先把整个生成器转成数组，也不逐行创建模型。`batchSize` 按行数控制，默认 500；小于或等于 0 会抛出 `InvalidArgumentException`。空输入在 batchSize 有效时返回 0，不构造模型、不执行 SQL，也不校验未使用的更新列。非空有效输入省略表名时，在首次写入前仅初始化一个模型来取得表名，这个模型自身的默认初始化与 `OnInitialize` 仍会执行；显式给出有效表名则不构造模型。
 
 #### 主键或唯一键冲突时更新
 
@@ -697,7 +697,7 @@ $affected = User::fastUpsert([
 ], tableName: 'users', batchSize: 500);
 ```
 
-`$updateColumns` 沿用 mysqli 的 `upsert()` 规则；列表列名需存在于每条输入行中。空更新列会抛出 `InvalidArgumentException`，即使 `$rows` 为空也不会接受。固定值及表达式应用于发生冲突的行，插入新行仍使用输入值或数据库默认值。需要逐实体转换、钩子和主键回填时，继续使用实体 `insert($updateDuplicateCols)`。
+`$updateColumns` 沿用 mysqli 的 `upsert()` 规则；列表列名需存在于每条输入行中。非空输入的空更新列由 mysqli 抛出 `InvalidArgumentException`；`$rows` 为空时直接返回 0。固定值及表达式应用于发生冲突的行，插入新行仍使用输入值或数据库默认值。需要逐实体转换、钩子和主键回填时，继续使用实体 `insert($updateDuplicateCols)`。
 
 返回值是各批数据库 `affectedRows` 的合计，不是输入行数或自增 ID 列表。upsert 的插入、实际更新和未改变值可能产生不同的影响行数，应按数据库语义理解；合计超出 PHP 整数范围时返回十进制字符串，保留精度。
 
@@ -1210,7 +1210,7 @@ foreach ($users as $user) {
 }
 ```
 
-`withRelations(string|array $relations)` 接受单个方法名或方法名列表，不接受闭包配置或点分嵌套路径。方法名会去重并规范为声明时的大小写；再次调用会覆盖本次声明，`withRelations([])` 清除声明。关系方法须为标注了 `#[Relate]` 的 public、非 static 方法，且不能有必填参数。预加载只读取关联声明，不执行 getter。预加载必须显式填写 `type: 'one'` 或 `type: 'many'`；旧关联未填写 type 时仍可按需调用，但预加载会明确报错。
+`withRelations(string|array $relations)` 接受单个方法名或方法名列表，不接受闭包配置或点分嵌套路径。方法名会去重并规范为声明时的大小写；再次调用会覆盖本次声明，`withRelations([])` 清除声明。关系方法须标注 `#[Relate]`。预加载只读取关联声明，不执行 getter，因此不检查 getter 的可见性、静态声明或参数。预加载必须显式填写 `type: 'one'` 或 `type: 'many'`；旧关联未填写 type 时仍可按需调用，但预加载会明确报错。
 
 实体模式会把结果注入各父实体的关联缓存，之后相同查询形状的关系 getter 可直接命中，即使 `Relate::cacheResult` 为 false 也有效。一对一仍返回实体或 null，匹配多条仍抛出 `RuntimeError`；一对多仍返回 `ListResult`。关系声明设置 `returnAsArray: true` 时，按需加载和预加载均返回数组或包含数组的 `ListResult`。父实体的 `toArray()` 不会自动把关系变成字段，需要输出时显式调用 getter。
 
@@ -1236,7 +1236,7 @@ foreach ($rows as $row) {
 
 #### 可选配置方法与查询数量
 
-`configure` 默认为 null，无附加条件时可以省略。填写方法名时，由 AbstractEntity 调用 public/protected 实例方法，传入 `QueryBuilder`，返回值忽略。支持继承的配置方法，不支持 private 或 static 方法。方法的可见性检查按类缓存。
+`configure` 默认为 null，无附加条件时可以省略。填写方法名时，由 AbstractEntity 直接调用配置方法，传入 `QueryBuilder`，返回值忽略。通常使用 public/protected 实例方法以读取当前父模型，也可使用 static 方法。方法可见性和参数约束遵循 PHP 调用规则，不额外反射检查或包装调用错误。
 
 ```php
 use EasySwoole\Mysqli\QueryBuilder;
@@ -1277,7 +1277,7 @@ $orders = $users[0]->activeOrders(); // 同样的配置可命中预加载缓存�
 
 常见固定关系、每种关系不超过 250 个唯一父关联键时，通常是 1 条父查询加每种关系 1 条批查询；例如 100 个父实体同时预加载 profile 和 orders，通常为 3 条 SQL。更大的结果按每个兼容计划、每 250 个去重父键分批；相同计划还可合并。若动态条件让每个父对象都产生不同计划，关联查询仍可能达到 N 条，不保证任意关系都固定为一条批 SQL。父分页的额外总数查询、业务方法或钩子自己执行的 SQL 另计；空父列表不执行关联 SQL。
 
-预加载不支持配置中的 LIMIT、GROUP BY、HAVING、DISTINCT、UNION、子查询 FROM、行锁或总数统计；这些形状会明确报错，不能把全部父对象共用的 LIMIT 当作每个父对象的限制。父列表本身可以分页。`all()` 预加载当前列表，`chunk()` / `chunkById()` 只预加载当前批次，在逐条业务回调前完成。
+预加载按声明和配置构建批量查询，不再额外解析生成的 SQL 或借用游标分页方法审查查询形状。配置中的 LIMIT 作用于整条批量查询，不会自动转换为每个父对象的限制；复杂分页、分组或关联查询由业务显式构造 QueryBuilder 并组装结果。父列表本身可以分页。`all()` 预加载当前列表，`chunk()` / `chunkById()` 只预加载当前批次，在逐条业务回调前完成。
 
 预加载声明只作用于本次查询，执行后会被消费；查询模板或实体克隆会保留尚未消费的声明，并独立复制查询配置。实体缓存按连接、父键、实际 SQL、参数和返回模式匹配，更改条件、父键、目标表或实体/数组模式不会错误命中旧结果。`clearRelationCache()` 同时清除预加载结果和普通关联缓存，之后 getter 恢复查询；数组附加值已经是普通数组，不受该方法影响。`cacheResult: false` 只关闭按需查询缓存，不会禁用显式预加载的结果。缓存不会自动感知外部写入或事务结果，长生命周期实体应按需清理。
 
@@ -2168,7 +2168,7 @@ SELECT * FROM users WHERE (status = 0) AND id > 4 ORDER BY id ASC LIMIT 2;
 
 固定关系且每种关系不超过 250 个唯一父键时，通常从“1 条父查询 + 每个父对象的关联查询”变成“1 条父查询 + 每种关系 1 条批查询”。大列表会分批，动态条件不同的父对象按计划分组；不要把它理解为任何场景都只发一条关联 SQL。`chunk()` 和 `chunkById()` 会针对每个当前批次分别预加载。
 
-父关联键必须被选中；实体模式不能隐藏该键，数组模式可以隐藏，但启用预加载后会临时构造父模型并应用显式配置。配置中的每父 LIMIT、分组和总数等形状不受支持，详见批量预加载章节。需要最新关联值时调用实体的 `clearRelationCache()`。
+父关联键必须被选中；实体模式不能隐藏该键，数组模式可以隐藏，但启用预加载后会临时构造父模型并应用显式配置。关系内的复杂分页、分组和统计由业务显式查询和组装，详见批量预加载章节。需要最新关联值时调用实体的 `clearRelationCache()`。
 
 ### 原始写入为什么没有执行钩子/转换？
 

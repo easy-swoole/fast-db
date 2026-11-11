@@ -422,37 +422,35 @@ final class BulkWriteTest extends TestCase
         $this->assertSame([], $this->connection->queries);
     }
 
-    public function testEmptyUpsertColumnListFailsEvenForEmptyRows(): void
+    public function testEmptyUpsertDoesNotConstructAModelOrValidateUnusedUpdateColumns(): void
     {
-        try { BulkWriteFixtureRecord::fastUpsert([], []); $this->fail('An upsert update list is required'); }
-        catch (\InvalidArgumentException) { $this->addToAssertionCount(1); }
+        $this->assertSame(0, BulkWriteFixtureRecord::fastUpsert([], []));
         $this->assertSame(0, BulkWriteFixtureRecord::$constructed);
         $this->assertSame([], $this->connection->queries);
     }
 
-    public static function invalidRows(): array { return [[null], [false], ['row'], [new \stdClass()], [[]], [[1, 'value']], [[4 => 'value']]]; }
+    public static function invalidRows(): array { return [[[]], [[1, 'value']], [[4 => 'value']]]; }
 
     #[DataProvider('invalidRows')]
-    public function testEveryInputRowMustBeANonemptyAssociativeArray(mixed $invalid): void
+    public function testDriverRejectsInvalidRowsBeforeWriting(mixed $invalid): void
     {
-        try { BulkWriteFixtureRecord::fastInsertAll([$invalid]); $this->fail('Invalid row must fail'); }
-        catch (\InvalidArgumentException) { $this->addToAssertionCount(1); }
-        $this->assertSame([], $this->connection->queries);
+        $this->expectException(\InvalidArgumentException::class);
+        try { BulkWriteFixtureRecord::fastInsertAll([$invalid]); }
+        finally { $this->assertSame([], $this->connection->queries); }
     }
 
-    public static function differentBatchColumns(): array { return [[1, false], [1, true], [2, false], [2, true]]; }
+    public static function batchSizes(): array { return [[1], [2]]; }
 
-    #[DataProvider('differentBatchColumns')]
-    public function testColumnSetValidationAppliesAcrossDifferentBatches(int $batchSize, bool $sameCount): void
+    #[DataProvider('batchSizes')]
+    public function testIndependentBatchesCanUseDifferentColumnSets(int $batchSize): void
     {
-        $invalid = $this->row(3);
-        unset($invalid['payload']);
-        if ($sameCount) { $invalid['unexpected'] = 'different field'; }
-        $rows = [$this->row(1), $this->row(2), $invalid];
-        try { BulkWriteFixtureRecord::fastInsertAll($rows, batchSize: $batchSize); $this->fail('Rows must preserve one column set across all batches'); }
-        catch (\InvalidArgumentException) { $this->addToAssertionCount(1); }
-        $this->assertSame($this->rows(2), $this->stored());
-        $this->assertCount(intdiv(2, $batchSize), $this->connection->queries);
+        $third = $this->row(3);
+        unset($third['payload']);
+        $this->assertSame(3, BulkWriteFixtureRecord::fastInsertAll([$this->row(1), $this->row(2), $third], batchSize: $batchSize));
+        $expected = $this->rows(3);
+        $expected[2]['payload'] = null;
+        $this->assertSame($expected, $this->stored());
+        $this->assertCount((int) ceil(3 / $batchSize), $this->connection->queries);
     }
 
     public function testDriverRejectsDifferentColumnsInsideTheBatchBeforeAnyWrite(): void

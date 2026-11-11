@@ -20,6 +20,7 @@ use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\FastDb\Utility\ReflectionCache;
 use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\Mysqli\QueryBuilder\SelectPlanner;
+use EasySwoole\Mysqli\QueryBuilder\TableReference;
 
 abstract class AbstractEntity implements \JsonSerializable
 {
@@ -127,7 +128,6 @@ abstract class AbstractEntity implements \JsonSerializable
             $rows = $ret->getResult();
             $list = $this->hydrateRows($rows, $selection, $returnAsArray, $hideFields);
             if ($relations !== []) {
-                if (!is_array($rows)) { throw new RuntimeError('Preloaded parent results must be arrays'); }
                 $list = (new RelationPreloader())->load($this, $list, $rows, $relations, $returnAsArray,
                     $connectionName, $hideFields, fn (QueryBuilder $builder) => static::callQuery($builder, $this->onQuery));
             }
@@ -180,10 +180,15 @@ abstract class AbstractEntity implements \JsonSerializable
                 throw new RuntimeError('chunkById requires a declared stable unique field or a primary key');
             }
             $template = clone $this->queryLimit();
+            $cursorColumn = TableReference::column($column);
             $lastId = null;
             $delivered = 0;
             while (true) {
-                $selection = $template->forPageAfterId($column, $lastId, $chunkSize);
+                $selection = clone $template;
+                // 原条件先成组，避免 OR 绕过本页的游标边界。
+                $builder = $selection->__getQueryBuilder()->groupExistingWhere();
+                if ($lastId !== null) { $builder->where($cursorColumn, $lastId, '>'); }
+                $builder->reorder()->orderByRaw($cursorColumn . ' ASC')->limit($chunkSize);
                 $this->queryBuilder = $selection;
                 $fields = $selection->getFields();
                 $returnAsArray = $fields['returnAsArray'] ?? false;
@@ -194,21 +199,15 @@ abstract class AbstractEntity implements \JsonSerializable
                 $nextId = null;
                 // 公开查询回调可改写输出；游标和结束条件始终取自本次 SQL 的原始页。
                 $result = static::callQuery($query, $this->onQuery,
-                    static function (QueryResult $completed, ?Connection $connection) use ($column, $lastId, $relations, &$connectionName, &$rowCount, &$nextId): void {
+                    static function (QueryResult $completed, ?Connection $connection) use ($column, $relations, &$connectionName, &$rowCount, &$nextId): void {
                         if ($relations !== []) { $connectionName = $connection?->connectionName ?? $completed->getConnectionName(); }
                         $rows = $completed->getResult();
-                        if (!is_array($rows)) {
-                            throw new \UnexpectedValueException('Chunk queries must return result rows');
-                        }
                         $rowCount = count($rows);
-                        if ($rowCount > 0) { $nextId = self::chunkCursor($rows, $column, $lastId); }
+                        if ($rowCount > 0) { $nextId = $rows[array_key_last($rows)][$column]; }
                     });
                 if ($rowCount === 0) { return $delivered; }
                 $hideFields = $selection->getHideFields() ?: [];
                 $rows = $result->getResult();
-                if (!is_array($rows)) {
-                    throw new \UnexpectedValueException('Chunk queries must return result rows');
-                }
                 $list = $this->hydrateRows($rows, $selection, $returnAsArray, $hideFields);
                 if ($relations !== []) {
                     $list = (new RelationPreloader())->load($this, $list, $rows, $relations, $returnAsArray,
@@ -657,32 +656,12 @@ abstract class AbstractEntity implements \JsonSerializable
     /** 使用预取的总数快照，同时保留实体级查询回调对总数查询的通知。 */
     private function readTotal(QueryResult $result): ?int
     {
-        $count = FastDb::getInstance()->getTotalResult($result);
-        if ($count === null) {
-            $count = static::callQuery('SELECT FOUND_ROWS() as count', $this->onQuery);
-        } elseif (is_callable($this->onQuery)) {
+        $count = $result->getTotalResult();
+        if ($count !== null && $this->onQuery !== null) {
             ($this->onQuery)($count);
         }
-        $value = $count->getResultOne()['count'] ?? null;
+        $value = $count?->getResultOne()['count'] ?? null;
         return $value === null ? null : (int) $value;
-    }
-
-    /** 校验整页后才交付业务回调，拒绝缺失、非标量及未推进的游标。 */
-    private static function chunkCursor(array $rows, string $column, int|string|null $previous): int|string
-    {
-        foreach ($rows as $row) {
-            if (!is_array($row) || !array_key_exists($column, $row)
-                || (!is_int($row[$column]) && !is_string($row[$column]))) {
-                throw new \UnexpectedValueException('The chunk field must be selected under its original name and contain a non-null integer or string');
-            }
-            $current = $row[$column];
-            if ($previous !== null && ((string) $current === (string) $previous
-                || (is_int($current) && is_int($previous) && $current <= $previous))) {
-                throw new \UnexpectedValueException('The chunk field did not advance; use a stable unique field');
-            }
-            $previous = $current;
-        }
-        return $previous;
     }
 
     private function aggregate(string $aggregate, string|array $cols, string|null $group = null, bool $force = false): int|array|float
@@ -802,8 +781,7 @@ abstract class AbstractEntity implements \JsonSerializable
     {
         if ($relate->returnAsArray) { $query->returnAsArray(); }
         if ($relate->configure !== null) {
-            $method = ReflectionCache::getInstance()->relationConfigurator(static::class, $relate->configure);
-            $this->{$method}($query->__getQueryBuilder());
+            $this->{$relate->configure}($query->__getQueryBuilder());
         }
     }
 
