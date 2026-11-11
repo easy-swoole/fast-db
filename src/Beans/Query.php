@@ -68,14 +68,8 @@ class Query
 
     function returnAsArray():Query
     {
-        if(!is_array($this->selection->fields)){
-            $this->selection->fields = [
-                'returnAsArray'=>true,
-                'fields'=>null
-            ];
-        }else{
-            $this->selection->fields['returnAsArray'] = true;
-        }
+        $this->selection->fields ??= ['fields'=>null];
+        $this->selection->fields['returnAsArray'] = true;
         return $this;
     }
 

@@ -7,6 +7,7 @@ namespace EasySwoole\FastDb\Tests;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\AbstractInterface\ConvertList;
 use EasySwoole\FastDb\Attributes\Property;
+use EasySwoole\FastDb\Beans\Query;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
@@ -103,6 +104,19 @@ final class ChunkByIdTest extends TestCase
         }
         $this->assertSame([], $this->connection->rawQueries);
         $this->assertClean($owner);
+    }
+
+    public function testOwnerChangesDoNotReapplyQueryLimitWhileAdvancingTheTemplate(): void
+    {
+        $this->seed(5);
+        $owner = new KeysetScopedRecord(['status'=>0]);
+        $seen = [];
+        $this->assertSame(5, $owner->chunkById(static function (KeysetChunkRecord $row) use ($owner, &$seen): void {
+            $seen[] = $row->id;
+            $owner->status = 1;
+        },2));
+        $this->assertSame([1,2,3,4,5], $seen);
+        $this->assertCount(3, $this->pages());
     }
 
     public function testDeletingProcessedRowsDoesNotSkipIds(): void
@@ -407,4 +421,9 @@ class KeysetChunkSqliteConnection extends Connection
         $this->rawQueries[] = $query;
         throw new \LogicException('Unexpected raw SQL while traversing keyset pages: ' . $query);
     }
+}
+
+class KeysetScopedRecord extends KeysetChunkRecord
+{
+    public function queryLimit(): Query { return parent::queryLimit()->where('status',$this->status ?? 0); }
 }

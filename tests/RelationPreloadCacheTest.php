@@ -169,15 +169,21 @@ final class RelationPreloadCacheTest extends TestCase
     }
     private function load(RelationLoader $loader, PreloadCacheParent $parent, Relate $relation, string $kind, ?string $table = null): mixed
     {
-        return $loader->$kind($parent, $relation, $table,
-            function (QueryBuilder $query) use ($parent): QueryResult {
-                $this->queries++;
-                $result = new QueryResult(microtime(true));
-                $result->setResult([['id' => 99, 'parent_id' => $parent->id, 'label' => 'database']]);
-                return $result;
-            },
-            function () use ($parent): void { $this->resets++; (new \ReflectionProperty(AbstractEntity::class, 'queryBuilder'))->setValue($parent, null); },
-            static fn () => null);
+        $reset = static function () use ($parent): void {
+            (new \ReflectionProperty(AbstractEntity::class, 'queryBuilder'))->setValue($parent, null);
+        };
+        try {
+            return $loader->load($parent, $relation, $table, $kind,
+                function (QueryBuilder $query) use ($parent): QueryResult {
+                    $this->queries++;
+                    $result = new QueryResult(microtime(true));
+                    $result->setResult([['id' => 99, 'parent_id' => $parent->id, 'label' => 'database']]);
+                    return $result;
+                }, $reset, static fn () => null);
+        } finally {
+            $this->resets++;
+            $reset();
+        }
     }
 }
 

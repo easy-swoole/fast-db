@@ -9,7 +9,7 @@ use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\Mysqli\QueryBuilder;
 
-/** 仅保存关联结果缓存，不持有所属实体或执行回调，避免形成额外强引用环。 */
+/** 负责按需关联的查询组装、缓存和结果转换，不持有父实体或执行回调。 */
 final class RelationLoader
 {
     private array $cache = [];
@@ -23,39 +23,27 @@ final class RelationLoader
         $this->preloaded[$this->fingerprint($relate, $lookup, $kind, $returnAsArray, $connectionName)] = $data;
     }
 
-    public function one(AbstractEntity $entity, Relate $relate, ?string $tableName, callable $execute, callable $reset, callable $readTotal): null|array|AbstractEntity
-    {
-        return $this->load($entity, $relate, $tableName, 'one', $execute, $reset, $readTotal);
-    }
-
-    public function many(AbstractEntity $entity, Relate $relate, ?string $tableName, callable $execute, callable $reset, callable $readTotal): ListResult
-    {
-        return $this->load($entity, $relate, $tableName, 'many', $execute, $reset, $readTotal);
-    }
-
     /** 两种关联共用构建、缓存查找和写回流程，结果组装分别处理。 */
-    private function load(AbstractEntity $entity, Relate $relate, ?string $tableName, string $kind,
-        callable $execute, callable $reset, callable $readTotal): mixed
+    public function load(AbstractEntity $entity, Relate $relate, ?string $tableName, string $kind,
+        callable $execute, callable $beforeOneHydration, callable $readTotal): mixed
     {
         [$target, $query, $returnAsArray, $key] = $this->prepare($entity, $relate, $tableName, $kind);
         if ($key !== null && array_key_exists($key, $this->preloaded)) {
-            $reset();
             return $this->preloaded[$key];
         }
-        if ($relate->cacheResult && $key !== null && array_key_exists($key, $this->cache)) {
-            $reset();
+        if ($relate->cacheResult && array_key_exists($key, $this->cache)) {
             return $this->cache[$key];
         }
 
         $result = $execute($query);
         $rows = $result->getResult();
         if ($kind === 'one') {
-            // 单条关联沿用先清理查询、再执行字段赋值转换的顺序。
-            $reset();
             if (empty($rows)) { $data = null; }
             elseif (count($rows) > 1) { throw new RuntimeError('more than one record hit is no allow in relateOne method'); }
             elseif ($returnAsArray) { $data = $rows[0]; }
             else {
+                // 单条实体赋值前结束父查询配置，字段转换可重入父模型；最终清理由实体入口负责。
+                $beforeOneHydration();
                 $target->setData($rows[0], true);
                 $data = $target;
             }
@@ -64,11 +52,10 @@ final class RelationLoader
             foreach ($rows as $row) {
                 $items[] = $returnAsArray ? $row : new $relate->targetEntity($row);
             }
-            $total = in_array('SQL_CALC_FOUND_ROWS', $result->getQueryBuilder()?->getLastQueryOptions() ?? [], true) ? $readTotal($result) : null;
-            $reset();
+            $total = $readTotal($result);
             $data = new ListResult($items, $total);
         }
-        if ($relate->cacheResult && $key !== null) { $this->cache[$key] = $data; }
+        if ($relate->cacheResult) { $this->cache[$key] = $data; }
         return $data;
     }
 

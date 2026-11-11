@@ -60,6 +60,67 @@ final class TransactionTest extends TestCase
         return (int) $this->observer->query("SELECT value FROM `{$this->table}` WHERE id = 1")->fetch_assoc()['value'];
     }
 
+    public function testMysqlConvertedAutoKeyIsAvailableForObserverUpdatesAndDeletion(): void
+    {
+        $this->observer->query("ALTER TABLE `{$this->table}` MODIFY id INT NOT NULL AUTO_INCREMENT");
+        $entity = new ConvertedKeyMysqlEntity(['value'=>7]);
+        $this->db->setOnQuery(function (QueryResult $result) use ($entity): void {
+            if (!str_starts_with($result->getQueryBuilder()?->getLastPrepareQuery() ?? '', 'INSERT')) { return; }
+            $this->assertInstanceOf(ConvertedKey::class, $entity->id);
+            $this->assertSame('2', $entity->id->value);
+            $entity->value = 8;
+            $this->assertTrue($entity->update());
+        });
+        $this->assertTrue($entity->insert());
+        $this->assertSame(8, ConvertedKeyMysqlEntity::findRecord('2')->value);
+        $entity->id = new ConvertedKey('2');
+        $this->assertTrue($entity->delete());
+        $this->assertNull(ConvertedKeyMysqlEntity::findRecord('2'));
+        $this->assertSame(0, $this->value());
+    }
+
+    public static function scopedRelationModes(): array { return [[false],[true]]; }
+
+    #[DataProvider('scopedRelationModes')]
+    public function testMysqlPreloadUsesQueryLimitScopeAndKeepsCacheHits(bool $arrays): void
+    {
+        $this->observer->query("ALTER TABLE `{$this->table}` ADD COLUMN active INT NOT NULL DEFAULT 1");
+        $this->observer->query("INSERT INTO `{$this->table}` VALUES (2,1,1),(3,1,1),(4,2,1),(5,1,0)");
+        $owner = new ScopedMysqlEntity();
+        $owner->queryLimit()->where('id',2,'<=')->orderBy('id','ASC')->withRelations('children');
+        if ($arrays) { $owner->queryLimit()->returnAsArray(); }
+        $queries = [];
+        $this->db->setOnQuery(static function (QueryResult $result) use (&$queries): void { $queries[] = $result; });
+        $parents = $owner->all()->list();
+        $this->assertCount(2, $parents);
+        foreach ($parents as $index => $parent) {
+            $expected = $index === 0 ? [2,3] : [4];
+            if ($arrays) { $this->assertSame($expected, array_column($parent['children'],'id')); }
+            else {
+                for ($read = 0; $read < 2; $read++) {
+                    $this->assertSame($expected, array_map(static fn($child) => $child->id, $parent->children()->list()));
+                }
+            }
+        }
+        $this->assertCount(2, $queries);
+    }
+
+    public function testMysqlChunkContinuesAfterTheObserverRemovesAFullPage(): void
+    {
+        $this->observer->query("INSERT INTO `{$this->table}` VALUES (2,1),(3,2),(4,3),(5,4)");
+        $entity = new TransactionEntity();
+        $entity->queryLimit()->orderBy('id','ASC');
+        $pages = 0;
+        $entity->setOnQuery(static function (QueryResult $result) use (&$pages): void {
+            $pages++;
+            if ($pages === 1) { $result->setResult([]); }
+        });
+        $seen = [];
+        $entity->chunk(static function (TransactionEntity $row) use (&$seen): void { $seen[] = $row->id; },2);
+        $this->assertSame([3,4,5], $seen);
+        $this->assertSame(3, $pages);
+    }
+
     public static function cursorTotalModes(): array { return [[false], [true]]; }
 
     #[DataProvider('cursorTotalModes')]
@@ -72,9 +133,12 @@ final class TransactionTest extends TestCase
             $sql = $result->getQueryBuilder()?->getLastPrepareQuery();
             if ($sql !== null && str_starts_with($sql, 'SELECT')) { $pages[] = $result; }
         });
-        $seen = [];
-        $this->db->transaction(function () use ($withTotal, &$seen): void {
+        $seen = $entityEvents = [];
+        $this->db->transaction(function () use ($withTotal, &$seen, &$entityEvents): void {
             $entity = new CursorMysqlEntity();
+            $entity->setOnQuery(static function (QueryResult $result) use (&$entityEvents): void {
+                $entityEvents[] = $result->getRawSql();
+            });
             $entity->queryLimit()->where('value',0)->orWhere('id',4,'>=')->orderBy('id','DESC')
                 ->page(99, $withTotal, 1)->selectForUpdate()->returnAsArray()->hideFields('order');
             $this->assertSame(3, $entity->chunkById(function (array $row) use (&$seen): void {
@@ -85,6 +149,7 @@ final class TransactionTest extends TestCase
         });
         $this->assertSame([1,4,5], $seen);
         $this->assertCount(2, $pages);
+        $this->assertSame($withTotal ? [null,'SELECT FOUND_ROWS() as count',null,'SELECT FOUND_ROWS() as count'] : [null,null], $entityEvents);
         foreach ($pages as $page) {
             $sql = $page->getQueryBuilder()->getLastPrepareQuery();
             $this->assertStringContainsString('ORDER BY `order` ASC', $sql);
@@ -1101,4 +1166,24 @@ class EncodingMysqlList extends ConvertList
 class CursorMysqlEntity extends DeclaredMysqlEntity
 {
     #[Property] public int $order;
+}
+
+class ScopedMysqlEntity extends AbstractEntity
+{
+    private ?\WeakReference $scopedQuery = null;
+    #[Property(isPrimaryKey:true)] public int $id;
+    #[Property] public int $value;
+    public function tableName(): string { return TransactionEntity::$table; }
+    public function queryLimit(): \EasySwoole\FastDb\Beans\Query
+    {
+        $query = parent::queryLimit();
+        if ($this->scopedQuery?->get() !== $query) {
+            $this->scopedQuery = \WeakReference::create($query);
+            $query->where('active',1);
+        }
+        return $query;
+    }
+    #[Relate(self::class,'value',type:'many',configure:'configureChildren')]
+    public function children() { return $this->relateMany(); }
+    protected function configureChildren(\EasySwoole\Mysqli\QueryBuilder $query): void { $query->orderBy('id','ASC'); }
 }

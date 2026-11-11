@@ -10,6 +10,7 @@ use EasySwoole\FastDb\AbstractInterface\ConvertList;
 use EasySwoole\FastDb\Attributes\Hook\Call;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\FastDb;
+use EasySwoole\FastDb\Tests\Model\ConvertedKey;
 use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\Mysqli\Config;
@@ -56,6 +57,43 @@ final class InsertStateTest extends TestCase
     {
         if ($mode === 'global') { $this->db->setOnQuery($callback); }
         else { $entity->setOnQuery($callback); }
+    }
+
+    #[DataProvider('observerModes')]
+    public function testConvertedAutoKeyIsReadyBeforeObserversAndSupportsUpdateAndDelete(string $mode): void
+    {
+        $entity = new ConvertedInsertStateRecord(['name'=>'before']);
+        $observer = function (QueryResult $result) use ($entity): void {
+            if (!str_starts_with($result->getQueryBuilder()?->getLastPrepareQuery() ?? '', 'INSERT')) { return; }
+            $this->assertInstanceOf(ConvertedKey::class, $entity->id);
+            $this->assertSame('1', $entity->id->value);
+            $entity->name = 'nested';
+            $this->assertTrue($entity->update());
+        };
+        if ($mode === 'global') { $this->db->setOnQuery($observer); }
+        else { $entity->setOnQuery($observer); }
+        $this->assertTrue($entity->insert());
+        $this->assertSame('nested', $this->client->row()['name']);
+        $this->assertTrue($entity->update());
+        $this->assertCount(2, $this->client->queries);
+        $entity->id = new ConvertedKey('1');
+        $entity->name = 'after';
+        $this->assertTrue($entity->update());
+        $this->assertSame('after', $this->client->row()['name']);
+        $this->assertTrue($entity->delete());
+        $this->assertSame(0, (int)$this->client->database->query('SELECT COUNT(*) FROM insert_state')->fetchColumn());
+        $this->assertCount(4, $this->client->queries);
+    }
+
+    public function testGeneratedPrimaryKeyUsesItsAssignmentCallbackOnce(): void
+    {
+        AssignedInsertStateRecord::$assigns = 0;
+        $entity = new AssignedInsertStateRecord(['name'=>'assigned']);
+        $this->assertTrue($entity->insert());
+        $this->assertSame(1, $entity->id);
+        $this->assertSame(1, AssignedInsertStateRecord::$assigns);
+        $this->assertTrue($entity->update());
+        $this->assertCount(1, $this->client->queries);
     }
 
     #[DataProvider('observerModes')]
@@ -381,4 +419,19 @@ class InsertStateConnection extends Connection
         return $statement->columnCount() > 0 ? $statement->fetchAll(\PDO::FETCH_ASSOC) : true;
     }
     public function row(int $id = 1): array { return $this->database->query('SELECT * FROM insert_state WHERE id=' . $id)->fetch(\PDO::FETCH_ASSOC); }
+}
+
+class ConvertedInsertStateRecord extends AbstractEntity
+{
+    #[Property(isPrimaryKey:true,convertObject:ConvertedKey::class)] public ?ConvertedKey $id;
+    #[Property] public ?string $name;
+    public function tableName(): string { return 'insert_state'; }
+}
+class AssignedInsertStateRecord extends AbstractEntity
+{
+    public static int $assigns = 0;
+    #[Property(isPrimaryKey:true,assignCall:new Call([self::class,'assignId']))] public int $id;
+    #[Property] public ?string $name;
+    public static function assignId(int|string $value): int { self::$assigns++; return (int)$value; }
+    public function tableName(): string { return 'insert_state'; }
 }

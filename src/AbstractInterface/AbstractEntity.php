@@ -44,7 +44,7 @@ abstract class AbstractEntity implements \JsonSerializable
         return $this;
     }
 
-    /** @internal 将已冻结查询形状的预加载结果注入当前实体，不修改字段比较基准。 */
+    /** @internal 将按查询形状匹配的预加载结果注入当前实体，不修改字段比较基准。 */
     public function __setRelationData(RelationPlan $plan, QueryBuilder $lookup, string $connectionName, mixed $data): static
     {
         $this->relationLoader ??= new RelationLoader();
@@ -96,46 +96,8 @@ abstract class AbstractEntity implements \JsonSerializable
 
     function all( bool $selectForUpdate = false ):ListResult
     {
-        try {
-            // 保留本次 Query 的身份；回调仍可修改其配置，重入查询的 reset 不应丢失它。
-            $selection = $this->queryLimit();
-            $query = $selection->__getQueryBuilder();
-
-            $fields = null;
-            $returnAsArray = false;
-            if(!empty($selection->getFields())){
-                $fields = $selection->getFields()['fields'];
-                $returnAsArray = $selection->getFields()['returnAsArray'];
-            }
-
-            if($selectForUpdate){
-                $query->selectForUpdate();
-            }
-
-            $query->get($this->tableName(),null,$fields);
-            $relations = $selection->getRelations();
-            $connectionName = null;
-            $completed = $relations === [] ? null : static function (QueryResult $result, ?Connection $connection) use (&$connectionName): void {
-                $connectionName = $connection?->connectionName ?? $result->getConnectionName();
-            };
-            $ret = static::callQuery($query,$this->onQuery,$completed);
-            $total = null;
-            if(in_array('SQL_CALC_FOUND_ROWS', $ret->getQueryBuilder()?->getLastQueryOptions() ?? [], true)){
-                // 依据本次查询快照读取总数，避免回调复用原构建器改变判断。
-                $total = $this->readTotal($ret);
-            }
-            $hideFields = $selection->getHideFields() ?: [];
-            $rows = $ret->getResult();
-            $list = $this->hydrateRows($rows, $selection, $returnAsArray, $hideFields);
-            if ($relations !== []) {
-                $list = (new RelationPreloader())->load($this, $list, $rows, $relations, $returnAsArray,
-                    $connectionName, $hideFields, fn (QueryBuilder $builder) => static::callQuery($builder, $this->onQuery));
-            }
-            return new ListResult($list,$total);
-        } finally {
-            // 成功、失败或提前返回均消费本次查询配置，实体数据及比较基准不受影响。
-            $this->reset();
-        }
+        try { return $this->selectRows($this->queryLimit(), $selectForUpdate); }
+        finally { $this->reset(); }
     }
 
     function chunk(callable $func,int $chunkSize = 10)
@@ -145,13 +107,18 @@ abstract class AbstractEntity implements \JsonSerializable
             while (true){
                 // 仅按本页数量判断是否结束，不为每一页额外查询总数。
                 $this->queryLimit()->page($page,false,$chunkSize);
-                // all() 会清理查询状态，因此先保存条件供下一页继续使用。
+                // 列表查询会清理状态，因此先保存条件供下一页继续使用。
                 $builder = clone $this->queryBuilder;
-                $list = $this->all()->list();
+                $rowCount = 0;
+                $list = $this->selectRows($this->queryLimit(), false,
+                    static function (QueryResult $result) use (&$rowCount): void {
+                        $rowCount = count($result->getResult());
+                    })->list();
+                $this->reset();
                 foreach ($list as $item){
                     if (call_user_func($func,$item) === false) { return; }
                 }
-                if(count($list) < $chunkSize){
+                if($rowCount < $chunkSize){
                     break;
                 }else{
                     $page++;
@@ -190,29 +157,16 @@ abstract class AbstractEntity implements \JsonSerializable
                 if ($lastId !== null) { $builder->where($cursorColumn, $lastId, '>'); }
                 $builder->reorder()->orderByRaw($cursorColumn . ' ASC')->limit($chunkSize);
                 $this->queryBuilder = $selection;
-                $fields = $selection->getFields();
-                $returnAsArray = $fields['returnAsArray'] ?? false;
-                $relations = $selection->getRelations();
-                $connectionName = null;
-                $query = $selection->__getQueryBuilder()->get($this->tableName(), null, $fields['fields'] ?? null);
                 $rowCount = 0;
                 $nextId = null;
-                // 公开查询回调可改写输出；游标和结束条件始终取自本次 SQL 的原始页。
-                $result = static::callQuery($query, $this->onQuery,
-                    static function (QueryResult $completed, ?Connection $connection) use ($column, $relations, &$connectionName, &$rowCount, &$nextId): void {
-                        if ($relations !== []) { $connectionName = $connection?->connectionName ?? $completed->getConnectionName(); }
-                        $rows = $completed->getResult();
+                // 翻页依据原始页，公开回调只能改变交付的数据。
+                $list = $this->selectRows($selection, false,
+                    static function (QueryResult $result) use ($column, &$rowCount, &$nextId): void {
+                        $rows = $result->getResult();
                         $rowCount = count($rows);
                         if ($rowCount > 0) { $nextId = $rows[array_key_last($rows)][$column]; }
-                    });
+                    })->list();
                 if ($rowCount === 0) { return $delivered; }
-                $hideFields = $selection->getHideFields() ?: [];
-                $rows = $result->getResult();
-                $list = $this->hydrateRows($rows, $selection, $returnAsArray, $hideFields);
-                if ($relations !== []) {
-                    $list = (new RelationPreloader())->load($this, $list, $rows, $relations, $returnAsArray,
-                        $connectionName, $hideFields, fn (QueryBuilder $builder) => static::callQuery($builder, $this->onQuery));
-                }
                 $this->reset();
                 foreach ($list as $item) {
                     $delivered++;
@@ -220,7 +174,7 @@ abstract class AbstractEntity implements \JsonSerializable
                 }
                 if ($rowCount < $chunkSize) { return $delivered; }
                 $lastId = $nextId;
-                unset($list, $rows, $item, $result);
+                unset($list, $item);
             }
         } finally {
             $this->reset();
@@ -242,19 +196,15 @@ abstract class AbstractEntity implements \JsonSerializable
     public function count(string|null $field = '*', string|null $group = null): int|array
     {
         try {
-            $fields = null;
-            if (!empty($this->queryLimit()->getFields())) {
-                $fields = $this->queryLimit()->getFields()['fields'];
-            }
+            $fields = $this->queryLimit()->getFields()['fields'] ?? null;
             $query = $this->queryLimit()->__getQueryBuilder();
-            $hasFiled = false;
+            $hasFields = !empty($fields);
 
             if ($group) {
                 $query->groupBy($group);
             }
 
-            if (!empty($fields)) {
-                $hasFiled = true;
+            if ($hasFields) {
                 $temp = [];
                 foreach ($fields as $fieldName){
                     $temp[] = SelectPlanner::aggregateExpression('COUNT', $fieldName, $fieldName, false);
@@ -273,13 +223,13 @@ abstract class AbstractEntity implements \JsonSerializable
             }
             $ret = static::callQuery($query,$this->onQuery)->getResult();
             if (empty($ret)) {
-                if ($hasFiled) {
+                if ($hasFields) {
                     return [];
                 }
                 return 0;
             }
             $ret = $ret[0];
-            if ($hasFiled) {
+            if ($hasFields) {
                 return $ret;
             }
 
@@ -385,9 +335,8 @@ abstract class AbstractEntity implements \JsonSerializable
             $query->update($this->tableName(),$data);
             // 按 SQL 成功顺序接受基准，再通知观察回调；重入保存可据此写回原值。
             $ret = static::callQuery($query,$this->onQuery,
-                function (QueryResult $result) use ($data, $compareValues): void {
-                    if ($result->getException() !== null || !($result->getAffectedRows() > 0)) { return; }
-                    $this->entityState->accept(array_intersect_key($compareValues, $data));
+                function (QueryResult $result) use ($compareValues): void {
+                    if ($result->getAffectedRows() > 0) { $this->entityState->accept($compareValues); }
                 });
             return $ret->getAffectedRows() > 0;
         } finally {
@@ -451,13 +400,12 @@ abstract class AbstractEntity implements \JsonSerializable
             $isSuccess = false;
             $primaryKey = $entityRef->getPrimaryKey();
             static::callQuery($query, $this->onQuery,
-                function (QueryResult $result) use ($compareValues, $primaryKey, &$isSuccess): void {
-                    $isSuccess = $result->getException() === null
-                        && ($result->getResult() || $result->getAffectedRows() >= 1 || $result->getInsertId() >= 1);
+                function (QueryResult $result) use ($compareValues, $primaryKey, $entityRef, &$isSuccess): void {
+                    $isSuccess = $result->getResult() === true;
                     if (!$isSuccess) { return; }
                     if ($primaryKey !== null && $result->getInsertId() >= 1) {
-                        // 自增主键先回填并建立基准，公开回调可以立即使用当前实体继续更新。
-                        $this->{$primaryKey} = $result->getInsertId();
+                        // 自增主键按字段定义转换后回填，再建立基准，供公开回调继续更新。
+                        $this->{$primaryKey} = FieldCodec::assign($this, $entityRef->allProperties()[$primaryKey], $result->getInsertId());
                         $compareValues[$primaryKey] = FieldCodec::compare($this->{$primaryKey});
                     }
                     // 只接受本次成功写入字段，不重新赋值，也不覆盖稍后公开回调的修改。
@@ -533,18 +481,11 @@ abstract class AbstractEntity implements \JsonSerializable
 
     protected function callHook(Call $callback):mixed
     {
-        if(is_callable($callback->callback)){
-            $p = $callback->buildEntityHookRuntimeParams($this);
-            return call_user_func_array($callback->callback,$p);
-        }else if(is_string($callback->callback)){
-            if(method_exists($this,$callback->callback)){
-                $callback = $callback->callback;
-                return $this->$callback();
-            }else{
-                throw new RuntimeError("{$callback->callback} no a method of class ".static::class);
-            }
+        if (is_callable($callback->callback)) {
+            return ($callback->callback)(...$callback->buildEntityHookRuntimeParams($this));
         }
-        return null;
+        // 方法名钩子由 PHP 按当前实体作用域调用，调用错误直接传播。
+        return $this->{$callback->callback}();
     }
 
     /** @internal 直接读取关联声明并调用配置方法，不执行业务 getter。 */
@@ -554,7 +495,7 @@ abstract class AbstractEntity implements \JsonSerializable
         if ($relate->type === null) {
             throw new RuntimeError('Preloading requires an explicit relation type: ' . $method);
         }
-        $query = $this->queryBuilder === null ? new Query($this) : clone $this->queryBuilder;
+        $query = clone $this->queryLimit();
         $this->configureRelation($relate, $query);
         $target = new $relate->targetEntity();
         return new RelationPlan($relate->type, $relate, $target->tableName(), $query,
@@ -617,6 +558,36 @@ abstract class AbstractEntity implements \JsonSerializable
         }
     }
 
+    /** 列表与两种分块共用查询、总数通知和结果组装；查询状态由调用入口清理。 */
+    private function selectRows(Query $selection, bool $selectForUpdate = false, ?callable $onComplete = null): ListResult
+    {
+        $query = $selection->__getQueryBuilder();
+        $fields = $selection->getFields();
+        $returnAsArray = $fields['returnAsArray'] ?? false;
+        if ($selectForUpdate) { $query->selectForUpdate(); }
+        $query->get($this->tableName(), null, $fields['fields'] ?? null);
+        $relations = $selection->getRelations();
+        $connectionName = null;
+        $completed = $onComplete;
+        if ($relations !== []) {
+            // 在公开回调前记录实际查询连接，预加载沿用该连接。
+            $completed = static function (QueryResult $result, Connection $connection) use (&$connectionName, $onComplete): void {
+                $connectionName = $result->getConnectionName();
+                if ($onComplete !== null) { $onComplete($result, $connection); }
+            };
+        }
+        $result = static::callQuery($query, $this->onQuery, $completed);
+        $total = $this->readTotal($result);
+        $hideFields = $selection->getHideFields() ?: [];
+        $rows = $result->getResult();
+        $list = $this->hydrateRows($rows, $selection, $returnAsArray, $hideFields);
+        if ($relations !== []) {
+            $list = (new RelationPreloader())->load($this, $list, $rows, $relations, $returnAsArray,
+                $connectionName, $hideFields, fn (QueryBuilder $builder) => static::callQuery($builder, $this->onQuery));
+        }
+        return new ListResult($list, $total);
+    }
+
     /** 实体查询及游标分块共用字段隐藏、转换和输出配置传播。 */
     private function hydrateRows(mixed $rows, Query $selection, bool $returnAsArray, array $hideFields): array
     {
@@ -667,14 +638,8 @@ abstract class AbstractEntity implements \JsonSerializable
     private function aggregate(string $aggregate, string|array $cols, string|null $group = null, bool $force = false): int|array|float
     {
         try {
-            $multiFields = false;
-            if (is_string($cols)) {
-                $cols = [$cols];
-            }
-
-            if (count($cols) > 1) {
-                $multiFields = true;
-            }
+            $cols = is_array($cols) ? $cols : [$cols];
+            $multiFields = count($cols) > 1;
 
             // 复用驱动的字段引用和别名规则，支持限定列名及保留字字段。
             $fields = [];
@@ -759,7 +724,7 @@ abstract class AbstractEntity implements \JsonSerializable
         $this->queryBuilder = $preserveSelection ? $this->queryBuilder?->withoutSqlConditions() : null;
     }
 
-    private function primaryKeyCheck(string $op,bool $emptyCheck = true):string
+    private function primaryKeyCheck(string $op):string
     {
         $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
         $pk = $entityRef->getPrimaryKey();
@@ -767,9 +732,8 @@ abstract class AbstractEntity implements \JsonSerializable
             $msg = "can not {$op} entity without primary key set";
             throw new RuntimeError($msg);
         }
-        // 关联元数据解析只需要主键名称，可以关闭主键值检查。
         // 未赋值、null 和空字符串视为缺失；整数 0 和字符串 '0' 均为有效主键。
-        if($emptyCheck && (!isset($this->{$pk}) || $this->{$pk} === '')){
+        if(!isset($this->{$pk}) || $this->{$pk} === ''){
             $msg = "can not {$op} entity without primary key value";
             throw new RuntimeError($msg);
         }
@@ -793,7 +757,7 @@ abstract class AbstractEntity implements \JsonSerializable
                 throw new RuntimeError('Declared relation type does not match its getter');
             }
             $this->configureRelation($relate, $this->queryLimit());
-            return $this->relationLoader->$kind($this, $relate, $tableName,
+            return $this->relationLoader->load($this, $relate, $tableName, $kind,
                 fn ($query) => static::callQuery($query, $this->onQuery), fn () => $this->reset(), fn ($result) => $this->readTotal($result));
         } finally {
             $this->reset();
@@ -812,9 +776,10 @@ abstract class AbstractEntity implements \JsonSerializable
         $check = ReflectionCache::getInstance()->parseEntity($relate->targetEntity);
         // 未指定当前实体关联字段时，默认使用当前实体的主键。
         if(empty($relate->selfProperty)){
-            $relate->selfProperty = $this->primaryKeyCheck('relate',false);
+            $relate->selfProperty = ReflectionCache::getInstance()->parseEntity(static::class)->getPrimaryKey()
+                ?? throw new RuntimeError('can not relate entity without primary key set');
         }else{
-            if(!key_exists($relate->selfProperty,$this->entityState->baseline)){
+            if(!isset(ReflectionCache::getInstance()->parseEntity(static::class)->allProperties()[$relate->selfProperty])){
                 $msg = "{$relate->selfProperty} is not a define property in ".static::class;
                 throw new RuntimeError($msg);
             }
@@ -827,7 +792,7 @@ abstract class AbstractEntity implements \JsonSerializable
     }
 
     /** 统一执行模型查询，并在成功或异常时通知本次查询回调。 */
-    private static function callQuery(QueryBuilder|string $query,?callable $onQuery = null,?callable $onComplete = null,
+    private static function callQuery(QueryBuilder $query,?callable $onQuery = null,?callable $onComplete = null,
         ?string $connection = null):QueryResult
     {
         $db = FastDb::getInstance();
@@ -838,9 +803,7 @@ abstract class AbstractEntity implements \JsonSerializable
         };
         // 没有实体观察回调时，无需再次捕获执行器已经处理过的异常。
         if ($onQuery === null) {
-            return $query instanceof QueryBuilder
-                ? $db->query($query, null, $complete, $connection)
-                : $db->rawQuery($query, null, $complete, $connection);
+            return $db->query($query, null, $complete, $connection);
         }
 
         $startTick = hrtime(true);
@@ -848,9 +811,7 @@ abstract class AbstractEntity implements \JsonSerializable
         $connectionName = $connection ?? $db->selectConnection();
         $error = null;
         try {
-            $ret = $query instanceof QueryBuilder
-                ? $db->query($query, null, $complete, $connection)
-                : $db->rawQuery($query, null, $complete, $connection);
+            $ret = $db->query($query, null, $complete, $connection);
         } catch (\Throwable $failure) {
             $error = $failure;
         }
@@ -860,8 +821,7 @@ abstract class AbstractEntity implements \JsonSerializable
             $ret->setConnectionName($connectionName);
             $ret->finishTiming();
             $ret->setException($error);
-            if ($query instanceof QueryBuilder) { $ret->setQueryBuilder($query); }
-            else { $ret->setRawSql($query); }
+            $ret->setQueryBuilder($query);
         }
         try { $onQuery($ret); }
         catch (\Throwable $callbackError) {

@@ -7,8 +7,10 @@ namespace EasySwoole\FastDb\Tests;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\AbstractInterface\ConvertList;
 use EasySwoole\FastDb\Attributes\Property;
+use EasySwoole\FastDb\Attributes\Hook\Call;
 use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Exception\RuntimeError;
+use EasySwoole\FastDb\Beans\Query;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\QueryResult;
@@ -65,6 +67,61 @@ final class RelationPreloadTest extends TestCase
     private function childIds(PreloadFixtureParent $parent): array
     {
         return array_map(static fn(PreloadFixtureChild $child): int => $child->id, $parent->children()->list());
+    }
+
+    public static function scopedOutputModes(): array
+    {
+        return [[PreloadScopedParent::class,false], [PreloadScopedParent::class,true],
+            [PreloadInheritedScopedParent::class,false], [PreloadInheritedScopedParent::class,true]];
+    }
+
+    #[DataProvider('scopedOutputModes')]
+    public function testPreloadKeepsQueryLimitOverridesAndHitsBothRelationCaches(string $class, bool $arrays): void
+    {
+        foreach (['preload_parents','preload_children','preload_profiles'] as $table) {
+            $this->connection->database->exec('ALTER TABLE ' . $table . ' ADD COLUMN active INTEGER NOT NULL DEFAULT 1');
+        }
+        $this->connection->database->exec("INSERT INTO preload_children VALUES (99,1,'a','excluded','[]',0)");
+        $this->connection->database->exec("INSERT INTO preload_profiles VALUES (98,1,'excluded',0)");
+        $lazy = new $class(['id'=>1]);
+        $this->assertSame([11,12], array_map(static fn($child) => $child->id, $lazy->children()->list()));
+        $this->assertSame(21, $lazy->profile()->id);
+        $this->connection->queries = $this->events = [];
+
+        $owner = new $class();
+        $owner->queryLimit()->orderBy('id','ASC')->withRelations(['children','profile']);
+        if ($arrays) { $owner->queryLimit()->returnAsArray(); }
+        $parents = $owner->all()->list();
+        $this->assertCount(3, $parents);
+        $expectedChildren = [[11,12],[13],[]];
+        $expectedProfiles = [21,null,23];
+        foreach ($parents as $index => $parent) {
+            if ($arrays) {
+                $this->assertSame($expectedChildren[$index], array_column($parent['children'],'id'));
+                $this->assertSame($expectedProfiles[$index], $parent['profile']['id'] ?? null);
+            } else {
+                // 连续读取仍应命中预加载，不因默认条件丢失或 reset 再次查库。
+                for ($read = 0; $read < 2; $read++) {
+                    $this->assertSame($expectedChildren[$index], array_map(static fn($child) => $child->id, $parent->children()->list()));
+                    $this->assertSame($expectedProfiles[$index], $parent->profile()?->id);
+                }
+            }
+        }
+        $this->assertCount(3, $this->connection->queries);
+        $this->assertCount(3, $this->events);
+    }
+
+    public function testOneRelationClearsItsConditionsBeforeFieldConversionReentersTheParent(): void
+    {
+        $parent = new ReentrantProfileParent(['id'=>1]);
+        $parent->queryLimit()->where('name','profile-1');
+        ReentrantProfile::$parent = $parent;
+        ReentrantProfile::$parentCount = null;
+        try {
+            $this->assertSame(21, $parent->reentrantProfile()->id);
+            $this->assertSame(3, ReentrantProfile::$parentCount);
+            $this->assertCount(2, $this->connection->queries);
+        } finally { ReentrantProfile::$parent = null; }
     }
 
     public function testQueriesWithoutPreloadingDoNotExecuteRelationSql(): void
@@ -628,4 +685,39 @@ class PreloadFixtureConnection extends Connection
         $this->lastAffectRows = $statement->rowCount(); $this->lastInsertId = 0;
         return $statement->columnCount() > 0 ? $statement->fetchAll(\PDO::FETCH_ASSOC) : true;
     }
+}
+
+class PreloadScopedParent extends PreloadFixtureParent
+{
+    private ?\WeakReference $scopedQuery = null;
+    public function queryLimit(): Query
+    {
+        $query = parent::queryLimit();
+        if ($this->scopedQuery?->get() !== $query) {
+            $this->scopedQuery = \WeakReference::create($query);
+            $query->where('active',1);
+        }
+        return $query;
+    }
+}
+class PreloadInheritedScopedParent extends PreloadScopedParent {}
+
+class ReentrantProfileParent extends PreloadFixtureParent
+{
+    #[Relate(ReentrantProfile::class,'parent_id',type:'one')]
+    public function reentrantProfile() { return $this->relateOne(); }
+}
+class ReentrantProfile extends AbstractEntity
+{
+    public static ?PreloadFixtureParent $parent = null;
+    public static ?int $parentCount = null;
+    #[Property(isPrimaryKey:true)] public int $id;
+    #[Property] public int $parent_id;
+    #[Property(assignCall:new Call([self::class,'decodeName']))] public ?string $name;
+    public static function decodeName(?string $value): ?string
+    {
+        self::$parentCount = count(self::$parent->all());
+        return $value;
+    }
+    public function tableName(): string { return 'preload_profiles'; }
 }

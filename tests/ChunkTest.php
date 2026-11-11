@@ -8,6 +8,8 @@ use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
+use EasySwoole\FastDb\Mysql\QueryResult;
+use PHPUnit\Framework\Attributes\DataProvider;
 use EasySwoole\Mysqli\QueryBuilder;
 use PHPUnit\Framework\TestCase;
 
@@ -145,6 +147,67 @@ final class ChunkTest extends TestCase
         });
     }
 
+    public static function filteredPageModes(): array
+    {
+        $cases = [];
+        foreach (['global','entity'] as $mode) {
+            foreach ([0,1] as $keep) {
+                foreach ([false,true] as $arrays) { $cases[] = [$mode,$keep,$arrays]; }
+            }
+        }
+        return $cases;
+    }
+
+    #[DataProvider('filteredPageModes')]
+    public function testFilteredFirstPageDoesNotStopOffsetTraversal(string $mode, int $keep, bool $arrays): void
+    {
+        $this->withDatabase([[['id'=>1],['id'=>2]], [['id'=>3],['id'=>4]], [['id'=>5]]],
+            function (array &$queries, array &$rawQueries, FastDb $db) use ($mode,$keep,$arrays): void {
+                $entity = new ChunkEntity();
+                $entity->queryLimit()->orderBy('id','ASC');
+                if ($arrays) { $entity->queryLimit()->returnAsArray(); }
+                $first = true;
+                $observer = static function (QueryResult $result) use (&$first,$keep): void {
+                    if ($first) {
+                        $first = false;
+                        $result->setResult(array_slice($result->getResult(),0,$keep));
+                    }
+                };
+                if ($mode === 'global') { $db->setOnQuery($observer); }
+                else { $entity->setOnQuery($observer); }
+                $seen = [];
+                $entity->chunk(static function ($row) use (&$seen,$arrays): void { $seen[] = $arrays ? $row['id'] : $row->id; },2);
+                $this->assertSame($keep === 0 ? [3,4,5] : [1,3,4,5], $seen);
+                $this->assertCount(3, $queries);
+                $this->assertSame([], $rawQueries);
+            });
+    }
+
+    public static function observerModes(): array { return [['global'],['entity']]; }
+
+    #[DataProvider('observerModes')]
+    public function testNestedAllCannotReplaceTheOuterChunkPageCount(string $mode): void
+    {
+        $this->withDatabase([[['id'=>1],['id'=>2]], [['id'=>10]], [['id'=>3]]],
+            function (array &$queries, array &$rawQueries, FastDb $db) use ($mode): void {
+                $entity = new ChunkEntity();
+                $entity->queryLimit()->orderBy('id','ASC');
+                $entered = false;
+                $observer = function () use (&$entered,$entity): void {
+                    if ($entered) { return; }
+                    $entered = true;
+                    $this->assertSame(10, $entity->all()->first()->id);
+                };
+                if ($mode === 'global') { $db->setOnQuery($observer); }
+                else { $entity->setOnQuery($observer); }
+                $seen = [];
+                $entity->chunk(static function (ChunkEntity $row) use (&$seen): void { $seen[] = $row->id; },2);
+                $this->assertSame([1,2,3], $seen);
+                $this->assertCount(3, $queries);
+                $this->assertSame([], $rawQueries);
+            });
+    }
+
     private function withDatabase(array $pages, callable $test): void
     {
         $queries = [];
@@ -169,7 +232,7 @@ final class ChunkTest extends TestCase
         $original = $instance->getValue();
         $instance->setValue(null, $db);
         try {
-            $test($queries, $rawQueries);
+            $test($queries, $rawQueries, $db);
         } finally {
             $instance->setValue(null, $original);
         }
