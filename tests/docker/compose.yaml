@@ -1,0 +1,41 @@
+services:
+  mysql:
+    image: mysql:${MYSQL_VERSION:-8.4.13}
+    environment:
+      # 仅用于本次隔离容器中的测试数据库。
+      MYSQL_ROOT_PASSWORD: fastdb_ci_root_password
+      MYSQL_DATABASE: fastdb_ci
+      MYSQL_USER: fastdb_ci
+      MYSQL_PASSWORD: fastdb_ci_password
+    command:
+      - --sql-mode=STRICT_TRANS_TABLES,ONLY_FULL_GROUP_BY,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - MYSQL_PWD=$$MYSQL_PASSWORD mysql --protocol=TCP --host=127.0.0.1 --user=$$MYSQL_USER --database=$$MYSQL_DATABASE --batch --skip-column-names --execute='SELECT 1' > /dev/null
+      interval: 2s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+    volumes:
+      - mysql-data:/var/lib/mysql
+
+  tests:
+    build:
+      context: .
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      FAST_DB_TEST_HOST: mysql
+      FAST_DB_TEST_PORT: '3306'
+      FAST_DB_TEST_USER: fastdb_ci
+      FAST_DB_TEST_PASSWORD: fastdb_ci_password
+      FAST_DB_TEST_DATABASE: fastdb_ci
+    volumes:
+      # 源码只读挂载，依赖和测试缓存写入容器内部工作区。
+      - ../..:/source:ro
+      - ./results:/results
+
+volumes:
+  mysql-data:

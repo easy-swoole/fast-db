@@ -79,6 +79,54 @@ final class TransactionTest extends TestCase
         $this->assertSame(0, $this->value());
     }
 
+    public static function stringPrimaryKeyModes(): array
+    {
+        $cases = [];
+        foreach (['uuid'=>'550e8400-e29b-41d4-a716-446655440000', 'leading-zero'=>'01', 'zero'=>'0', 'numeric'=>'123'] as $name => $key) {
+            foreach (['global','entity'] as $mode) { $cases[$name . '-' . $mode] = [$key,$mode]; }
+        }
+        return $cases;
+    }
+
+    #[DataProvider('stringPrimaryKeyModes')]
+    public function testMysqlNonAutoStringKeySurvivesInsertObserverUpdatesAndDeletion(string $key, string $mode): void
+    {
+        $this->observer->query("ALTER TABLE `{$this->table}` MODIFY id VARCHAR(64) NOT NULL");
+        $entity = new TextKeyMysqlEntity(['id'=>$key,'value'=>7]);
+        $inserts = $updates = 0;
+        $observer = function (QueryResult $result) use ($entity,$key,&$inserts,&$updates): void {
+            $sql = $result->getQueryBuilder()?->getLastPrepareQuery() ?? '';
+            if (str_starts_with($sql,'UPDATE')) { $updates++; return; }
+            if (!str_starts_with($sql,'INSERT')) { return; }
+            $inserts++;
+            // 非自增 VARCHAR 主键没有生成 ID，公开回调中仍应保留调用方传入的字符串。
+            $this->assertSame(0, $result->getInsertId());
+            $this->assertSame(1, $result->getAffectedRows());
+            $this->assertSame($key, $entity->id);
+            $entity->value = 8;
+            $this->assertTrue($entity->update());
+        };
+        if ($mode === 'global') { $this->db->setOnQuery($observer); }
+        else { $entity->setOnQuery($observer); }
+
+        $this->assertTrue($entity->insert());
+        $this->assertSame(1, $inserts);
+        $this->assertSame($key, $entity->id);
+        $stored = TextKeyMysqlEntity::findRecord($key);
+        $this->assertSame($key, $stored->id);
+        $this->assertSame(8, $stored->value);
+        // 插入和回调内更新已接受比较基准，未修改时不应重复发送 UPDATE。
+        $this->assertTrue($entity->update());
+        $this->assertSame(1, $updates);
+        $entity->value = 9;
+        $this->assertTrue($entity->update());
+        $this->assertSame(2, $updates);
+        $this->assertSame(9, TextKeyMysqlEntity::findRecord($key)->value);
+        $this->assertTrue($entity->delete());
+        $this->assertNull(TextKeyMysqlEntity::findRecord($key));
+        $this->assertSame(0, $this->value(), 'The existing string key 1 must remain unchanged, including when the inserted key is 01.');
+    }
+
     public static function scopedRelationModes(): array { return [[false],[true]]; }
 
     #[DataProvider('scopedRelationModes')]

@@ -5,3 +5,4 @@
 
 /.phpunit.cache/
 /.phpunit.result.cache
+/tests/docker/results/

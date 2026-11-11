@@ -1,5 +1,7 @@
 # EasySwoole FastDb
 
+[自动化测试与本地复现](tests/README.md#github-actions-自动测试)。
+
 FastDb 是面向 Swoole 协程环境的 MySQL 数据访问库，组合连接池、SQL 构建器和基于 PHP Attributes 的实体映射。可以在 EasySwoole 框架内使用，也可以独立使用。
 
 本文面向 `3.x` 分支，使用 `easyswoole/mysqli` 5.x 和 `easyswoole/pool` 3.x，以当前 `src/` 和 `composer.json` 为准。实体 API 位于 `AbstractEntity`，数据库与连接管理位于 `FastDb`，SQL 构建能力由 `easyswoole/mysqli` 提供。

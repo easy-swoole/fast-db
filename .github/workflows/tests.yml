@@ -1,0 +1,82 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: fastdb-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  minimum-runtime:
+    name: PHP 8.1 / Swoole 5.1 compatibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: 构建最低版本运行环境
+        run: |
+          mkdir -p tests/docker/results
+          docker build --progress plain \
+            --build-arg PHP_IMAGE=php:8.1.34-cli-bookworm \
+            --build-arg SWOOLE_VERSION=5.1.8 \
+            --tag fastdb-minimum-runtime tests/docker \
+            2>&1 | tee tests/docker/results/build.log
+      - name: 检查生产依赖、类加载及 PHP 语法
+        run: |
+          docker run --rm \
+            --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/source,readonly" \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/tests/docker/results,dst=/results" \
+            fastdb-minimum-runtime bash /source/tests/docker/run-tests.sh production \
+            2>&1 | tee tests/docker/results/compatibility.log
+      - name: 保存兼容性检查日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fastdb-php81-swoole51
+          path: tests/docker/results/
+          if-no-files-found: warn
+          retention-days: 7
+
+  database:
+    name: PHP 8.4 / Swoole 6.2 / MySQL ${{ matrix.mysql }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        mysql: ['8.0.46', '8.4.13', '9.7.4']
+    env:
+      MYSQL_VERSION: ${{ matrix.mysql }}
+      COMPOSE_PROJECT_NAME: fastdb-ci
+      BUILDKIT_PROGRESS: plain
+    steps:
+      - uses: actions/checkout@v4
+      - name: 运行单元测试与完整 MySQL 集成测试
+        run: |
+          mkdir -p tests/docker/results
+          docker compose -f tests/docker/compose.yaml up --build --exit-code-from tests \
+            2>&1 | tee tests/docker/results/tests.log
+      - name: 收集容器日志
+        if: always()
+        run: docker compose -f tests/docker/compose.yaml logs --no-color > tests/docker/results/compose.log 2>&1
+      - name: 清理测试容器及数据卷
+        if: always()
+        run: docker compose -f tests/docker/compose.yaml down --volumes --remove-orphans
+      - name: 保存测试报告和日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fastdb-mysql-${{ matrix.mysql }}
+          path: tests/docker/results/
+          if-no-files-found: warn
+          retention-days: 7
