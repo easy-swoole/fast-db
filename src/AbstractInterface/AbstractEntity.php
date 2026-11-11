@@ -94,6 +94,18 @@ abstract class AbstractEntity implements \JsonSerializable
         return $this;
     }
 
+    /** 判断全部或指定映射字段是否相对比较基准发生变化，不调用 Property::toValue 或执行 SQL。 */
+    public function hasChange(?string $field = null): bool
+    {
+        return $this->entityState->hasChange($this, $field);
+    }
+
+    /** 返回全部变化字段的当前属性值，Bean 等转换对象保持原实例，不消费查询配置或接受新基准。 */
+    public function getChanges(): array
+    {
+        return $this->entityState->getChanges($this);
+    }
+
     function all( bool $selectForUpdate = false ):ListResult
     {
         try { return $this->selectRows($this->queryLimit(), $selectForUpdate); }
@@ -324,7 +336,8 @@ abstract class AbstractEntity implements \JsonSerializable
                 }
             }
             $properties = $this->queryLimit()->filterProperties($entityRef->allProperties());
-            [$data, $compareValues] = $this->entityState->changes($this, $properties);
+            $compareValues = [];
+            $data = $this->entityState->changes($this, $properties, $compareValues);
 
             if(empty($data)){
                 return true;

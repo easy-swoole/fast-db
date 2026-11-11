@@ -815,6 +815,8 @@ final class TransactionTest extends TestCase
         $entity->value = 2;
         $this->assertTrue($entity->update());
         $this->db->rollback();
+        $this->assertFalse($entity->hasChange());
+        $this->assertSame([], $entity->getChanges());
         $queries = 0;
         $this->db->setOnQuery(static function () use (&$queries): void { $queries++; });
         $this->assertSame(2, $entity->value);
@@ -823,6 +825,8 @@ final class TransactionTest extends TestCase
         $this->assertSame(1, $this->value());
         $reloaded = TransactionEntity::findRecord(1);
         $reloaded->value = 2;
+        $this->assertTrue($reloaded->hasChange('value'));
+        $this->assertSame(['value'=>2], $reloaded->getChanges());
         $this->assertTrue($reloaded->update());
         $this->assertSame(2, $this->value());
     }

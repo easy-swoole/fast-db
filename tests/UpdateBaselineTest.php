@@ -86,7 +86,11 @@ final class UpdateBaselineTest extends TestCase
         $user = new User(['id' => 1, 'name' => 'A']);
         $user->name = 'B';
         $this->assertFalse($user->update());
+        $this->assertTrue($user->hasChange('name'));
+        $this->assertSame(['name'=>'B'], $user->getChanges());
         $this->assertTrue($user->update());
+        $this->assertFalse($user->hasChange());
+        $this->assertSame([], $user->getChanges());
         $this->assertSame($this->queries[0], $this->queries[1]);
     }
 }

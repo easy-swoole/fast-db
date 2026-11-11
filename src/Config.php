@@ -2,6 +2,8 @@
 
 namespace EasySwoole\FastDb;
 
+use EasySwoole\Mysqli\TlsMode;
+use EasySwoole\Mysqli\TlsVersion;
 
 class Config extends \EasySwoole\Pool\Config
 {
@@ -16,6 +18,16 @@ class Config extends \EasySwoole\Pool\Config
     protected float $timeout = 3.0;
     protected float $maxConnectTime = 5.0;
     protected bool $compress = false;
+
+    // TLS 参数原样传给 mysqli，模式解析、证书校验和握手由驱动负责。
+    protected TlsMode|string $tlsMode = 'disabled';
+    protected string $tlsCaFile = '';
+    protected string $tlsCaPath = '';
+    protected string $tlsCertFile = '';
+    protected string $tlsKeyFile = '';
+    protected string $tlsKeyPassphrase = '';
+    protected string $tlsServerName = '';
+    protected array $tlsVersions = ['TLSv1.2', 'TLSv1.3'];
 
     protected string $name = "default";
 
@@ -155,6 +167,32 @@ class Config extends \EasySwoole\Pool\Config
     public function setMaxConnectTime(float $timeout): void { $this->maxConnectTime = $timeout; }
     public function isCompress(): bool { return $this->compress; }
     public function setCompress(bool $compress): void { $this->compress = $compress; }
+
+    public function getTlsMode(): TlsMode|string { return $this->tlsMode; }
+    public function setTlsMode(TlsMode|string $mode): void { $this->tlsMode = $mode; }
+
+    public function getTlsCaFile(): string { return $this->tlsCaFile; }
+    public function setTlsCaFile(string $value): void { $this->tlsCaFile = $value; }
+
+    public function getTlsCaPath(): string { return $this->tlsCaPath; }
+    public function setTlsCaPath(string $value): void { $this->tlsCaPath = $value; }
+
+    public function getTlsCertFile(): string { return $this->tlsCertFile; }
+    public function setTlsCertFile(string $value): void { $this->tlsCertFile = $value; }
+
+    public function getTlsKeyFile(): string { return $this->tlsKeyFile; }
+    public function setTlsKeyFile(string $value): void { $this->tlsKeyFile = $value; }
+
+    public function getTlsKeyPassphrase(): string { return $this->tlsKeyPassphrase; }
+    public function setTlsKeyPassphrase(string $value): void { $this->tlsKeyPassphrase = $value; }
+
+    public function getTlsServerName(): string { return $this->tlsServerName; }
+    public function setTlsServerName(string $value): void { $this->tlsServerName = $value; }
+
+    /** @return array<array-key, TlsVersion|string> 保留传入的枚举或字符串。 */
+    public function getTlsVersions(): array { return $this->tlsVersions; }
+    /** @param array<array-key, TlsVersion|string> $versions */
+    public function setTlsVersions(array $versions): void { $this->tlsVersions = $versions; }
 
     public function isIsForceRollback(): bool
     {

@@ -504,6 +504,33 @@
                     }
                 ]
             },
+            "getChanges": {
+                "visibility": "public",
+                "static": false,
+                "final": false,
+                "abstract": false,
+                "return": "array",
+                "returnsReference": false,
+                "params": []
+            },
+            "hasChange": {
+                "visibility": "public",
+                "static": false,
+                "final": false,
+                "abstract": false,
+                "return": "bool",
+                "returnsReference": false,
+                "params": [
+                    {
+                        "name": "field",
+                        "type": "?string",
+                        "byReference": false,
+                        "variadic": false,
+                        "hasDefault": true,
+                        "default": null
+                    }
+                ]
+            },
             "insert": {
                 "visibility": "public",
                 "static": false,

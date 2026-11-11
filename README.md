@@ -261,6 +261,52 @@ use EasySwoole\Mysqli\QueryBuilder;
 
 `Config` 不支持 `maxIdleTime`、`loadAverageTime`，连接池负载阈值使用 `waitLoadAverageTime`。数据库配置 setter 返回 void，应逐条调用。
 
+### TLS 连接
+
+TLS 默认关闭。FastDb 支持通过构造数组或 setter 设置下列参数，并传递给 mysqli；连接池创建连接和 `testDb()` 使用相同配置。
+
+| 参数 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `tlsMode` | `TlsMode|string` | `'disabled'` | `disabled`、`required`、`verify_ca`、`verify_identity` |
+| `tlsCaFile` | string | 空字符串 | PEM CA 文件路径 |
+| `tlsCaPath` | string | 空字符串 | CA 证书目录 |
+| `tlsCertFile` | string | 空字符串 | 客户端证书文件路径 |
+| `tlsKeyFile` | string | 空字符串 | 客户端私钥文件路径 |
+| `tlsKeyPassphrase` | string | 空字符串 | 客户端私钥的解密口令 |
+| `tlsServerName` | string | 空字符串 | SNI 名称及身份校验的预期名称，默认使用 host；不改变 TCP 连接地址 |
+| `tlsVersions` | array | `['TLSv1.2', 'TLSv1.3']` | 可混用 `TlsVersion` 枚举和对应字符串 |
+
+`TlsMode`、`TlsVersion` 均位于 `EasySwoole\Mysqli` 命名空间。`Required` 仅要求加密，`VerifyCA` 验证证书链，`VerifyIdentity` 还验证服务端名称。示例使用身份校验：
+
+```php
+use EasySwoole\FastDb\Config;
+use EasySwoole\Mysqli\TlsMode;
+use EasySwoole\Mysqli\TlsVersion;
+
+$config = new Config([
+    'host' => 'mysql.internal.example',
+    'user' => 'app',
+    'password' => 'your_password',
+    'database' => 'app',
+    'tlsMode' => TlsMode::VerifyIdentity,
+    'tlsCaFile' => '/secure/mysql/ca.pem',
+    'tlsServerName' => 'mysql.internal.example',
+    'tlsVersions' => [TlsVersion::Tls12, TlsVersion::Tls13],
+]);
+$db->addDb($config);
+```
+
+也可以逐条设置参数：
+
+```php
+$config->setTlsMode('verify_identity');
+$config->setTlsCaFile('/secure/mysql/ca.pem');
+$config->setTlsServerName('mysql.internal.example');
+$config->setTlsVersions([TlsVersion::Tls13]);
+```
+
+FastDb 的 TLS getter 返回保存的值，保留枚举或字符串形式。模式及协议版本解析、证书校验、握手均由 mysqli 统一处理；启用 TLS 后，连接失败不会自动退回明文。需要客户端证书认证时，同时配置 `tlsCertFile` 和 `tlsKeyFile`，加密私钥另设 `tlsKeyPassphrase`。Swoole 需编译支持 OpenSSL；TLS 握手使用现有 `maxConnectTime` 超时预算。协议及校验细节参见 [mysqli TLS 配置](https://github.com/easy-swoole/mysqli#tls-配置)。
+
 ### 连接池参数
 
 以下默认值对应当前使用的 `easyswoole/pool`：
@@ -572,6 +618,33 @@ $user->insert(['name', 'score']);
 ```
 
 参数为底层 `onDuplicate()` 的更新列列表；命中重复键时按构建器语义更新这些列。该方法按 SQL 执行结果返回是否成功，重复键更新未改变数据时也可返回 true，不能用返回值区分本次是插入还是重复键更新；需要准确的最终记录时重新查询。
+
+### 检查待保存修改
+
+`hasChange(?string $field = null): bool` 检查全部或指定映射字段是否相对比较基准发生变化；未映射或不存在的字段返回 false。`getChanges(): array` 返回全部变化字段的当前属性值，与直接访问属性一致。`ConvertBean`、`ConvertList` 等转换字段返回属性持有的同一个对象，不转成 JSON、不克隆；普通数组仍返回数组，也不执行 `Property::toValue` 编码回调。数据库写入转换由 `insert()` / `update()` 处理。
+
+```php
+$user = User::findRecord(1); // 假设当前 name 为 Alice，score 为 1。
+if ($user !== null) {
+    $user->name = 'Bob';
+    $user->score = 2;
+
+    $user->hasChange();        // true
+    $user->hasChange('name');  // true
+    $user->hasChange('status'); // false，未修改。
+    $user->getChanges();       // ['name' => 'Bob', 'score' => 2]
+
+    $user->queryLimit()->fields(['name']);
+    if ($user->update()) {
+        $user->hasChange('name'); // false，成功写入字段已接受新基准。
+        $user->getChanges();      // ['score' => 2]，未写入字段继续保留。
+    }
+}
+```
+
+这两个入口按调用计算，复用现有比较基准，不额外维护历史记录；它们不主动执行 SQL、接受新基准或清理查询配置，也不触发生命周期钩子。`fields()` / `hideFields()` 不影响检查范围。`hasChange()` 在首次发现变化时返回；两个方法均不执行 `Property::toValue`。`convertObject` 字段仍调用 `toValue()` 比较内容，因此能够识别对象内部修改，但 `getChanges()` 返回的值仍是对象本身。通过返回对象修改内容，与直接修改实体属性相同。
+
+修改后还原为原值，变化会消失；成功写入并接受基准的字段不再返回，SQL 失败时修改继续待保存。显式 `setData($data, true)` 只接受对应字段的基准。事务回滚不改变这套规则，重载和重试仍由业务决定。构造数据也会被接受为初始基准，因此检查结果不表示实体是否已插入数据库。
 
 ### 变更更新
 
@@ -2029,6 +2102,8 @@ $config = ConfigModel::findRecord(
 | `sum/avg/max/min($cols, $group = null, $force = true)` | 数字或多列聚合数组 |
 | `chunk(callable $func, int $chunkSize = 10)` | OFFSET 分页逐条回调；false 停止，不返回累计条数 |
 | `chunkById(callable $func, int $chunkSize = 10, ?string $column = null): int` | 按稳定唯一列 ASC 键集分页；返回已交付条数 |
+| `hasChange(?string $field = null): bool` | 检查全部或指定映射字段的待保存修改 |
+| `getChanges(): array` | 返回全部变化字段的当前属性值，Bean 等转换对象保持原实例 |
 | `toArray(bool $filterNull = false): array` | 属性转换并筛选输出 |
 | `jsonSerialize()` | 使用 toArray 输出 |
 | `setOnQuery(?callable $call)` | 当前实体查询回调；返回实体 |
