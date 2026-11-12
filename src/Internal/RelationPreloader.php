@@ -62,23 +62,16 @@ final class RelationPreloader
                 if ($value !== null && !is_int($value) && !is_string($value)) {
                     throw new RuntimeError('Parent relation fields must contain an integer, string or null');
                 }
-                // 数组模式释放临时父模型，不通过 Query 所有者延长其生命周期。
-                if ($asArray) {
-                    $plan = new RelationPlan($plan->relate, $plan->tableName,
-                        $plan->query->forEntity($source), $plan->connectionName, $value);
-                }
                 $db->selectConnection($plan->connectionName);
                 $table = $plan->tableName;
-                $builder = $plan->query->__getQueryBuilder();
-                $fields = $plan->query->getFields();
-                $columns = $fields['fields'] ?? null;
+                $builder = $plan->builder;
+                $columns = $plan->columns;
                 $preview = (clone $builder)->get($table, null, $columns);
                 // 数组结果直接附加关联数据，不需要生成用于实体缓存匹配的查询。
                 $lookup = $asArray ? null : RelationPlan::buildLookup(clone $builder, $table, $plan->relate,
                     $value, $columns);
-                $mode = (bool) ($fields['returnAsArray'] ?? false);
                 $key = hash('sha256', serialize([$plan->connectionName, $plan->relate->type,
-                    $plan->relate->targetEntity, $plan->relate->targetProperty, $table, $mode,
+                    $plan->relate->targetEntity, $plan->relate->targetProperty, $table, $plan->returnAsArray,
                     $preview->getLastPrepareQuery(), $preview->getLastBindParams(), $preview->getLastQueryOptions()]));
                 $groups[$key][] = ['position' => $position, 'method' => $method, 'plan' => $plan, 'lookup' => $lookup];
             }
@@ -138,8 +131,8 @@ final class RelationPreloader
                 if ($value !== null) { $parameters[] = $value; }
             }
             $keys = QueryBuilder::subQuery($alias)->raw(implode(' UNION ALL ', $sql));
-            $builder = clone $plan->query->__getQueryBuilder();
-            $columns = $plan->query->getFields()['fields'] ?? null;
+            $builder = clone $plan->builder;
+            $columns = $plan->columns;
             if (empty($columns)) { $columns = $builder->getField(); }
             $columns = is_array($columns) ? $columns : [$columns];
             $columns[] = QueryBuilder::rawExpression($parentIndex . ' AS ' . TableReference::identifier($indexName));
@@ -162,7 +155,7 @@ final class RelationPreloader
 
     private function materialize(RelationPlan $plan, array $rows, bool $parentAsArray): mixed
     {
-        $asArray = $parentAsArray || ($plan->query->getFields()['returnAsArray'] ?? false);
+        $asArray = $parentAsArray || $plan->returnAsArray;
         if ($plan->relate->type === RelationType::One) {
             if (count($rows) > 1) {
                 throw new RuntimeError('more than one record hit is no allow in relateOne method');

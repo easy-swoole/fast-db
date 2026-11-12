@@ -28,7 +28,15 @@ final class RelationLoader
     public function load(AbstractEntity $entity, Relate $relate, ?string $tableName,
         callable $execute, callable $beforeOneHydration, callable $readTotal): mixed
     {
-        [$target, $query, $returnAsArray, $key] = $this->prepare($entity, $relate, $tableName);
+        $target = new $relate->targetEntity();
+        $selection = $entity->queryLimit();
+        $query = $selection->__getQueryBuilder();
+        $fields = $selection->getFields();
+        $returnAsArray = $fields['returnAsArray'] ?? false;
+        RelationPlan::buildLookup($query, $tableName ?: $target->tableName(), $relate,
+            FieldCodec::compare($entity->{$relate->selfProperty} ?? null), $fields['fields'] ?? null);
+        $key = $relate->cacheResult || $this->preloaded !== []
+            ? $this->fingerprint($relate, $query, $returnAsArray, FastDb::getInstance()->selectConnection()) : null;
         if ($key !== null && array_key_exists($key, $this->preloaded)) {
             return $this->preloaded[$key];
         }
@@ -58,21 +66,6 @@ final class RelationLoader
         }
         if ($relate->cacheResult) { $this->cache[$key] = $data; }
         return $data;
-    }
-
-    /** 目标初始化、表名求值和缓存键计算的先后顺序与普通关联查询一致。 */
-    private function prepare(AbstractEntity $entity, Relate $relate, ?string $tableName): array
-    {
-        $target = new $relate->targetEntity();
-        $selection = $entity->queryLimit();
-        $query = $selection->__getQueryBuilder();
-        $fields = $selection->getFields();
-        $returnAsArray = $fields['returnAsArray'] ?? false;
-        RelationPlan::buildLookup($query, $tableName ?: $target->tableName(), $relate,
-            FieldCodec::compare($entity->{$relate->selfProperty} ?? null), $fields['fields'] ?? null);
-        $key = $relate->cacheResult || $this->preloaded !== []
-            ? $this->fingerprint($relate, $query, $returnAsArray, FastDb::getInstance()->selectConnection()) : null;
-        return [$target, $query, $returnAsArray, $key];
     }
 
     private function fingerprint(Relate $relate, QueryBuilder $query, bool $returnAsArray, string $connectionName): string

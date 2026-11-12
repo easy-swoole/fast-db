@@ -58,7 +58,7 @@ class ReflectionCache
         return $this->entityData[$entityClass] = $entity;
     }
 
-    /** 返回副本，避免补全 selfProperty 时修改缓存中的原始关系定义。 */
+    /** 缓存解析后的关联声明，每次返回独立副本。 */
     public function parseRelation(string $entityClass, string $method): Relate
     {
         if (!isset($this->relationData[$entityClass][$method])) {
@@ -67,9 +67,26 @@ class ReflectionCache
             if ($attributes === []) {
                 throw new RuntimeError("{$method} did not define Relate attribute in {$entityClass}");
             }
-            $this->relationData[$entityClass][$method] = $attributes[0]->newInstance();
+            $this->relationData[$entityClass][$method] = $this->resolveRelation($entityClass, $attributes[0]->newInstance());
         }
         return clone $this->relationData[$entityClass][$method];
+    }
+
+    /** @internal 补全并校验显式传入的关联定义。 */
+    public function resolveRelation(string $entityClass, Relate $relate): Relate
+    {
+        $target = $this->parseEntity($relate->targetEntity);
+        $parent = $this->parseEntity($entityClass);
+        if (empty($relate->selfProperty)) {
+            $relate->selfProperty = $parent->getPrimaryKey()
+                ?? throw new RuntimeError('can not relate entity without primary key set');
+        } elseif (!isset($parent->allProperties()[$relate->selfProperty])) {
+            throw new RuntimeError("{$relate->selfProperty} is not a define property in " . $entityClass);
+        }
+        if (!isset($target->allProperties()[$relate->targetProperty])) {
+            throw new RuntimeError("{$relate->targetProperty} is not a define property in {$relate->targetEntity}");
+        }
+        return $relate;
     }
 
     protected function parseClassTag(string $targetTag, \ReflectionClass $ref)

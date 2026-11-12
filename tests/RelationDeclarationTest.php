@@ -21,7 +21,7 @@ final class RelationDeclarationTest extends TestCase
         $this->assertSame(1, $plan->selfValue);
         $this->assertSame('id', $plan->relate->selfProperty);
         $this->assertSame('children', $plan->tableName);
-        $this->assertSame([], $plan->query->__getQueryBuilder()->get('children')->getLastBindParams());
+        $this->assertSame([], $plan->builder->get('children')->getLastBindParams());
     }
 
     public function testProtectedConfigurationUsesEachParentAndKeepsExistingQueryReferences(): void
@@ -36,7 +36,7 @@ final class RelationDeclarationTest extends TestCase
             $this->assertSame($held, $parent->queryLimit());
             $this->assertSame($builder, $held->__getQueryBuilder());
             $this->assertSame([5], $builder->get('children')->getLastBindParams());
-            $query = $plan->query->__getQueryBuilder()->get('children');
+            $query = $plan->builder->get('children');
             $this->assertSame([5,$tenant], $query->getLastBindParams());
         }
     }
@@ -44,8 +44,8 @@ final class RelationDeclarationTest extends TestCase
     public function testInheritedPublicConfigurationAndArrayMode(): void
     {
         $plan = (new DeclarationChildParent(['id'=>1]))->__relationPlan('publicConfigured');
-        $this->assertTrue($plan->query->getFields()['returnAsArray']);
-        $this->assertSame([3], $plan->query->__getQueryBuilder()->get('children')->getLastBindParams());
+        $this->assertTrue($plan->returnAsArray);
+        $this->assertSame([3], $plan->builder->get('children')->getLastBindParams());
     }
 
     public static function invalidConfigurations(): array
@@ -83,7 +83,7 @@ final class RelationDeclarationTest extends TestCase
     public function testStaticConfiguratorUsesNormalPhpMethodDispatch(): void
     {
         $plan = (new DeclarationParent(['id'=>1]))->__relationPlan('staticConfig');
-        $this->assertSame([4], $plan->query->__getQueryBuilder()->get('children')->getLastBindParams());
+        $this->assertSame([4], $plan->builder->get('children')->getLastBindParams());
     }
 
     public function testRelationTypeIsRequired(): void

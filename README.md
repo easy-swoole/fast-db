@@ -1800,7 +1800,7 @@ $result = FastDb::getInstance()->query(function (QueryBuilder $query): void {
 });
 ```
 
-`query()` 回调需要完成 `get()` / `insert()` / `update()` / `delete()` / `raw()` 等最终构建动作。
+`query()` 的构建回调需要完成 `get()` / `insert()` / `update()` / `delete()` / `raw()` 等最终构建动作。可以用 `onQuery:` 为本次主查询指定观察回调，接收 `QueryResult`，在全局查询回调之后执行。
 
 ### 原始 SQL
 

@@ -178,15 +178,34 @@ class FastDb
 
     /** 完成回调直接属于本次执行；指定连接不会改变回调可见的选库。 */
     public function query(QueryBuilder|callable $queryBuilder, ?float $timeout = null,
-        ?callable $onComplete = null, ?string $connection = null): QueryResult
+        ?callable $onComplete = null, ?string $connection = null, ?callable $onQuery = null): QueryResult
     {
-        $client = $this->getClient($connection);
+        if ($onQuery === null) {
+            $client = $this->getClient($connection);
+        } else {
+            // 有本次查询回调时，借用失败也要提供发起时的连接和计时。
+            $startTick = hrtime(true);
+            $startTime = microtime(true);
+            $connectionName = $connection ?? $this->selectConnection();
+            try {
+                $client = $this->getClient($connection);
+            } catch (\Throwable $error) {
+                $result = new QueryResult($startTime, $startTick);
+                $result->setConnectionName($connectionName);
+                $result->finishTiming();
+                $result->setException($error);
+                if ($queryBuilder instanceof QueryBuilder) {
+                    $result->setQueryBuilder($queryBuilder);
+                }
+                return $this->finishQuery($result, $error, $onQuery);
+            }
+        }
         $build = is_callable($queryBuilder) ? $queryBuilder : null;
         $builder = $build === null ? $queryBuilder : new QueryBuilder();
         return $this->execute($client, static function () use ($client, $builder, $build, $timeout) {
             if ($build !== null) { $build($builder); }
             return $client->query($builder, $timeout);
-        }, $builder, onComplete: $onComplete, countTimeout: $timeout);
+        }, $builder, onComplete: $onComplete, countTimeout: $timeout, onQuery: $onQuery);
     }
 
     public function rawQuery(string $sql, ?float $timeout = null, ?callable $onComplete = null,
@@ -197,7 +216,8 @@ class FastDb
     }
 
     private function execute(Connection $client, callable $operation, ?QueryBuilder $builder = null,
-        ?string $sql = null, ?callable $onComplete = null, ?float $countTimeout = null): QueryResult
+        ?string $sql = null, ?callable $onComplete = null, ?float $countTimeout = null,
+        ?callable $onQuery = null): QueryResult
     {
         $result = $this->executeResult($client, $operation, $builder, $sql);
         $error = $result->getException();
@@ -223,6 +243,16 @@ class FastDb
             if ($count !== null) { $this->diagnostics?->notify($count); }
         } catch (\Throwable $callbackError) {
             $error ??= $callbackError;
+        }
+        return $this->finishQuery($result, $error, $onQuery);
+    }
+
+    /** 全局通知之后执行本次回调，执行异常优先于回调异常。 */
+    private function finishQuery(QueryResult $result, ?\Throwable $error, ?callable $onQuery): QueryResult
+    {
+        if ($onQuery !== null) {
+            try { $onQuery($result); }
+            catch (\Throwable $callbackError) { $error ??= $callbackError; }
         }
         if ($error !== null) { throw $error; }
         return $result;
@@ -265,12 +295,7 @@ class FastDb
         try { return $call($client); }
         finally {
             if ($ownsConnection) {
-                $cid = Coroutine::getCid();
-                // 回调可能已主动归还连接，先确认当前协程的登记再归还。
-                if (($this->currentConnection[$cid][$name] ?? null) === $client) {
-                    unset($this->currentConnection[$cid][$name]);
-                    $this->returnConnection($name, $client);
-                }
+                $this->returnConnection(Coroutine::getCid(), $name, $client);
             }
         }
     }
@@ -278,14 +303,21 @@ class FastDb
     public function recycleContext(): void
     {
         $cid = Coroutine::getCid();
-        $connections = $this->currentConnection[$cid] ?? [];
-        foreach ($connections as $name => $client) { $this->returnConnection($name, $client); }
-        unset($this->currentConnection[$cid]);
-        $this->diagnostics?->clear($cid);
+        try {
+            foreach ($this->currentConnection[$cid] ?? [] as $name => $client) {
+                $this->returnConnection($cid, $name, $client);
+            }
+        } finally {
+            $this->diagnostics?->clear($cid);
+        }
     }
 
-    private function returnConnection(string $name, Connection $client): void
+    private function returnConnection(int $cid, string $name, Connection $client): void
     {
+        // 回调可能已经归还连接，只有当前登记的连接才由本次流程归还。
+        if (($this->currentConnection[$cid][$name] ?? null) !== $client) { return; }
+        unset($this->currentConnection[$cid][$name]);
+        if ($this->currentConnection[$cid] === []) { unset($this->currentConnection[$cid]); }
         try { $this->pools[$name]->recycleObj($client); }
         catch (\Throwable $error) { trigger_error($error->getMessage()); }
     }
@@ -302,10 +334,11 @@ class FastDb
             try {
                 if ($this->contextCleanupRegistered[$cid]) {
                     $this->recycleContext();
+                } else {
+                    $this->diagnostics?->clear($cid);
                 }
             } finally {
                 unset($this->currentConnection[$cid], $this->selectConnection[$cid], $this->contextCleanupRegistered[$cid]);
-                $this->diagnostics?->clear($cid);
             }
         });
     }

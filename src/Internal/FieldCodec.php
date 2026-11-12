@@ -12,13 +12,29 @@ final class FieldCodec
     public static function assign(AbstractEntity $entity, Property $property, mixed $value): mixed
     {
         if ($property->convertObject) {
-            if ($value === null && $property->allowNull) { return null; }
-            return $value instanceof $property->convertObject ? $value : ($property->convertObject)::toObject($value);
+            return self::convertObject($property, $value);
         }
         if ($property->assignCall) {
             return ($property->assignCall->callback)(...$property->assignCall->buildPropertyRuntimeParams($value, $entity));
         }
         return $value;
+    }
+
+    public static function defaultValue(Property $property): mixed
+    {
+        $value = $property->defaultValue;
+        // 默认对象按自身 __clone 规则复制，枚举保持原值。
+        if (is_object($value) && !($value instanceof \UnitEnum)) {
+            $value = clone $value;
+        }
+        return $property->convertObject ? self::convertObject($property, $value) : $value;
+    }
+
+    private static function convertObject(Property $property, mixed $value): ?object
+    {
+        if ($value === null && $property->allowNull) { return null; }
+        $class = $property->convertObject;
+        return $value instanceof $class ? $value : $class::toObject($value);
     }
 
     public static function compare(mixed $value): mixed

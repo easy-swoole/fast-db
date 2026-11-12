@@ -35,7 +35,12 @@ final class RecycleContextTest extends TestCase
         foreach (['idle' => $idle, 'active' => $active] as $name => $connection) {
             $pool = $this->getMockBuilder(Pool::class)->disableOriginalConstructor()->onlyMethods(['recycleObj'])->getMock();
             $pool->expects($this->once())->method('recycleObj')->with($connection)->willReturnCallback(
-                static function (Connection $client): bool { $client->objectRestore(); return true; }
+                function (Connection $client) use ($db, $name): bool {
+                    $registered = (new \ReflectionProperty(FastDb::class, 'currentConnection'))->getValue($db);
+                    $this->assertArrayNotHasKey($name, $registered[Coroutine::getCid()] ?? []);
+                    $client->objectRestore();
+                    return true;
+                }
             );
             $pools[$name] = $pool;
         }

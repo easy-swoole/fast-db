@@ -60,7 +60,8 @@ class QueryResult
 
     public function getTotalCount(): ?int
     {
-        return $this->totalResult === null ? null : (int) ($this->totalResult->getResultOne()['count'] ?? 0);
+        $value = $this->totalResult?->getResultOne()['count'] ?? null;
+        return $value === null ? null : (int) $value;
     }
 
     public function getException(): ?\Throwable
