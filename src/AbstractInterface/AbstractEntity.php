@@ -119,27 +119,25 @@ abstract class AbstractEntity implements \JsonSerializable
             if ($chunkSize < 1) {
                 throw new \InvalidArgumentException('Chunk size must be greater than zero');
             }
-            $page = 1;
-            while (true){
-                // 仅按本页数量判断是否结束，不为每一页额外查询总数。
-                $this->queryLimit()->page($page,false,$chunkSize);
-                // 列表查询会清理状态，因此先保存条件供下一页继续使用。
-                $builder = clone $this->queryBuilder;
+            $selection = $this->queryLimit();
+            // 固定入口处的查询条件，避免每页重复应用子类配置或使用回调改过的实体属性。
+            $queryTemplate = clone $selection;
+            for ($page = 1; ; $page++) {
+                $selection->page($page, false, $chunkSize);
+                $this->queryBuilder = $selection;
                 $rowCount = 0;
-                $list = $this->selectRows($this->queryLimit(), false,
+                $list = $this->selectRows($selection, false,
                     static function (QueryResult $result) use (&$rowCount): void {
                         $rowCount = count($result->getResult());
                     })->list();
                 $this->reset();
-                foreach ($list as $item){
-                    if (call_user_func($func,$item) === false) { return; }
+                foreach ($list as $item) {
+                    if ($func($item) === false) { return; }
                 }
-                if($rowCount < $chunkSize){
-                    break;
-                }else{
-                    $page++;
-                    $this->queryBuilder = $builder;
-                }
+                if ($rowCount < $chunkSize) { return; }
+                // 下一页查询前释放本页结果，避免两页实体同时留在内存。
+                unset($list, $item);
+                $selection = clone $queryTemplate;
             }
         } finally {
             // 成功、失败或提前返回均消费本次查询配置，实体数据及比较基准不受影响。
@@ -542,7 +540,8 @@ abstract class AbstractEntity implements \JsonSerializable
             if ($value !== null || $property->allowNull) {
                 $this->{$name} = $value;
             }
-            $this->entityState->baseline[$name] = $property->convertObject ? $value?->toValue() : $value;
+            // 类型属性可能在赋值时转换默认值，按实际属性值建立比较基准。
+            $this->entityState->baseline[$name] = FieldCodec::compare($this->{$name} ?? null);
         }
         if($entityRef->getOnInitialize()){
             $this->callHook($entityRef->getOnInitialize());

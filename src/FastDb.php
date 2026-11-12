@@ -323,9 +323,11 @@ class FastDb
         $ownsConnection = $this->currentConnection() === null;
         $client = $this->getClient();
         $name = $client->connectionName;
+        $borrowNumber = $client->poolBorrowNumber;
         try { return $call($client); }
         finally {
-            if ($ownsConnection) {
+            // 回调提前归还后可能再次借到同一个对象，后一次借用归新的调用流程管理。
+            if ($ownsConnection && $client->poolBorrowNumber === $borrowNumber) {
                 $this->returnConnection(Coroutine::getCid(), $name, $client);
             }
         }
@@ -402,6 +404,7 @@ class FastDb
         }
         if ($error !== null) { throw $error; }
         $client->connectionName = $name;
+        $client->poolBorrowNumber++;
         $this->currentConnection[$cid][$name] = $client;
         return $client;
     }

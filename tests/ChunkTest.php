@@ -6,6 +6,7 @@ namespace EasySwoole\FastDb\Tests;
 
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Attributes\Property;
+use EasySwoole\FastDb\Beans\Query;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\QueryResult;
@@ -61,6 +62,24 @@ final class ChunkTest extends TestCase
             $this->assertSame([1, 2], $ids);
             $this->assertCount(2, $queries);
             $this->assertSame([], $rawQueries);
+        });
+    }
+
+    public function testOffsetPagesReuseTheInitialQueryLimitConditions(): void
+    {
+        $this->withDatabase([[['id' => 1]], [['id' => 2]], []], function (array &$queries): void {
+            $entity = new ScopedChunkEntity(['status' => 1]);
+            $ids = [];
+            $entity->chunk(static function (ChunkEntity $row) use ($entity, &$ids): void {
+                $ids[] = $row->id;
+                $entity->status = 2;
+            }, 1);
+
+            $this->assertSame([1, 2], $ids);
+            foreach ($queries as $page => [$sql, $parameters]) {
+                $this->assertSame([1], $parameters);
+                $this->assertStringContainsString('LIMIT ' . $page . ', 1', $sql);
+            }
         });
     }
 
@@ -270,4 +289,12 @@ class ChunkEntity extends AbstractEntity
     public ?int $status;
 
     public function tableName(): string { return 'chunk_test'; }
+}
+
+class ScopedChunkEntity extends ChunkEntity
+{
+    public function queryLimit(): Query
+    {
+        return parent::queryLimit()->where('status', $this->status);
+    }
 }

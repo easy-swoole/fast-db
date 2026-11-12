@@ -16,6 +16,9 @@ class Connection extends Client implements ObjectInterface
     public string $connectionName;
     public bool $isForceRollback = false;
 
+    /** @internal FastDb 用借用次数区分同一个连接对象的多次借出。 */
+    public int $poolBorrowNumber = 0;
+
     // 单调时钟记录最后一次成功通信的结束时间，归还连接时保留，关闭或失败时清除。
     private int|float|null $lastActiveTick = null;
     private const HEALTH_CHECK_IDLE_NANOSECONDS = 3_000_000_000;
@@ -133,10 +136,16 @@ class Connection extends Client implements ObjectInterface
         return false;
     }
 
+    private function shouldRollback(): bool
+    {
+        // 已主动关闭的会话无需回滚，否则驱动会为了执行 ROLLBACK 重新建连。
+        return $this->isInTransaction() || ($this->isForceRollback && $this->mysqlClient() !== null);
+    }
+
     function gc(): void
     {
         if ($this->discardDisconnectedSession()) { return; }
-        if ($this->isInTransaction() || $this->isForceRollback) {
+        if ($this->shouldRollback()) {
             try { $this->rollbackTransaction(); }
             catch (\Throwable $error) { trigger_error($error->getMessage()); }
         }
@@ -146,7 +155,7 @@ class Connection extends Client implements ObjectInterface
     function objectRestore(): void
     {
         if ($this->discardDisconnectedSession()) { return; }
-        if ($this->isInTransaction() || $this->isForceRollback) {
+        if ($this->shouldRollback()) {
             // 不能把回滚失败的会话交给下一次借用，让连接池淘汰它。
             if ($this->rollbackTransaction() !== true) {
                 throw new RuntimeError('Failed to rollback connection during restore');

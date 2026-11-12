@@ -37,6 +37,21 @@ final class ConnectionTest extends TestCase
     public static function cleanupMethods(): array { return [['objectRestore'], ['gc']]; }
 
     #[\PHPUnit\Framework\Attributes\DataProvider('cleanupMethods')]
+    public function testForceRollbackDoesNotOpenAClosedSession(string $method): void
+    {
+        $connection = $this->getMockBuilder(Connection::class)
+            ->setConstructorArgs([new \EasySwoole\Mysqli\Config()])
+            ->onlyMethods(['rawQuery'])->getMock();
+        $connection->isForceRollback = true;
+        $connection->close();
+        $connection->expects($this->never())->method('rawQuery');
+
+        $connection->$method();
+
+        $this->assertNull($connection->mysqlClient());
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('cleanupMethods')]
     public function testCleanupRollsBackTheActiveSession(string $method): void
     {
         $this->withConnected(function (Connection $connection, \Swoole\Coroutine\Socket $peer) use ($method): void {

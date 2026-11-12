@@ -241,7 +241,7 @@ use EasySwoole\Mysqli\QueryBuilder;
 | `maxConnectTime` | float | `5.0` | 完整连接过程的超时上限，秒 |
 | `compress` | bool | `false` | 请求 MySQL 协议压缩，需服务端支持 |
 | `name` | string | `default` | 连接池名称 |
-| `isForceRollback` | bool | `false` | 每次归还连接都尝试回滚；该配置不会因一次回收被清除 |
+| `isForceRollback` | bool | `false` | 归还仍有会话的连接时尝试回滚；该配置不会因一次回收被清除 |
 | `autoPing` | int | `5` | 保留字段，不控制当前驱动的自动 ping 周期；连接检查由 `beforeUse()` / `intervalCheck()` 执行 |
 
 配置类型直接由属性声明处理，例如整数 `timeout => 3` 会保存为 float。`timeout` 和 `maxConnectTime` 在实际操作时必须大于零；类型声明本身不校验正数。使用真正的布尔值设置 `compress`。
@@ -525,7 +525,7 @@ $entity->chunk(function (User $user): void {
 }, 100);
 ```
 
-`chunk($callback, $chunkSize = 10)` 按 OFFSET 分页读取，每次回调接收一条记录，不是一个数组块。请提供稳定排序；遍历中删除记录或修改筛选条件可能改变后续页的偏移，不适合需要稳定游标的迁移任务。 `chunk()` 不主动请求总数统计，按公开查询回调处理前的原始页条数判断是否继续；调用前显式开启的总数统计选项仍保留。
+`chunk($callback, $chunkSize = 10)` 按 OFFSET 分页读取，每次回调接收一条记录，不是一个数组块。各页沿用入口处从发起实体取得的查询配置。请提供稳定排序；遍历中删除记录或修改筛选条件可能改变后续页的偏移，不适合需要稳定游标的迁移任务。 `chunk()` 不主动请求总数统计，按公开查询回调处理前的原始页条数判断是否继续；调用前显式开启的总数统计选项仍保留。
 
 `$chunkSize` 必须大于 0。回调返回严格的 `false` 时立即停止，不再交付本批剩余记录或查询后续批次；没有返回值或返回其他值时继续。`chunk()` 本身不返回累计处理条数。
 

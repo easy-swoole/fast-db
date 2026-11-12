@@ -23,8 +23,12 @@ final class RelationPreloader
         // 各关联可选用不同的库，结束后恢复调用者进入预加载前的选择。
         $connectionToRestore = $db->selectConnection();
         try {
-            $groups = $this->collectPlans($source, $parents, $rows, $relations, $asArray, $connectionName, $hiddenFields);
-            return $this->attachResults($parents, $groups, $asArray, $execute);
+            return $this->attachResults(
+                $parents,
+                $this->collectPlans($source, $parents, $rows, $relations, $asArray, $connectionName, $hiddenFields),
+                $asArray,
+                $execute
+            );
         } finally {
             $db->selectConnection($connectionToRestore);
         }
@@ -103,7 +107,10 @@ final class RelationPreloader
     private function attachResults(array $parentResults, array $groups, bool $returnAsArray, callable $execute): array
     {
         $db = FastDb::getInstance();
-        foreach ($groups as $group) {
+        // 只遍历分组键，避免遍历期间 PHP 保留整份分组数据，便于回填后释放每组的缓存查询和结果行。
+        foreach (array_keys($groups) as $groupKey) {
+            $group = $groups[$groupKey];
+            unset($groups[$groupKey]);
             $batchPlan = $group['batchPlan'];
             $rowsByParentKey = $this->fetch($batchPlan, $group['parentKeyValues'], $execute);
             foreach ($group['parentEntries'] as $parentEntry) {
@@ -119,6 +126,7 @@ final class RelationPreloader
                     );
                 }
             }
+            unset($group, $parentEntry, $rowsByParentKey, $matchedRows);
         }
         return $parentResults;
     }

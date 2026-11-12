@@ -10,14 +10,13 @@ class Query
 {
     private ?QueryBuilder $queryBuilder = null;
 
-    // SQL 条件由 QueryBuilder 管理，输出筛选规则单独保存。
-    private FieldSelection $selection;
+    // 普通 SQL 查询不设置字段选项，首次设置时再创建筛选配置。
+    private ?FieldSelection $selection = null;
     private array $relations = [];
 
     public function __construct(
         private readonly AbstractEntity $entity
     ){
-        $this->selection = new FieldSelection();
     }
 
     /** 字段输出配置不需要 SQL 构造器，首次添加 SQL 条件或显式访问时再创建。 */
@@ -34,13 +33,14 @@ class Query
 
     function persistFieldLimit(bool $persistFieldLimit = true):Query
     {
+        $this->selection ??= new FieldSelection();
         $this->selection->persistFieldLimit = $persistFieldLimit;
         return $this;
     }
 
     function isPersistFieldLimit():bool
     {
-        return $this->selection->persistFieldLimit;
+        return $this->selection?->persistFieldLimit ?? false;
     }
 
     function page(?int $page,bool $withTotalCount = false,int $pageSize = 10):Query
@@ -59,6 +59,7 @@ class Query
 
     function fields(?array $fields = null,bool $returnAsArray = false):Query
     {
+        $this->selection ??= new FieldSelection();
         $this->selection->fields = [
             'fields'=>$fields,
             'returnAsArray'=>$returnAsArray
@@ -68,8 +69,9 @@ class Query
 
     function returnAsArray():Query
     {
-        $this->selection->fields ??= ['fields'=>null];
-        $this->selection->fields['returnAsArray'] = true;
+        $selection = $this->selection ??= new FieldSelection();
+        $selection->fields ??= ['fields'=>null];
+        $selection->fields['returnAsArray'] = true;
         return $this;
     }
 
@@ -78,24 +80,27 @@ class Query
         if(is_string($hideFields)){
             $hideFields = [$hideFields];
         }
+        $this->selection ??= new FieldSelection();
         $this->selection->hideFields = $hideFields;
         return $this;
     }
 
     function getHideFields():?array
     {
-        return $this->selection->hideFields;
+        return $this->selection?->hideFields;
     }
 
     function getFields():?array
     {
-        return $this->selection->fields;
+        return $this->selection?->fields;
     }
 
     /** @internal 输出与写入共用字段白名单，隐藏字段仅作用于输出。 */
     public function filterProperties(array $properties, bool $forOutput = false): array
     {
-        $properties = $this->selection->filterProperties($properties, $forOutput);
+        if ($this->selection !== null) {
+            $properties = $this->selection->filterProperties($properties, $forOutput);
+        }
         if (!$forOutput && $this->queryBuilder !== null) {
             // 写入先合并底层字段白名单，再转换实际参与 SQL 的字段。
             $fields = $this->queryBuilder->getField();
@@ -184,7 +189,7 @@ class Query
     public function withoutSqlConditions(): Query
     {
         $copy = new Query($this->entity);
-        $copy->selection = clone $this->selection;
+        $copy->selection = $this->selection === null ? null : clone $this->selection;
         return $copy;
     }
 
@@ -193,7 +198,7 @@ class Query
     {
         $copy = new Query($entity);
         $copy->queryBuilder = $this->queryBuilder === null ? null : clone $this->queryBuilder;
-        $copy->selection = clone $this->selection;
+        $copy->selection = $this->selection === null ? null : clone $this->selection;
         $copy->relations = $this->relations;
         return $copy;
     }
@@ -202,6 +207,8 @@ class Query
     {
         // 查询条件和输出配置分别复制，后续修改不影响原查询。
         $this->queryBuilder = $this->queryBuilder === null ? null : clone $this->queryBuilder;
-        $this->selection = clone $this->selection;
+        if ($this->selection !== null) {
+            $this->selection = clone $this->selection;
+        }
     }
 }

@@ -47,6 +47,18 @@ final class DefaultValueTest extends TestCase
         $this->assertSame('2026-11-09 12:34:56.123456', $second->createdAt->format('Y-m-d H:i:s.u'));
         $this->assertTrue($second->update());
     }
+
+    public function testDefaultsUseTheSameComparisonAsLaterChanges(): void
+    {
+        $entity = new ComparisonDefaultEntity();
+        $this->assertSame(0, $entity->score);
+        $this->assertFalse($entity->hasChange());
+        $this->assertSame([], $entity->getChanges());
+
+        $entity->score = 1;
+        $entity->labels->append('changed');
+        $this->assertSame(['score' => 1, 'labels' => $entity->labels], $entity->getChanges());
+    }
 }
 
 class MutableDefaultEntity extends AbstractEntity
@@ -75,4 +87,15 @@ class DateTimeDefaultEntity extends AbstractEntity
     {
         return 'datetime_defaults';
     }
+}
+
+class ComparisonDefaultEntity extends AbstractEntity
+{
+    #[Property(defaultValue: '0')]
+    public int $score;
+
+    #[Property(defaultValue: new ConvertList([]))]
+    public ConvertList $labels;
+
+    public function tableName(): string { return 'comparison_defaults'; }
 }
