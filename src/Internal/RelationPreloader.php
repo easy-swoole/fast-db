@@ -38,8 +38,13 @@ final class RelationPreloader
         $position = 0;
         $class = $source::class;
         foreach ($rows as $row) {
-            // 数组输出也需要实例配置读取父字段，临时模型不进入返回结果。
-            $parent = $asArray ? new $class($row) : $parents[$position];
+            if ($asArray) {
+                // 临时父模型的初始化和字段转换沿用父查询实际连接。
+                $db->selectConnection($connectionName);
+                $parent = new $class($row);
+            } else {
+                $parent = $parents[$position];
+            }
             foreach ($relations as $method) {
                 $db->selectConnection($connectionName);
                 if ($asArray && array_key_exists($method, $parents[$position])) {

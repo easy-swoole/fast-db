@@ -9,6 +9,7 @@ use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\AbstractInterface\ConvertList;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Attributes\Hook\Call;
+use EasySwoole\FastDb\Attributes\Hook\OnInitialize;
 use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\Beans\Query;
@@ -294,6 +295,25 @@ final class RelationPreloadTest extends TestCase
         $this->db->selectConnection('default');
         $this->assertSame([11, 12], $this->childIds($parents[0]));
         $this->assertCount(2, $this->connection->queries);
+    }
+
+    public function testArrayPreloadInitializesTemporaryParentsOnTheParentQueryConnection(): void
+    {
+        $owner = new PreloadFixtureInitializingParent();
+        PreloadFixtureInitializingParent::$connections = [];
+        $this->db->setOnQuery(function (QueryResult $result): void {
+            if (str_contains($result->getQueryBuilder()?->getLastPrepareQuery() ?? '', 'preload_parents')) {
+                $this->db->selectConnection('observer');
+            }
+        });
+
+        $owner->queryLimit()->orderBy('id', 'ASC')->returnAsArray()->withRelations('children');
+        $parents = $owner->all()->list();
+
+        $this->assertSame(['default', 'default', 'default'], PreloadFixtureInitializingParent::$connections);
+        $this->assertSame([11, 12], array_column($parents[0]['children'], 'id'));
+        $this->assertCount(2, $this->connection->queries);
+        $this->assertSame('observer', $this->db->selectConnection());
     }
 
     #[DataProvider('parentOutputModes')]
@@ -632,6 +652,17 @@ class PreloadFixtureParent extends AbstractEntity
     public function constructorChildren() { return $this->relateMany(); }
 
 
+}
+
+#[OnInitialize('recordConnection')]
+class PreloadFixtureInitializingParent extends PreloadFixtureParent
+{
+    public static array $connections = [];
+
+    protected function recordConnection(): void
+    {
+        self::$connections[] = FastDb::getInstance()->selectConnection();
+    }
 }
 
 class PreloadFixtureCollisionParent extends PreloadFixtureParent

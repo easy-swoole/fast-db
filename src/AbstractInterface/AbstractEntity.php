@@ -604,7 +604,8 @@ abstract class AbstractEntity implements \JsonSerializable
         $connectionName = null;
         $completed = $onComplete;
         if ($relations !== []) {
-            // 在公开回调前记录实际查询连接，预加载沿用该连接。
+            // 公开回调可能切换当前连接或修改结果对象，先保存父查询实际使用的连接名。
+            // 预加载在该连接上初始化临时父模型，各关联再按自身配置选库。
             $completed = static function (QueryResult $result, Connection $connection) use (&$connectionName, $onComplete): void {
                 $connectionName = $result->getConnectionName();
                 if ($onComplete !== null) { $onComplete($result, $connection); }
