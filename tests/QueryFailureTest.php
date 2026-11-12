@@ -67,8 +67,11 @@ final class QueryFailureTest extends TestCase
     public function testEntityCallbackAlsoPreservesOriginalFailure(): void
     {
         $failure = new \RuntimeException('original SQL failure');
-        $db = $this->createStub(FastDb::class);
-        $db->method('query')->willThrowException($failure);
+        $client = $this->createStub(Connection::class);
+        $client->method('query')->willThrowException($failure);
+        $db = new FastDb();
+        (new \ReflectionProperty(FastDb::class, 'currentConnection'))
+            ->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $client]]);
         $instance = new \ReflectionProperty(FastDb::class, 'instance');
         $original = $instance->getValue();
         $instance->setValue(null, $db);
@@ -78,7 +81,7 @@ final class QueryFailureTest extends TestCase
             $user->setOnQuery(function (QueryResult $result) use (&$called, $failure): void {
                 $called = true;
                 $this->assertNull($result->getResult());
-            $this->assertSame($failure, $result->getException());
+                $this->assertSame($failure, $result->getException());
                 $this->assertInstanceOf(QueryBuilder::class, $result->getQueryBuilder());
                 throw new \RuntimeException('entity logger failure');
             });

@@ -93,7 +93,7 @@ final class UpdateBaselineTest extends TestCase
 
         $this->assertTrue($user->update());
         $this->assertSame([], $user->getChanges());
-        $this->assertStringContainsString("`score` = '2'", $this->queries[1]);
+        $this->assertStringContainsString('`score` = 2', $this->queries[1]);
     }
 
     public function testBuilderFieldsWithNoChangedColumnSkipSql(): void

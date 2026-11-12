@@ -100,7 +100,7 @@ final class PaginationObserverTest extends TestCase
                 });
             });
             $this->queuePage($peer); $this->textRows($peer, 'count', 37);
-            $result = $db->query($query, timeout: 0.2);
+            $result = $db->query($this->page());
             $this->assertSame(37, $db->getTotalCount($result));
             $this->assertSame(['original-main', 'replacement-count'], $events);
             $this->assertNextQuerySucceeds($db, $peer);
