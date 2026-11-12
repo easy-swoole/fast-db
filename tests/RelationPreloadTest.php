@@ -297,7 +297,8 @@ final class RelationPreloadTest extends TestCase
         $this->assertCount(2, $this->connection->queries);
     }
 
-    public function testArrayPreloadInitializesTemporaryParentsOnTheParentQueryConnection(): void
+    #[DataProvider('parentOutputModes')]
+    public function testPreloadInitializesParentsOnTheParentQueryConnection(bool $arrays): void
     {
         $owner = new PreloadFixtureInitializingParent();
         PreloadFixtureInitializingParent::$connections = [];
@@ -307,13 +308,15 @@ final class RelationPreloadTest extends TestCase
             }
         });
 
-        $owner->queryLimit()->orderBy('id', 'ASC')->returnAsArray()->withRelations('children');
+        $owner->queryLimit()->orderBy('id', 'ASC')->withRelations('children');
+        if ($arrays) { $owner->queryLimit()->returnAsArray(); }
         $parents = $owner->all()->list();
 
         $this->assertSame(['default', 'default', 'default'], PreloadFixtureInitializingParent::$connections);
-        $this->assertSame([11, 12], array_column($parents[0]['children'], 'id'));
-        $this->assertCount(2, $this->connection->queries);
         $this->assertSame('observer', $this->db->selectConnection());
+        $this->db->selectConnection('default');
+        $this->assertSame([11, 12], $arrays ? array_column($parents[0]['children'], 'id') : $this->childIds($parents[0]));
+        $this->assertCount(2, $this->connection->queries);
     }
 
     #[DataProvider('parentOutputModes')]

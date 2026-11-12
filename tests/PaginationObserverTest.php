@@ -38,11 +38,13 @@ final class PaginationObserverTest extends TestCase
             $this->queuePage($peer);
             $this->textRows($peer, 'count', 37);
             $this->textRows($peer, 'probe', 1);
-            $result = $db->query($page);
+            $result = $db->query($page, onQuery: static function (QueryResult $result) use (&$events): void {
+                $events[] = $result->getRawSql() === null ? 'local-main' : 'local-count';
+            });
             $this->assertSame([['id' => 7]], $result->getResult());
             $this->assertSame($sql, $result->getQueryBuilder()->getLastPrepareQuery());
             $this->assertSame(37, $db->getTotalCount($result));
-            $this->assertSame(['global-main', 'global-probe', 'global-count'], $events);
+            $this->assertSame(['global-main', 'global-probe', 'global-count', 'local-main'], $events);
             $this->assertSame([null, 'SELECT FOUND_ROWS() as count', 'SELECT 1 AS probe'], array_column($db->getQueryStack(), 'rawQuery'));
             $commands = $this->commands($peer, 5);
             $this->assertSame("\x03SELECT FOUND_ROWS() as count", $commands[3]);

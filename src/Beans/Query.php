@@ -95,7 +95,15 @@ class Query
     /** @internal 输出与写入共用字段白名单，隐藏字段仅作用于输出。 */
     public function filterProperties(array $properties, bool $forOutput = false): array
     {
-        return $this->selection->filterProperties($properties, $forOutput);
+        $properties = $this->selection->filterProperties($properties, $forOutput);
+        if (!$forOutput && $this->queryBuilder !== null) {
+            // 写入先合并底层字段白名单，再转换实际参与 SQL 的字段。
+            $fields = $this->queryBuilder->getField();
+            if ($fields !== ['*']) {
+                return array_filter($properties, static fn ($field) => in_array($field, $fields, true), ARRAY_FILTER_USE_KEY);
+            }
+        }
+        return $properties;
     }
 
     /** 声明本次查询需要批量加载的关系方法；空数组清除声明。 */

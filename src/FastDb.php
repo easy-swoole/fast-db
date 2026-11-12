@@ -176,9 +176,10 @@ class FastDb
         return ($connection ?? $this->currentConnection())?->isInTransaction() ?? false;
     }
 
-    /** 完成回调直接属于本次执行；指定连接不会改变回调可见的选库。 */
+    /** 完成回调直接属于本次执行；总数回调在主查询回调成功结束后通知。 */
     public function query(QueryBuilder|callable $queryBuilder, ?float $timeout = null,
-        ?callable $onComplete = null, ?string $connection = null, ?callable $onQuery = null): QueryResult
+        ?callable $onComplete = null, ?string $connection = null, ?callable $onQuery = null,
+        ?callable $onTotalQuery = null): QueryResult
     {
         if ($onQuery === null) {
             $client = $this->getClient($connection);
@@ -205,7 +206,7 @@ class FastDb
         return $this->execute($client, static function () use ($client, $builder, $build, $timeout) {
             if ($build !== null) { $build($builder); }
             return $client->query($builder, $timeout);
-        }, $builder, onComplete: $onComplete, countTimeout: $timeout, onQuery: $onQuery);
+        }, $builder, onComplete: $onComplete, totalQueryTimeout: $timeout, onQuery: $onQuery, onTotalQuery: $onTotalQuery);
     }
 
     public function rawQuery(string $sql, ?float $timeout = null, ?callable $onComplete = null,
@@ -215,47 +216,77 @@ class FastDb
         return $this->execute($client, static fn () => $client->rawQuery($sql, $timeout), null, $sql, $onComplete);
     }
 
+    /**
+     * 执行主 SQL 和所需的总数 SQL，先记查询栈，再按顺序通知。
+     * 依次执行完成回调、全局观察回调、本次主查询回调和本次总数回调。
+     */
     private function execute(Connection $client, callable $operation, ?QueryBuilder $builder = null,
-        ?string $sql = null, ?callable $onComplete = null, ?float $countTimeout = null,
-        ?callable $onQuery = null): QueryResult
+        ?string $sql = null, ?callable $onComplete = null, ?float $totalQueryTimeout = null,
+        ?callable $onQuery = null, ?callable $onTotalQuery = null): QueryResult
     {
-        $result = $this->executeResult($client, $operation, $builder, $sql);
-        $error = $result->getException();
-        $count = null;
-        if ($error === null && $builder !== null
-            && in_array('SQL_CALC_FOUND_ROWS', $result->getQueryBuilder()->getLastQueryOptions(), true)) {
-            // 必须先取得总数，再允许任何完成回调或观察回调执行其他 SQL。
-            $count = $this->executeResult($client, static fn () => $client->rawQuery('SELECT FOUND_ROWS() as count', $countTimeout),
-                null, 'SELECT FOUND_ROWS() as count');
-            $error = $count->getException();
-            if ($error === null) { $result->setTotalResult($count); }
+        $queryResult = $this->executeResult($client, $operation, $builder, $sql);
+        $firstError = $queryResult->getException();
+        $totalQueryResult = null;
+        if ($firstError === null && $builder !== null
+            && in_array('SQL_CALC_FOUND_ROWS', $queryResult->getQueryBuilder()->getLastQueryOptions(), true)) {
+            // 同一连接上的其他查询可能覆盖 FOUND_ROWS()，所以要赶在任何回调之前取得总数。
+            $totalSql = 'SELECT FOUND_ROWS() as count';
+            $totalQueryResult = $this->executeResult(
+                $client, static fn () => $client->rawQuery($totalSql, $totalQueryTimeout), builder: null, sql: $totalSql
+            );
+            $firstError = $totalQueryResult->getException();
+            if ($firstError === null) {
+                $queryResult->setTotalResult($totalQueryResult);
+            }
         }
-        // 先记录已执行的 SQL，完成回调里的查询随后入栈。
-        $this->diagnostics?->record($result);
-        if ($count !== null) { $this->diagnostics?->record($count); }
+        // 先记录已经执行的 SQL，回调里发起的查询才能按实际执行顺序入栈。
+        $this->diagnostics?->record($queryResult);
+        if ($totalQueryResult !== null) {
+            $this->diagnostics?->record($totalQueryResult);
+        }
+
+        // 完成回调先处理内部状态，例如接受写入基准，供观察回调中的后续操作使用。
         if ($onComplete !== null) {
-            try { $onComplete($result, $client); }
-            catch (\Throwable $callbackError) { $error ??= $callbackError; }
+            try {
+                $onComplete($queryResult, $client);
+            } catch (\Throwable $callbackError) {
+                $firstError ??= $callbackError;
+            }
         }
         try {
-            // 回调中替换观察者，仍适用于后续通知。
-            $this->diagnostics?->notify($result);
-            if ($count !== null) { $this->diagnostics?->notify($count); }
+            // 每次通知读取当前全局观察回调，主查询回调可为后续总数通知更换观察者。
+            $this->diagnostics?->notify($queryResult);
+            if ($totalQueryResult !== null) {
+                $this->diagnostics?->notify($totalQueryResult);
+            }
         } catch (\Throwable $callbackError) {
-            $error ??= $callbackError;
+            $firstError ??= $callbackError;
         }
-        return $this->finishQuery($result, $error, $onQuery);
+        return $this->finishQuery($queryResult, $firstError, $onQuery, $onTotalQuery);
     }
 
-    /** 全局通知之后执行本次回调，执行异常优先于回调异常。 */
-    private function finishQuery(QueryResult $result, ?\Throwable $error, ?callable $onQuery): QueryResult
+    /** 主查询回调也接收失败结果，之前的异常优先向外抛出。 */
+    private function finishQuery(QueryResult $queryResult, ?\Throwable $firstError, ?callable $onQuery,
+        ?callable $onTotalQuery = null): QueryResult
     {
         if ($onQuery !== null) {
-            try { $onQuery($result); }
-            catch (\Throwable $callbackError) { $error ??= $callbackError; }
+            try {
+                $onQuery($queryResult);
+            } catch (\Throwable $callbackError) {
+                $firstError ??= $callbackError;
+            }
         }
-        if ($error !== null) { throw $error; }
-        return $result;
+        if ($firstError !== null) {
+            throw $firstError;
+        }
+        if ($onTotalQuery !== null) {
+            // 前面的回调可以修改查询结果，总数通知沿用回调处理后的结果。
+            $totalQueryResult = $queryResult->getTotalResult();
+            if ($totalQueryResult !== null) {
+                $onTotalQuery($totalQueryResult);
+            }
+        }
+        return $queryResult;
     }
 
     /** 驱动返回后立即保存本次结果；异常只在此记录，统一由调用层通知后抛出。 */

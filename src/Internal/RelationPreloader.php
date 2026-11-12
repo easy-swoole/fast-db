@@ -20,98 +20,113 @@ final class RelationPreloader
     {
         if ($parents === []) { return $parents; }
         $db = FastDb::getInstance();
-        $selected = $db->selectConnection();
+        // 各关联可选用不同的库，结束后恢复调用者进入预加载前的选择。
+        $connectionToRestore = $db->selectConnection();
         try {
             $groups = $this->collectPlans($source, $parents, $rows, $relations, $asArray, $connectionName, $hiddenFields);
             return $this->attachResults($parents, $groups, $asArray, $execute);
         } finally {
-            $db->selectConnection($selected);
+            $db->selectConnection($connectionToRestore);
         }
     }
 
     /** 逐父解析显式配置，按实际 SQL 和参数合并可共享的查询。 */
-    private function collectPlans(AbstractEntity $source, array $parents, array $rows, array $relations,
-        bool $asArray, string $connectionName, array $hiddenFields): array
+    private function collectPlans(AbstractEntity $source, array $parentResults, array $parentRows, array $relationMethods,
+        bool $returnAsArray, string $parentQueryConnection, array $hiddenFields): array
     {
         $db = FastDb::getInstance();
         $groups = [];
-        $position = 0;
-        $class = $source::class;
-        foreach ($rows as $row) {
-            if ($asArray) {
+        $parentPosition = 0;
+        $parentClass = $source::class;
+        foreach ($parentRows as $parentRow) {
+            if ($returnAsArray) {
                 // 临时父模型的初始化和字段转换沿用父查询实际连接。
-                $db->selectConnection($connectionName);
-                $parent = new $class($row);
+                $db->selectConnection($parentQueryConnection);
+                $parent = new $parentClass($parentRow);
             } else {
-                $parent = $parents[$position];
+                $parent = $parentResults[$parentPosition];
             }
-            foreach ($relations as $method) {
-                $db->selectConnection($connectionName);
-                if ($asArray && array_key_exists($method, $parents[$position])) {
-                    throw new RuntimeError('Relation name conflicts with a selected field: ' . $method);
+            foreach ($relationMethods as $relationMethod) {
+                // 上一个关联的配置可能切库，每个关联都从父查询的连接开始配置。
+                $db->selectConnection($parentQueryConnection);
+                if ($returnAsArray && array_key_exists($relationMethod, $parentResults[$parentPosition])) {
+                    throw new RuntimeError('Relation name conflicts with a selected field: ' . $relationMethod);
                 }
-                $plan = $parent->__relationPlan($method);
-                $self = $plan->relate->selfProperty;
-                if (!array_key_exists($self, $row)) {
-                    throw new RuntimeError('Preloading requires the parent relation field to be selected under its original name: ' . $self);
+                $relationPlan = $parent->__relationPlan($relationMethod);
+                $parentField = $relationPlan->relate->selfProperty;
+                if (!array_key_exists($parentField, $parentRow)) {
+                    throw new RuntimeError('Preloading requires the parent relation field to be selected under its original name: ' . $parentField);
                 }
-                if (!$asArray && in_array($self, $hiddenFields, true)) {
-                    throw new RuntimeError('An entity relation field cannot be hidden while preloading: ' . $self);
+                if (!$returnAsArray && in_array($parentField, $hiddenFields, true)) {
+                    throw new RuntimeError('An entity relation field cannot be hidden while preloading: ' . $parentField);
                 }
-                $value = $plan->selfValue;
-                if ($value !== null && !is_int($value) && !is_string($value)) {
+                $parentKeyValue = $relationPlan->selfValue;
+                if ($parentKeyValue !== null && !is_int($parentKeyValue) && !is_string($parentKeyValue)) {
                     throw new RuntimeError('Parent relation fields must contain an integer, string or null');
                 }
-                $db->selectConnection($plan->connectionName);
-                $table = $plan->tableName;
-                $builder = $plan->builder;
-                $columns = $plan->columns;
-                $preview = (clone $builder)->get($table, null, $columns);
-                // 数组结果直接附加关联数据，不需要生成用于实体缓存匹配的查询。
-                $lookup = $asArray ? null : RelationPlan::buildLookup(clone $builder, $table, $plan->relate,
-                    $value, $columns);
-                $key = hash('sha256', serialize([$plan->connectionName, $plan->relate->type,
-                    $plan->relate->targetEntity, $plan->relate->targetProperty, $table, $plan->returnAsArray,
-                    $preview->getLastPrepareQuery(), $preview->getLastBindParams(), $preview->getLastQueryOptions()]));
-                $groups[$key][] = ['position' => $position, 'method' => $method, 'plan' => $plan, 'lookup' => $lookup];
+                $db->selectConnection($relationPlan->connectionName);
+                $tableName = $relationPlan->tableName;
+                $builder = $relationPlan->builder;
+                $columns = $relationPlan->columns;
+                // 先生成不带具体父键的 SQL，配置和参数相同的父记录可共用一条批量查询。
+                $previewQuery = (clone $builder)->get($tableName, null, $columns);
+                $cacheLookup = null;
+                if (!$returnAsArray) {
+                    // 实体 getter 按单个父键匹配缓存，因此要保留该父对象自己的查询。
+                    $cacheLookup = RelationPlan::buildLookup(
+                        clone $builder, $tableName, $relationPlan->relate, $parentKeyValue, $columns
+                    );
+                }
+                $groupKey = hash('sha256', serialize([
+                    $relationPlan->connectionName, $relationPlan->relate->type, $relationPlan->relate->targetEntity,
+                    $relationPlan->relate->targetProperty, $tableName, $relationPlan->returnAsArray,
+                    $previewQuery->getLastPrepareQuery(), $previewQuery->getLastBindParams(), $previewQuery->getLastQueryOptions(),
+                ]));
+                // 保留键值的类型，避免 PHP 数组键把字符串 '1' 和整数 1 当作同一个键。
+                $serializedParentKey = serialize($parentKeyValue);
+                $groups[$groupKey]['batchPlan'] ??= $relationPlan;
+                $groups[$groupKey]['parentKeyValues'][$serializedParentKey] = $parentKeyValue;
+                $groups[$groupKey]['parentEntries'][] = [
+                    'parentPosition' => $parentPosition,
+                    'relationMethod' => $relationMethod,
+                    'serializedParentKey' => $serializedParentKey,
+                    'cacheLookup' => $cacheLookup,
+                ];
             }
-            $position++;
+            $parentPosition++;
             unset($parent);
         }
         return $groups;
     }
 
     /** 每组只执行批量查询，再按原父记录位置回填独立的关联结果。 */
-    private function attachResults(array $parents, array $groups, bool $asArray, callable $execute): array
+    private function attachResults(array $parentResults, array $groups, bool $returnAsArray, callable $execute): array
     {
         $db = FastDb::getInstance();
-        foreach ($groups as $entries) {
-            $matches = $this->fetch($entries, $execute);
-            foreach ($entries as $entry) {
-                $plan = $entry['plan'];
-                $matched = $matches[serialize($plan->selfValue)] ?? [];
-                $db->selectConnection($plan->connectionName);
-                $data = $this->materialize($plan, $matched, $asArray);
-                if ($asArray) {
-                    $parents[$entry['position']][$entry['method']] = $data;
+        foreach ($groups as $group) {
+            $batchPlan = $group['batchPlan'];
+            $rowsByParentKey = $this->fetch($batchPlan, $group['parentKeyValues'], $execute);
+            foreach ($group['parentEntries'] as $parentEntry) {
+                $parentPosition = $parentEntry['parentPosition'];
+                $matchedRows = $rowsByParentKey[$parentEntry['serializedParentKey']] ?? [];
+                $db->selectConnection($batchPlan->connectionName);
+                $relationData = $this->materialize($batchPlan, $matchedRows, $returnAsArray);
+                if ($returnAsArray) {
+                    $parentResults[$parentPosition][$parentEntry['relationMethod']] = $relationData;
                 } else {
-                    $parents[$entry['position']]->__setRelationData($plan, $entry['lookup'], $plan->connectionName, $data);
+                    $parentResults[$parentPosition]->__setRelationData(
+                        $batchPlan, $parentEntry['cacheLookup'], $batchPlan->connectionName, $relationData
+                    );
                 }
             }
         }
-        return $parents;
+        return $parentResults;
     }
 
     /** 由数据库匹配父键，避免 PHP 字符串分桶改变数据库的类型、collation 或 NULL 比较。 */
-    private function fetch(array $entries, callable $execute): array
+    private function fetch(RelationPlan $plan, array $values, callable $execute): array
     {
         $db = FastDb::getInstance();
-        $plan = $entries[0]['plan'];
-        $values = [];
-        foreach ($entries as $entry) {
-            $value = $entry['plan']->selfValue;
-            $values[serialize($value)] = $value;
-        }
         $matches = [];
         foreach (array_chunk($values, self::BATCH_SIZE, true) as $batch) {
             // 前一批的查询回调可能已选中其他连接。

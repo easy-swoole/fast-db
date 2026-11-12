@@ -331,6 +331,31 @@ final class EntityQueryBoundaryTest extends TestCase
         if ($observer === 'entity') { $this->assertSame($total ? 1 : 0, $entityCountEvents); }
         $this->assertNull($entity->queryLimit()->getFields());
     }
+
+    public static function paginatedLists(): array { return ['entity' => [false], 'relation' => [true]]; }
+
+    #[DataProvider('paginatedLists')]
+    public function testTotalNotificationUsesTheEntityObserverInstalledByTheMainQuery(bool $relation): void
+    {
+        $entity = new QueryBoundaryRecord(['id' => 'owner', 'grp' => 1]);
+        $entity->queryLimit()->limit(1, true);
+        $events = [];
+        $this->db->setOnQuery(static function (QueryResult $result) use (&$events): void {
+            $events[] = $result->getRawSql() === null ? 'global-main' : 'global-total';
+        });
+        $entity->setOnQuery(function (QueryResult $result) use ($entity, &$events): void {
+            $events[] = 'entity-main';
+            $this->assertNull($result->getRawSql());
+            $entity->setOnQuery(function (QueryResult $total) use (&$events): void {
+                $events[] = 'entity-total';
+                $this->assertSame('SELECT FOUND_ROWS() as count', $total->getRawSql());
+            });
+        });
+
+        $list = $relation ? $entity->related() : $entity->all();
+        $this->assertSame($relation ? 2 : 3, $list->totalCount());
+        $this->assertSame(['global-main', 'global-total', 'entity-main', 'entity-total'], $events);
+    }
 }
 
 class QueryBoundaryRecord extends AbstractEntity

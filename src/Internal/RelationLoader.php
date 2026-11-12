@@ -26,7 +26,7 @@ final class RelationLoader
 
     /** 两种关联共用构建、缓存查找和写回流程，结果组装分别处理。 */
     public function load(AbstractEntity $entity, Relate $relate, ?string $tableName,
-        callable $execute, callable $beforeOneHydration, callable $readTotal): mixed
+        callable $execute, callable $beforeOneHydration): mixed
     {
         $target = new $relate->targetEntity();
         $selection = $entity->queryLimit();
@@ -61,8 +61,7 @@ final class RelationLoader
             foreach ($rows as $row) {
                 $items[] = $returnAsArray ? $row : new $relate->targetEntity($row);
             }
-            $total = $readTotal($result);
-            $data = new ListResult($items, $total);
+            $data = new ListResult($items, $result->getTotalCount());
         }
         if ($relate->cacheResult) { $this->cache[$key] = $data; }
         return $data;

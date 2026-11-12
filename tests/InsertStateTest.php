@@ -153,14 +153,19 @@ final class InsertStateTest extends TestCase
         } finally { date_default_timezone_set($timezone); }
     }
 
-    public function testFilteredInsertAcceptsOnlyWrittenFieldsAndTheGeneratedPrimaryKey(): void
+    public static function writeFieldLimits(): array { return ['entity' => [false], 'builder' => [true]]; }
+
+    #[DataProvider('writeFieldLimits')]
+    public function testFilteredInsertAcceptsOnlyWrittenFieldsAndTheGeneratedPrimaryKey(bool $builderFields): void
     {
         $entity = new InsertStateRecord(['name' => 'before', 'score' => 1]);
         $entity->name = 'inserted'; $entity->score = 9;
-        $entity->queryLimit()->fields(['name']);
+        if ($builderFields) { $entity->queryLimit()->__getQueryBuilder()->fields(['name']); }
+        else { $entity->queryLimit()->fields(['name']); }
         $this->assertTrue($entity->insert());
         $this->assertSame(1, $entity->id);
         $this->assertSame(0, $this->client->row()['score']);
+        $this->assertSame(['score' => 9], $entity->getChanges());
         $entity->queryLimit()->fields(null);
         $this->assertTrue($entity->update());
         $this->assertSame([9, 1], $this->client->queries[1]['parameters']);
@@ -187,7 +192,8 @@ final class InsertStateTest extends TestCase
         $this->assertCount(1, $this->client->queries);
     }
 
-    public function testExcludedConvertersCannotBlockOutputInsertOrPartialUpdate(): void
+    #[DataProvider('writeFieldLimits')]
+    public function testExcludedConvertersCannotBlockOutputInsertOrPartialUpdate(bool $builderFields): void
     {
         $entity = new InsertStateRecord(['name' => 'before', 'payload' => '[1]', 'items' => '[2]']);
         $entity->payload = [3]; $entity->items->append(4);
@@ -197,9 +203,11 @@ final class InsertStateTest extends TestCase
         $this->assertSame(['id' => null, 'name' => 'before', 'score' => null, 'moment' => null], $entity->toArray());
         $entity->queryLimit()->hideFields([])->fields(['name']);
         $this->assertSame(['name' => 'before'], $entity->toArray());
+        if ($builderFields) { $entity->queryLimit()->fields(null)->__getQueryBuilder()->fields(['name']); }
         $this->assertTrue($entity->insert());
         $entity->name = 'after';
-        $entity->queryLimit()->fields(['name']);
+        if ($builderFields) { $entity->queryLimit()->__getQueryBuilder()->fields(['name']); }
+        else { $entity->queryLimit()->fields(['name']); }
         $this->assertTrue($entity->update());
         $this->assertSame(0, InsertStateRecord::$encodeCalls);
         $this->assertSame(0, InsertStateList::$valueCalls);

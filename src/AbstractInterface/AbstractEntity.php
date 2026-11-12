@@ -332,15 +332,7 @@ abstract class AbstractEntity implements \JsonSerializable
                 return true;
             }
             $query = $this->writeQuery($entityRef, 'update');
-            $tableName = $this->tableName();
-            $writeFields = $query->getField();
-            if ($writeFields !== ['*']) {
-                // 底层构建器的白名单也会限制 UPDATE，比较基准以实际提交的列为准。
-                $data = array_filter($data, static fn ($field) => in_array($field, $writeFields), ARRAY_FILTER_USE_KEY);
-                if ($data === []) { return true; }
-                $compareValues = array_intersect_key($compareValues, $data);
-            }
-            $query->update($tableName, $data);
+            $query->update($this->tableName(), $data);
             // 按 SQL 成功顺序接受基准，再通知观察回调；重入保存可据此写回原值。
             $ret = static::callQuery($query,$this->onQuery,
                 function (QueryResult $result) use ($compareValues): void {
@@ -557,7 +549,7 @@ abstract class AbstractEntity implements \JsonSerializable
         }
     }
 
-    /** 列表与两种分块共用查询、总数通知和结果组装；查询状态由调用入口清理。 */
+    /** 列表与两种分块共用查询和结果组装；查询状态由调用入口清理。 */
     private function selectRows(Query $selection, bool $selectForUpdate = false, ?callable $onComplete = null): ListResult
     {
         $query = $selection->__getQueryBuilder();
@@ -566,30 +558,34 @@ abstract class AbstractEntity implements \JsonSerializable
         if ($selectForUpdate) { $query->selectForUpdate(); }
         $query->get($this->tableName(), null, $fields['fields'] ?? null);
         $relations = $selection->getRelations();
-        $connectionName = null;
-        $completed = $onComplete;
+        $parentQueryConnection = null;
+        $onQueryComplete = $onComplete;
         if ($relations !== []) {
-            // 公开回调可能切换当前连接或修改结果对象，先保存父查询实际使用的连接名。
-            // 预加载在该连接上初始化临时父模型，各关联再按自身配置选库。
-            $completed = static function (QueryResult $result, Connection $connection) use (&$connectionName, $onComplete): void {
-                $connectionName = $result->getConnectionName();
-                if ($onComplete !== null) { $onComplete($result, $connection); }
+            // 预加载需要知道父数据来自哪个库。公开回调可能切库或修改结果，须在它们执行前记下连接名。
+            $onQueryComplete = static function (QueryResult $result, Connection $connection) use (
+                &$parentQueryConnection, $onComplete
+            ): void {
+                $parentQueryConnection = $result->getConnectionName();
+                if ($onComplete !== null) {
+                    $onComplete($result, $connection);
+                }
             };
         }
-        $result = static::callQuery($query, $this->onQuery, $completed);
-        $total = $this->readTotal($result);
+        $result = static::callQuery($query, $this->onQuery, $onQueryComplete, onTotalQuery: $this->notifyTotalQuery(...));
+        $total = $result->getTotalCount();
         $hideFields = $selection->getHideFields() ?: [];
         $rows = $result->getResult();
-        $list = $this->hydrateRows($rows, $selection, $returnAsArray, $hideFields);
+        $list = $this->hydrateRows($rows, $selection, $returnAsArray, $hideFields, $parentQueryConnection);
         if ($relations !== []) {
             $list = (new RelationPreloader())->load($this, $list, $rows, $relations, $returnAsArray,
-                $connectionName, $hideFields, fn (QueryBuilder $builder) => static::callQuery($builder, $this->onQuery));
+                $parentQueryConnection, $hideFields, fn (QueryBuilder $builder) => static::callQuery($builder, $this->onQuery));
         }
         return new ListResult($list, $total);
     }
 
     /** 实体查询及游标分块共用字段隐藏、转换和输出配置传播。 */
-    private function hydrateRows(mixed $rows, Query $selection, bool $returnAsArray, array $hideFields): array
+    private function hydrateRows(mixed $rows, Query $selection, bool $returnAsArray, array $hideFields,
+        ?string $parentQueryConnection): array
     {
         $list = [];
         if ($returnAsArray && $hideFields === []) {
@@ -598,37 +594,51 @@ abstract class AbstractEntity implements \JsonSerializable
             return $list;
         }
 
-        foreach ($rows as $item) {
-            foreach ($hideFields as $field) {
-                unset($item[$field]);
-            }
-            if ($returnAsArray) {
-                $list[] = $item;
-                continue;
-            }
-
-            // 构造实体时完成字段转换，并将查询结果作为后续更新的比较基准。
-            $entity = new static($item);
-            if ($selection->isPersistFieldLimit()) {
-                $entity->queryLimit()->hideFields($hideFields);
-                $fields = $selection->getFields();
-                if (!empty($fields)) {
-                    $entity->queryLimit()->fields(...$fields);
+        $db = null;
+        $connectionToRestore = null;
+        if ($parentQueryConnection !== null && !$returnAsArray) {
+            $db = FastDb::getInstance();
+            // 父查询的公开回调可能选了其他库，初始化父模型后恢复该选择。
+            $connectionToRestore = $db->selectConnection();
+        }
+        try {
+            foreach ($rows as $item) {
+                foreach ($hideFields as $field) {
+                    unset($item[$field]);
                 }
+                if ($returnAsArray) {
+                    $list[] = $item;
+                    continue;
+                }
+
+                if ($db !== null) {
+                    // 上一条记录的初始化钩子可能切库，每条记录都要重新选回父查询的连接。
+                    $db->selectConnection($parentQueryConnection);
+                }
+                $entity = new static($item);
+                if ($selection->isPersistFieldLimit()) {
+                    $entity->queryLimit()->hideFields($hideFields);
+                    $fields = $selection->getFields();
+                    if (!empty($fields)) {
+                        $entity->queryLimit()->fields(...$fields);
+                    }
+                }
+                $list[] = $entity;
             }
-            $list[] = $entity;
+        } finally {
+            if ($db !== null) {
+                $db->selectConnection($connectionToRestore);
+            }
         }
         return $list;
     }
 
-    /** 使用预取的总数快照，同时保留实体级查询回调对总数查询的通知。 */
-    private function readTotal(QueryResult $result): ?int
+    /** 主查询回调可能替换实体观察者，总数通知使用当时的回调。 */
+    private function notifyTotalQuery(QueryResult $result): void
     {
-        $count = $result->getTotalResult();
-        if ($count !== null && $this->onQuery !== null) {
-            ($this->onQuery)($count);
+        if ($this->onQuery !== null) {
+            ($this->onQuery)($result);
         }
-        return $result->getTotalCount();
     }
 
     private function aggregate(string $aggregate, string|array $cols, string|null $group = null, bool $force = false): int|array|float
@@ -752,8 +762,10 @@ abstract class AbstractEntity implements \JsonSerializable
             }
             $this->relationLoader ??= new RelationLoader();
             $this->configureRelation($relate, $this->queryLimit());
+            $onTotalQuery = $expectedType === RelationType::Many ? $this->notifyTotalQuery(...) : null;
             return $this->relationLoader->load($this, $relate, $tableName,
-                fn ($query) => static::callQuery($query, $this->onQuery), fn () => $this->reset(), fn ($result) => $this->readTotal($result));
+                fn ($query) => static::callQuery($query, $this->onQuery, onTotalQuery: $onTotalQuery),
+                fn () => $this->reset());
         } finally {
             $this->reset();
         }
@@ -772,12 +784,13 @@ abstract class AbstractEntity implements \JsonSerializable
 
     /** 统一执行模型查询，并在成功或异常时通知本次查询回调。 */
     private static function callQuery(QueryBuilder $query,?callable $onQuery = null,?callable $onComplete = null,
-        ?string $connection = null):QueryResult
+        ?string $connection = null, ?callable $onTotalQuery = null):QueryResult
     {
         // 实体只在 SQL 成功后接受基准、读取游标等，通知与异常由执行层处理。
         $complete = $onComplete === null ? null : static function (QueryResult $result, Connection $connection) use ($onComplete): void {
             if ($result->getException() === null) { $onComplete($result, $connection); }
         };
-        return FastDb::getInstance()->query($query, onComplete: $complete, connection: $connection, onQuery: $onQuery);
+        return FastDb::getInstance()->query($query, onComplete: $complete, connection: $connection,
+            onQuery: $onQuery, onTotalQuery: $onTotalQuery);
     }
 }
