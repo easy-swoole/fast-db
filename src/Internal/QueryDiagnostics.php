@@ -67,7 +67,9 @@ final class QueryDiagnostics
             $stack->endTime = $result->getEndTime();
             $stack->duration = $result->getDuration();
             $stack->exception = $result->getException();
-            $stack->query = $result->getQueryBuilder();
+            // 查询结果会交给回调，诊断记录独立保留执行时的 SQL。
+            $builder = $result->getQueryBuilder();
+            $stack->query = $builder === null ? null : clone $builder;
             $stack->rawQuery = $result->getRawSql();
             $this->append($stack);
         }

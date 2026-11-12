@@ -86,7 +86,6 @@ final class RelationPreloader
     {
         $db = FastDb::getInstance();
         foreach ($groups as $entries) {
-            $db->selectConnection($entries[0]['plan']->connectionName);
             $matches = $this->fetch($entries, $execute);
             foreach ($entries as $entry) {
                 $plan = $entry['plan'];
@@ -106,8 +105,8 @@ final class RelationPreloader
     /** 由数据库匹配父键，避免 PHP 字符串分桶改变数据库的类型、collation 或 NULL 比较。 */
     private function fetch(array $entries, callable $execute): array
     {
-        $first = $entries[0];
-        $plan = $first['plan'];
+        $db = FastDb::getInstance();
+        $plan = $entries[0]['plan'];
         $values = [];
         foreach ($entries as $entry) {
             $value = $entry['plan']->selfValue;
@@ -115,6 +114,8 @@ final class RelationPreloader
         }
         $matches = [];
         foreach (array_chunk($values, self::BATCH_SIZE, true) as $batch) {
+            // 前一批的查询回调可能已选中其他连接。
+            $db->selectConnection($plan->connectionName);
             $token = '__fd_rel_' . bin2hex(random_bytes(6));
             $indexName = $token . '_index';
             $alias = $token . '_parents';
@@ -132,9 +133,7 @@ final class RelationPreloader
             }
             $keys = QueryBuilder::subQuery($alias)->raw(implode(' UNION ALL ', $sql));
             $builder = clone $plan->builder;
-            $columns = $plan->columns;
-            if (empty($columns)) { $columns = $builder->getField(); }
-            $columns = is_array($columns) ? $columns : [$columns];
+            $columns = $plan->columns ?: $builder->getField();
             $columns[] = QueryBuilder::rawExpression($parentIndex . ' AS ' . TableReference::identifier($indexName));
             // 派生表只承载数字位置；键仍作为常量参数比较，保留类型及 collation 规则。
             $builder->join($keys, QueryBuilder::rawExpression('(' . implode(' OR ', $conditions) . ')', $parameters), 'INNER');
@@ -142,7 +141,6 @@ final class RelationPreloader
                 foreach ($batch as $value) { $query->where($foreign, $value, '=', 'OR'); }
             })
                 ->get($plan->tableName, null, $columns);
-            FastDb::getInstance()->selectConnection($plan->connectionName);
             $rows = $execute($builder)->getResult();
             foreach ($rows as $row) {
                 $identity = $identities[$row[$indexName]];

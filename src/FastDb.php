@@ -230,13 +230,13 @@ class FastDb
             $error = $count->getException();
             if ($error === null) { $result->setTotalResult($count); }
         }
+        // 先记录已执行的 SQL，完成回调里的查询随后入栈。
+        $this->diagnostics?->record($result);
+        if ($count !== null) { $this->diagnostics?->record($count); }
         if ($onComplete !== null) {
             try { $onComplete($result, $client); }
             catch (\Throwable $callbackError) { $error ??= $callbackError; }
         }
-        // 先记录全部已执行 SQL，再通知用户；观察回调失败不能漏掉总数查询的 trace。
-        $this->diagnostics?->record($result);
-        if ($count !== null) { $this->diagnostics?->record($count); }
         try {
             // 回调中替换观察者，仍适用于后续通知。
             $this->diagnostics?->notify($result);

@@ -592,34 +592,31 @@ abstract class AbstractEntity implements \JsonSerializable
     private function hydrateRows(mixed $rows, Query $selection, bool $returnAsArray, array $hideFields): array
     {
         $list = [];
+        if ($returnAsArray && $hideFields === []) {
+            // 按值重建列表，保留重编号、解引用和初始迭代位置的既有语义。
+            foreach ($rows as $item) { $list[] = $item; }
+            return $list;
+        }
 
-        if($returnAsArray){
-            if ($hideFields === []) {
-                // 按值重建列表，保留重编号、解引用和初始迭代位置的既有语义。
-                foreach ($rows as $item) { $list[] = $item; }
-            } else {
-                foreach ($rows as $item){
-                    foreach ($hideFields as $field){
-                        unset($item[$field]);
-                    }
-                    $list[] = $item;
+        foreach ($rows as $item) {
+            foreach ($hideFields as $field) {
+                unset($item[$field]);
+            }
+            if ($returnAsArray) {
+                $list[] = $item;
+                continue;
+            }
+
+            // 构造实体时完成字段转换，并将查询结果作为后续更新的比较基准。
+            $entity = new static($item);
+            if ($selection->isPersistFieldLimit()) {
+                $entity->queryLimit()->hideFields($hideFields);
+                $fields = $selection->getFields();
+                if (!empty($fields)) {
+                    $entity->queryLimit()->fields(...$fields);
                 }
             }
-        }else{
-            foreach ($rows as $item){
-                foreach ($hideFields as $field){
-                    unset($item[$field]);
-                }
-                // 构造实体时完成字段转换，并将查询结果作为后续更新的比较基准。
-                $t = new static($item);
-                if($selection->isPersistFieldLimit()){
-                    $t->queryLimit()->hideFields($hideFields);
-                    if(!empty($selection->getFields())){
-                        $t->queryLimit()->fields(...$selection->getFields());
-                    }
-                }
-                $list[] = $t;
-            }
+            $list[] = $entity;
         }
         return $list;
     }
