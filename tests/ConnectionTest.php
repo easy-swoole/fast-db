@@ -51,14 +51,13 @@ final class ConnectionTest extends TestCase
         $this->assertNull($connection->mysqlClient());
     }
 
-    #[\PHPUnit\Framework\Attributes\DataProvider('cleanupMethods')]
-    public function testCleanupRollsBackTheActiveSession(string $method): void
+    public function testRestoreRollsBackTheActiveSession(): void
     {
-        $this->withConnected(function (Connection $connection, \Swoole\Coroutine\Socket $peer) use ($method): void {
+        $this->withConnected(function (Connection $connection, \Swoole\Coroutine\Socket $peer): void {
             $this->queueOk($peer);
-            $connection->$method();
+            $connection->objectRestore();
             $this->assertFalse($connection->isInTransaction());
-            $this->assertSame($method === 'gc', $connection->mysqlClient() === null);
+            $this->assertNotNull($connection->mysqlClient());
             $command = $peer->recvAll(5 + strlen('ROLLBACK AND NO CHAIN NO RELEASE'), 0.1);
             $this->assertSame("\x03ROLLBACK AND NO CHAIN NO RELEASE", substr($command, 4));
         }, true);
@@ -99,17 +98,23 @@ final class ConnectionTest extends TestCase
         }, true);
     }
 
-    public function testDiscardedConnectionClosesAfterRollbackReturnsFalse(): void
+    public function testDiscardedConnectionClosesWithoutSendingRollback(): void
     {
-        $this->withConnected(function (Connection $connection): void {
-            $spy = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()
-                ->onlyMethods(['rawQuery'])->getMock();
-            (new \ReflectionProperty(\EasySwoole\Mysqli\Client::class, 'mysqlClient'))->setValue($spy, $connection->mysqlClient());
-            $spy->expects($this->once())->method('rawQuery')->willReturn(false);
-            $spy->gc();
-            $this->assertFalse($spy->isInTransaction());
-            $this->assertNull($spy->mysqlClient());
+        $this->withConnected(function (Connection $connection, \Swoole\Coroutine\Socket $peer): void {
+            $connection->isForceRollback = true;
+            $connection->gc();
+            $this->assertFalse($connection->isInTransaction());
+            $this->assertNull($connection->mysqlClient());
+            $this->assertSame("\x01\0\0\0\x01", $peer->recvAll(5, 0.1));
         }, true);
+    }
+
+    public function testForceRollbackAccessorUsesTheExistingConfigurationKey(): void
+    {
+        $config = new \EasySwoole\FastDb\Config(['isForceRollback' => true]);
+        $this->assertTrue($config->isForceRollback());
+        $config->setForceRollback(false);
+        $this->assertFalse($config->toArray()['isForceRollback']);
     }
 
     public function testQueryTimeoutReachesMysqliClient(): void
@@ -272,7 +277,7 @@ final class ConnectionTest extends TestCase
                 $connection->method('isInTransaction')->willReturn($operation !== 'begin');
                 $connection->expects($this->once())->method('rawQuery')->with($expected, 0.05)->willReturn(true);
                 $connection->method('close')->willReturn(true);
-                $db = (new FastDb())->isEnableQueryStack(true);
+                $db = (new FastDb())->configureQueryStack(true);
                 $observed = null;
                 $db->setOnQuery(static function (\EasySwoole\FastDb\Mysql\QueryResult $result) use (&$observed): void {
                     $observed = $result;
@@ -356,7 +361,7 @@ final class ConnectionTest extends TestCase
             ->onlyMethods([$operation . 'Transaction', 'isInTransaction'])->getMock();
         $connection->expects($this->once())->method($operation . 'Transaction')->willThrowException($failure);
         $connection->method('isInTransaction')->willReturn($operation !== 'begin');
-        $db = (new FastDb())->isEnableQueryStack(true);
+        $db = (new FastDb())->configureQueryStack(true);
         $called = 0;
         $expected = $operation === 'begin' ? 'START TRANSACTION' : strtoupper($operation) . ' AND NO CHAIN NO RELEASE';
         $db->setOnQuery(function (\EasySwoole\FastDb\Mysql\QueryResult $result) use ($failure, $connection, $expected, $loggerThrows, &$called): void {

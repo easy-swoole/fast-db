@@ -434,7 +434,7 @@ final class TransactionTest extends TestCase
 
     public function testDefaultRecycleRollsBackTheSessionAndClearsDiagnostics(): void
     {
-        $this->db->isEnableQueryStack(true);
+        $this->db->configureQueryStack(true);
         $this->db->begin();
         $this->write(1);
         $client = $this->db->currentConnection();
@@ -914,6 +914,20 @@ final class TransactionTest extends TestCase
         $this->assertSame(1, $this->value());
     }
 
+    public function testDiscardingAnActiveSessionRollsBackItsUncommittedWrite(): void
+    {
+        $this->assertTrue($this->db->begin());
+        $this->write(7);
+        $connection = $this->db->currentConnection();
+        $connection->gc();
+        $this->assertNull($connection->mysqlClient());
+
+        // 独立连接更新同一行，等待 MySQL 释放旧会话的锁，再验证未提交值已经撤销。
+        $this->observer->query('SET SESSION innodb_lock_wait_timeout = 2');
+        $this->observer->query("UPDATE `{$this->table}` SET value = value + 1 WHERE id = 1");
+        $this->assertSame(1, $this->value());
+    }
+
     public function testChainAndReleaseFlagsAgainstRealServer(): void
     {
         $flags = \EasySwoole\Mysqli\Transaction\TransactionCompletionFlags::ChainNoRelease;
@@ -1116,7 +1130,7 @@ final class TransactionTest extends TestCase
             $db = (new FastDb())->addDb(new Config(array_replace(MYSQL_CONFIG,
                 ['host' => '127.0.0.1', 'port' => $port, 'minObjectNum' => 0])));
             $loggedFailure = null;
-            $db->isEnableQueryStack(true)->setOnQuery(static function (QueryResult $result) use (&$loggedFailure): void {
+            $db->configureQueryStack(true)->setOnQuery(static function (QueryResult $result) use (&$loggedFailure): void {
                 if ($result->getException() !== null) {
                     $loggedFailure = $result;
                     throw new \RuntimeException('timeout logger failed');

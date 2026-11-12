@@ -11,6 +11,7 @@ use EasySwoole\FastDb\Beans\Query;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Internal\EntityState;
+use EasySwoole\FastDb\Internal\EntityQueryBuilder;
 use EasySwoole\FastDb\Internal\BatchWriter;
 use EasySwoole\FastDb\Internal\FieldCodec;
 use EasySwoole\FastDb\Internal\RelationLoader;
@@ -110,7 +111,7 @@ abstract class AbstractEntity implements \JsonSerializable
     function all( bool $selectForUpdate = false ):ListResult
     {
         try { return $this->selectRows($this->queryLimit(), $selectForUpdate); }
-        finally { $this->reset(); }
+        finally { $this->resetQueryOptions(); }
     }
 
     function chunk(callable $func,int $chunkSize = 10)
@@ -130,7 +131,7 @@ abstract class AbstractEntity implements \JsonSerializable
                     static function (QueryResult $result) use (&$rowCount): void {
                         $rowCount = count($result->getResult());
                     })->list();
-                $this->reset();
+                $this->resetQueryOptions();
                 foreach ($list as $item) {
                     if ($func($item) === false) { return; }
                 }
@@ -141,7 +142,7 @@ abstract class AbstractEntity implements \JsonSerializable
             }
         } finally {
             // 成功、失败或提前返回均消费本次查询配置，实体数据及比较基准不受影响。
-            $this->reset();
+            $this->resetQueryOptions();
         }
     }
 
@@ -185,7 +186,7 @@ abstract class AbstractEntity implements \JsonSerializable
                         }
                     })->list();
                 if ($rowCount === 0) { return $delivered; }
-                $this->reset();
+                $this->resetQueryOptions();
                 foreach ($list as $item) {
                     $delivered++;
                     if ($func($item) === false) { return $delivered; }
@@ -195,7 +196,7 @@ abstract class AbstractEntity implements \JsonSerializable
                 unset($list, $item);
             }
         } finally {
-            $this->reset();
+            $this->resetQueryOptions();
         }
     }
 
@@ -238,7 +239,7 @@ abstract class AbstractEntity implements \JsonSerializable
             return $hasFields ? $row : ($row === [] ? 0 : $row['count']);
         } finally {
             // 成功、失败或提前返回均消费本次查询配置，实体数据及比较基准不受影响。
-            $this->reset();
+            $this->resetQueryOptions();
         }
     }
 
@@ -280,14 +281,15 @@ abstract class AbstractEntity implements \JsonSerializable
                     return false;
                 }
             }
-            // 实体删除必须带有有效主键，附加查询条件与主键条件共同生效。
-            $query = $this->writeQuery($entityRef, 'delete');
-            $query->delete($this->tableName());
+            $query = $this->queryLimit()->__getQueryBuilder();
+            $tableName = $this->tableName();
+            $this->requirePrimaryKey($query, $entityRef, 'delete');
+            $query->delete($tableName);
             $ret = static::callQuery($query,$this->onQuery);
             return $ret->getAffectedRows() >= 1;
         } finally {
             // 成功、失败或提前返回均消费本次查询配置，实体数据及比较基准不受影响。
-            $this->reset();
+            $this->resetQueryOptions();
         }
     }
 
@@ -322,15 +324,24 @@ abstract class AbstractEntity implements \JsonSerializable
                     return  false;
                 }
             }
-            $properties = $this->queryLimit()->filterProperties($entityRef->allProperties());
+            $selection = $this->queryLimit();
+            $properties = $selection->filterProperties($entityRef->allProperties());
             $compareValues = [];
             $data = $this->entityState->changes($this, $properties, $compareValues);
 
             if(empty($data)){
                 return true;
             }
-            $query = $this->writeQuery($entityRef, 'update');
-            $query->update($this->tableName(), $data);
+            $query = $selection->__getQueryBuilder();
+            $tableName = $this->tableName();
+            $this->requirePrimaryKey($query, $entityRef, 'update');
+            // 转换回调或表名方法可能收窄底层白名单，比较基准只接受最终写入的列。
+            $data = Query::filterWriteFields($data, $query);
+            if ($data === []) { return true; }
+            if (count($compareValues) !== count($data)) {
+                $compareValues = array_intersect_key($compareValues, $data);
+            }
+            $query->update($tableName, $data);
             // 按 SQL 成功顺序接受基准，再通知观察回调；重入保存可据此写回原值。
             $ret = static::callQuery($query,$this->onQuery,
                 function (QueryResult $result) use ($compareValues): void {
@@ -339,7 +350,7 @@ abstract class AbstractEntity implements \JsonSerializable
             return $ret->getAffectedRows() > 0;
         } finally {
             // 成功、失败或提前返回均消费本次查询配置，实体数据及比较基准不受影响。
-            $this->reset();
+            $this->resetQueryOptions();
         }
     }
 
@@ -387,24 +398,32 @@ abstract class AbstractEntity implements \JsonSerializable
             }
             // 生成写入值和比较基准；普通 null 字段省略，让数据库使用默认值。
             $compareValues = [];
-            $properties = $this->queryLimit()->filterProperties($entityRef->allProperties());
+            $selection = $this->queryLimit();
+            $properties = $selection->filterProperties($entityRef->allProperties());
             $data = FieldCodec::values($this, $properties, true, $compareValues);
-            $query = $this->queryLimit()->__getQueryBuilder();
+            $query = $selection->__getQueryBuilder();
             if ($updateDuplicateCols) {
                 $query->onDuplicate($updateDuplicateCols);
-                $query->insert($this->tableName(), $data);
+            }
+            $tableName = $this->tableName();
+            $data = Query::filterWriteFields($data, $query);
+            if (count($compareValues) !== count($data)) {
+                $compareValues = array_intersect_key($compareValues, $data);
+            }
+            // 构建 SQL 会清理选项，提前读取包括 func() 设置在内的冲突更新列。
+            $duplicateColumns = $query instanceof EntityQueryBuilder ? $query->getDuplicateColumns() : $updateDuplicateCols;
+            $query->insert($tableName, $data);
+            if ($duplicateColumns) {
                 // 构建器验证更新列后，只保留两个分支都写入实体值的字段。
                 // 显式更新值可能覆盖实体值，因此对应字段保留原基准。
                 $confirmed = [];
-                foreach ($updateDuplicateCols as $key => $column) {
+                foreach ($duplicateColumns as $key => $column) {
                     if (is_int($key) && array_key_exists($column, $compareValues)
-                        && !array_key_exists($column, $updateDuplicateCols)) {
+                        && !array_key_exists($column, $duplicateColumns)) {
                         $confirmed[$column] = $compareValues[$column];
                     }
                 }
                 $compareValues = $confirmed;
-            } else {
-                $query->insert($this->tableName(), $data);
             }
             $isSuccess = false;
             $primaryKey = $entityRef->getPrimaryKey();
@@ -423,7 +442,7 @@ abstract class AbstractEntity implements \JsonSerializable
             return $isSuccess;
         } finally {
             // 插入后兼容保留隐藏字段等输出配置，仅清除 SQL 条件。
-            $this->reset(true);
+            $this->resetQueryOptions(true);
         }
     }
 
@@ -673,7 +692,7 @@ abstract class AbstractEntity implements \JsonSerializable
             }
         } finally {
             // 成功、失败或提前返回均消费本次查询配置，实体数据及比较基准不受影响。
-            $this->reset();
+            $this->resetQueryOptions();
         }
     }
 
@@ -724,14 +743,14 @@ abstract class AbstractEntity implements \JsonSerializable
             static fn (QueryBuilder $query, string $connection) => static::callQuery($query, $onQuery, null, $connection));
     }
 
-    private function reset(bool $preserveSelection = false):void
+    private function resetQueryOptions(bool $preserveSelection = false):void
     {
         // 只清理查询状态，不清空实体属性、比较基准或查询回调。
         $this->queryBuilder = $preserveSelection ? $this->queryBuilder?->withoutSqlConditions() : null;
     }
 
     /** 实例写入统一使用原主键约束查询范围。 */
-    private function writeQuery(EntityReflection $entityRef, string $operation): QueryBuilder
+    private function requirePrimaryKey(QueryBuilder $query, EntityReflection $entityRef, string $operation): void
     {
         $key = $entityRef->getPrimaryKey()
             ?? throw new RuntimeError("can not {$operation} entity without primary key set");
@@ -739,8 +758,9 @@ abstract class AbstractEntity implements \JsonSerializable
         if (!isset($this->{$key}) || $this->{$key} === '') {
             throw new RuntimeError("can not {$operation} entity without primary key value");
         }
-        $this->queryLimit()->whereRequired($key, $this->entityState->primaryKey($this, $key));
-        return $this->queryLimit()->__getQueryBuilder();
+        $primaryKey = $this->entityState->primaryKey($this, $key);
+        // 在真正执行的构建器上最后追加主键，防止后续追加的 OR 落到主键约束之外。
+        $query->groupExistingWhere()->where($key, $primaryKey);
     }
 
     /** 按需加载和预加载共用显式配置；不临时替换实体持有的查询对象。 */
@@ -764,9 +784,9 @@ abstract class AbstractEntity implements \JsonSerializable
             $onTotalQuery = $expectedType === RelationType::Many ? $this->notifyTotalQuery(...) : null;
             return $this->relationLoader->load($this, $relate, $tableName,
                 fn ($query) => static::callQuery($query, $this->onQuery, onTotalQuery: $onTotalQuery),
-                fn () => $this->reset());
+                fn () => $this->resetQueryOptions());
         } finally {
-            $this->reset();
+            $this->resetQueryOptions();
         }
     }
 

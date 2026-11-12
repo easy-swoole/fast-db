@@ -14,7 +14,7 @@ class Pool extends AbstractPool
         $poolConfig = $this->getConfig();
         $config = new Config($poolConfig->toArray());
         $con = new Connection($config);
-        $con->isForceRollback = $poolConfig->isIsForceRollback();
+        $con->isForceRollback = $poolConfig->isForceRollback();
         $con->connect();
         return $con;
     }

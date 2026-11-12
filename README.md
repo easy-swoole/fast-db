@@ -241,7 +241,7 @@ use EasySwoole\Mysqli\QueryBuilder;
 | `maxConnectTime` | float | `5.0` | 完整连接过程的超时上限，秒 |
 | `compress` | bool | `false` | 请求 MySQL 协议压缩，需服务端支持 |
 | `name` | string | `default` | 连接池名称 |
-| `isForceRollback` | bool | `false` | 归还仍有会话的连接时尝试回滚；该配置不会因一次回收被清除 |
+| `isForceRollback` | bool | `false` | 归还仍有会话的连接时尝试回滚，可用 `setForceRollback()` 设置。配置不会因一次回收被清除 |
 | `autoPing` | int | `5` | 保留字段，不控制当前驱动的自动 ping 周期；连接检查由 `beforeUse()` / `intervalCheck()` 执行 |
 
 配置类型直接由属性声明处理，例如整数 `timeout => 3` 会保存为 float。`timeout` 和 `maxConnectTime` 在实际操作时必须大于零；类型声明本身不校验正数。使用真正的布尔值设置 `compress`。
@@ -606,7 +606,7 @@ $id = $user->id; // 自增主键由 last insert id 回填。
 $user->insert(['name', 'score']);
 ```
 
-命中重复键时，按底层 `onDuplicate()` 的规则更新指定列。返回值表示 SQL 是否成功，重复键更新未改变数据时也可以返回 `true`。实体只更新两个分支都能确认写入实体值的字段基准。未列入更新列表或使用显式冲突更新值的字段保留原基准。需要准确的最终记录时重新查询。
+命中重复键时，按底层 `onDuplicate()` 的规则更新指定列。返回值表示 SQL 是否成功，重复键更新未改变数据时也可以返回 `true`。实体只更新两个分支都能确认写入实体值的字段基准，规则同样适用于通过实体查询构建器配置的 `onDuplicate()`。未列入更新列表或使用显式冲突更新值的字段保留原基准。需要准确的最终记录时重新查询。
 
 ### 检查待保存修改
 
@@ -1766,7 +1766,7 @@ $db->recycleContext(); // 归还当前协程的全部连接，未结束会话由
 $db->reset(); // 重置连接池和定时器，用于生命周期管理。
 ```
 
-`recycleContext(): void` 直接归还当前协程持有的全部连接，并清理其查询栈。未结束的数据库事务由连接池归还流程回滚，回滚失败的连接会被淘汰；模型属性及比较基准不因此改变。
+`recycleContext(): void` 直接归还当前协程持有的全部连接，并清理其查询栈。连接池在归还时回滚未结束的事务，淘汰连接时直接关闭会话。FastDb 在单条归还处隔离异常，使批量归还能继续，并保留 `invoke()` 回调的返回值或原始异常。模型属性及比较基准不因此改变。
 
 `reset()` 重置全部连接池和定时器，用于关闭、测试或重新初始化阶段。调用前应先归还上下文连接，并避免其他协程仍在使用连接池。
 
@@ -1845,7 +1845,7 @@ Connection 的 `getLastAffectRows()` / `getLastInsertId()` 始终表示最后一
 
 影响行数和自增 ID 类型为 `int|string|null`，超大无符号值保留为字符串，未查询或查询失败时为 null。影响行数与自增 ID 在查询成功后、日志回调执行前记录为快照，不会被后续 SQL 覆盖。`query()` 和 `rawQuery()` 的可选 `$timeout` 控制本次查询超时。
 
-分页总数及对应查询结果随主查询的 QueryResult 一起保存，可直接读取 `$result->getTotalCount()` 和 `$result->getTotalResult()`。实体列表与关联列表根据该次结果的查询快照判断是否读取总数；观察回调复用原构建器执行其他查询，不会改变外层是否返回总数。FastDb 的 `getTotalCount($result)` / `getTotalResult($result)` 仅转发到结果对象，不另外保存总数映射。
+分页总数及对应查询结果随主查询的 QueryResult 一起保存，可直接读取 `$result->getTotalCount()` 和 `$result->getTotalResult()`。实体列表与关联列表根据该次结果的查询快照判断是否读取总数；观察回调复用原构建器执行其他查询，不会改变外层是否返回总数。
 
 `getDuration()` 从取得连接后开始计时，不把获取连接或日志回调算进去。`query(callable)` 的工厂在该执行阶段内运行，因此也包含工厂构建耗时，不能把它等同于纯服务端 SQL 耗时。
 
@@ -1930,7 +1930,7 @@ $user = User::findRecord(1, onQuery: function (QueryResult $result): void {
 ### 查询栈
 
 ```php
-$db->isEnableQueryStack(true, maxStackSize: 2);
+$db->configureQueryStack(true, maxStackSize: 2);
 $db->rawQuery('SELECT 11'); // 首次借连接时先记 connectionAcquire，再记 query，共占两条。
 $db->rawQuery('SELECT 22');
 $db->rawQuery('SELECT 33');
@@ -1940,12 +1940,12 @@ $first = $db->getQueryStack(0); // SELECT 22，SELECT 11 已淘汰。
 $last = $db->getQueryStack(-1); // SELECT 33。
 $previous = $db->getQueryStack(-2); // SELECT 22。
 $missing = $db->getQueryStack(100); // null。
-$db->isEnableQueryStack(false, maxStackSize: 2); // 停止追加，保持相同容量下的已有记录。
+$db->configureQueryStack(false, maxStackSize: 2); // 停止追加，保持相同容量下的已有记录。
 ```
 
-`isEnableQueryStack(bool $bool, int $maxStackSize = 256): static` 的容量必须是正整数，配置属于该 FastDb 实例；每个协程分别保留最近 N 条事件，包含 `query` 和 `connectionAcquire`，达到容量时淘汰最旧项。返回数组始终按保留记录的先后顺序排列；正索引 0 表示当前保留的最旧项，-1 表示最新项，越界返回 null。首次查询若需要借连接会产生两条事件，复用连接的后续查询只有 `query` 事件。
+`configureQueryStack(bool $enabled, int $maxStackSize = 256): static` 的容量必须是正整数，配置属于该 FastDb 实例；每个协程分别保留最近 N 条事件，包含 `query` 和 `connectionAcquire`，达到容量时淘汰最旧项。返回数组始终按保留记录的先后顺序排列；正索引 0 表示当前保留的最旧项，-1 表示最新项，越界返回 null。首次查询若需要借连接会产生两条事件，复用连接的后续查询只有 `query` 事件。
 
-每次启停调用都会应用 `maxStackSize`，缩小容量会立即裁剪该实例所有已有协程栈，包括关闭时。关闭只停止追加，不主动清空，但 `isEnableQueryStack(false)` 也会应用默认容量 256：此前容量大于 256 时，已有记录会缩到最近 256 条。需要保留更大容量下的现有记录，可显式传原容量，例如 `isEnableQueryStack(false, maxStackSize: 1024)`。协程退出或回收上下文时清理其记录。
+每次启停调用都会应用 `maxStackSize`，缩小容量会立即裁剪该实例所有已有协程栈，包括关闭时。关闭只停止追加，不主动清空，但 `configureQueryStack(false)` 也会应用默认容量 256：此前容量大于 256 时，已有记录会缩到最近 256 条。需要保留更大容量下的现有记录，可显式传原容量，例如 `configureQueryStack(false, maxStackSize: 1024)`。协程退出或回收上下文时清理其记录。
 
 每项 `QueryStack` 的字段为：
 
@@ -1973,7 +1973,7 @@ $db->isEnableQueryStack(false, maxStackSize: 2); // 停止追加，保持相同�
 仅在借用入口已启用查询栈时启动获取计时，记录完成时若已关闭则丢弃事件；入口关闭、借用过程中才开启时，该次借用不补记获取事件，之后的查询执行可正常入栈。工厂中首次注册全局回调、开启查询栈，对当前查询的最终通知也会生效。回调重入可能使内层事件先于外层出现，不能假定获取事件与使用该连接的 SQL 总是相邻。嵌套事件历时可能互相包含，也不能把全部事件的 `duration` 相加当作业务端到端耗时。
 
 ```php
-$db->isEnableQueryStack(true, maxStackSize: 256);
+$db->configureQueryStack(true, maxStackSize: 256);
 try {
     $db->rawQuery('SELECT 1');
 } catch (Throwable $error) {
@@ -2158,7 +2158,7 @@ $config = ConfigModel::findRecord(
 | `preConnect()` | 预热各连接池 |
 | `reset()` | 重置全部连接池和定时器 |
 | `setOnQuery(callable $call)` | 设置全局回调；返回管理器 |
-| `isEnableQueryStack(bool $bool, int $maxStackSize = 256): static` | 每协程保留最近 N 条查询/获取连接事件；启停均应用容量，缩小时立即裁剪已有栈 |
+| `configureQueryStack(bool $enabled, int $maxStackSize = 256): static` | 每协程保留最近 N 条查询/获取连接事件；启停均应用容量，缩小时立即裁剪已有栈 |
 | `getQueryStack(?int $index = null)` | 整栈、单项或 null；事件类型由 type 区分 |
 
 ## 开发与测试

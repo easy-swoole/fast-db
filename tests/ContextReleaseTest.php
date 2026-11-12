@@ -121,7 +121,7 @@ final class ContextReleaseTest extends TestCase
     public function testCoroutineExitReturnsOnlyItsOwnClientAndReleasesItsDiagnostics(): void
     {
         [$db, $pool] = $this->database(2);
-        $db->isEnableQueryStack(true);
+        $db->configureQueryStack(true);
         $ready = new Coroutine\Channel(2);
         $finished = new Coroutine\Channel(2);
         $resume = [new Coroutine\Channel(1), new Coroutine\Channel(1)];

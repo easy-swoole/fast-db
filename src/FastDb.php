@@ -35,9 +35,9 @@ class FastDb
     // false 表示只登记了外部连接/选库，本实例尚未承担池连接的归还责任。
     private array $contextCleanupRegistered = [];
 
-    public function isEnableQueryStack(bool $bool, int $maxStackSize = 256): static
+    public function configureQueryStack(bool $enabled, int $maxStackSize = 256): static
     {
-        ($this->diagnostics ??= new QueryDiagnostics())->configure($bool, $maxStackSize);
+        ($this->diagnostics ??= new QueryDiagnostics())->configure($enabled, $maxStackSize);
         return $this;
     }
 
@@ -72,7 +72,7 @@ class FastDb
         $error = null;
         $connect = static function () use ($client, &$error): void {
             try {
-                if (!$client->connect()) { throw new RuntimeError('Database connection failed'); }
+                $client->connect();
             } catch (\Throwable $failure) {
                 $error = $failure;
             } finally {
@@ -124,7 +124,7 @@ class FastDb
         if ($timeout !== null && (!is_finite($timeout) || $timeout <= 0)) {
             throw new \InvalidArgumentException('Transaction timeout must be finite and greater than zero');
         }
-        $client = $this->getClient();
+        $client = $this->getOrBorrowConnection();
         // 已有事务由原调用层负责结束，加入层只执行自己的业务回调。
         if ($client->isInTransaction()) { return $callback($this); }
         try {
@@ -142,7 +142,7 @@ class FastDb
     public function begin(?Connection $client = null, TransactionStartFlags $flags = TransactionStartFlags::None,
         ?float $timeout = null): bool
     {
-        $client ??= $this->getClient();
+        $client ??= $this->getOrBorrowConnection();
         if ($client->isInTransaction()) { return true; }
         return $this->execute($client, static fn () => $client->beginTransaction($flags, $timeout),
             null, $flags->toSql())->getResult() === true;
@@ -182,21 +182,21 @@ class FastDb
         ?callable $onTotalQuery = null): QueryResult
     {
         if ($onQuery === null) {
-            $client = $this->getClient($connection);
+            $client = $this->getOrBorrowConnection($connection);
         } else {
             // 有本次查询回调时，借用失败也要提供发起时的连接和计时。
             $startTick = hrtime(true);
             $startTime = microtime(true);
             $connectionName = $connection ?? $this->selectConnection();
             try {
-                $client = $this->getClient($connection);
+                $client = $this->getOrBorrowConnection($connection);
             } catch (\Throwable $error) {
                 $result = new QueryResult($startTime, $startTick);
                 $result->setConnectionName($connectionName);
                 $result->finishTiming();
                 $result->setException($error);
                 if ($queryBuilder instanceof QueryBuilder) {
-                    $result->setQueryBuilder($queryBuilder);
+                    $result->setQueryBuilder(clone $queryBuilder);
                 }
                 return $this->finishQuery($result, $error, $onQuery);
             }
@@ -212,7 +212,7 @@ class FastDb
     public function rawQuery(string $sql, ?float $timeout = null, ?callable $onComplete = null,
         ?string $connection = null): QueryResult
     {
-        $client = $this->getClient($connection);
+        $client = $this->getOrBorrowConnection($connection);
         return $this->execute($client, static fn () => $client->rawQuery($sql, $timeout), null, $sql, $onComplete);
     }
 
@@ -308,27 +308,17 @@ class FastDb
         return $result;
     }
 
-    public function getTotalCount(QueryResult $result): ?int
-    {
-        return $result->getTotalCount();
-    }
-
-    public function getTotalResult(QueryResult $result): ?QueryResult
-    {
-        return $result->getTotalResult();
-    }
-
     public function invoke(callable $call): mixed
     {
         $ownsConnection = $this->currentConnection() === null;
-        $client = $this->getClient();
+        $client = $this->getOrBorrowConnection();
         $name = $client->connectionName;
         $borrowNumber = $client->poolBorrowNumber;
         try { return $call($client); }
         finally {
             // 回调提前归还后可能再次借到同一个对象，后一次借用归新的调用流程管理。
             if ($ownsConnection && $client->poolBorrowNumber === $borrowNumber) {
-                $this->returnConnection(Coroutine::getCid(), $name, $client);
+                $this->recycleConnection(Coroutine::getCid(), $name, $client);
             }
         }
     }
@@ -336,23 +326,23 @@ class FastDb
     public function recycleContext(): void
     {
         $cid = Coroutine::getCid();
-        try {
-            foreach ($this->currentConnection[$cid] ?? [] as $name => $client) {
-                $this->returnConnection($cid, $name, $client);
-            }
-        } finally {
-            $this->diagnostics?->clear($cid);
+        foreach ($this->currentConnection[$cid] ?? [] as $name => $client) {
+            $this->recycleConnection($cid, $name, $client);
         }
+        $this->diagnostics?->clear($cid);
     }
 
-    private function returnConnection(int $cid, string $name, Connection $client): void
+    private function recycleConnection(int $cid, string $name, Connection $client): void
     {
         // 回调可能已经归还连接，只有当前登记的连接才由本次流程归还。
         if (($this->currentConnection[$cid][$name] ?? null) !== $client) { return; }
         unset($this->currentConnection[$cid][$name]);
         if ($this->currentConnection[$cid] === []) { unset($this->currentConnection[$cid]); }
-        try { $this->pools[$name]->recycleObj($client); }
-        catch (\Throwable $error) { trigger_error($error->getMessage()); }
+        try {
+            $this->pools[$name]->recycleObj($client);
+        } catch (\Throwable) {
+            // 连接池负责处理归还失败。隔离异常，避免清理覆盖业务结果或中断其他连接归还。
+        }
     }
 
     private function registerContextCleanup(int $cid, bool $recycleConnections = false): void
@@ -376,7 +366,7 @@ class FastDb
         });
     }
 
-    private function getClient(?string $name = null): Connection
+    private function getOrBorrowConnection(?string $name = null): Connection
     {
         $cid = Coroutine::getCid();
         $name ??= $this->selectConnection();

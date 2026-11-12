@@ -171,6 +171,32 @@ final class RequiredWhereTest extends TestCase
         $this->assertSame([1, 1, 1], $this->queries[0]['parameters']);
     }
 
+    public static function entityWriteScopes(): array
+    {
+        return [
+            'update with queryLimit override' => ['update', RequiredWhereScopedRecord::class],
+            'delete with queryLimit override' => ['delete', RequiredWhereScopedRecord::class],
+            'update with tableName override' => ['update', RequiredWhereTableRecord::class],
+            'delete with tableName override' => ['delete', RequiredWhereTableRecord::class],
+        ];
+    }
+
+    #[DataProvider('entityWriteScopes')]
+    public function testEntityWriteGroupsDefaultConditionsBeforeAddingItsPrimaryKey(string $operation, string $class): void
+    {
+        $entity = new $class(['id' => 1, 'name' => 'own']);
+        $entity->name = 'changed';
+        $this->assertTrue($entity->{$operation}());
+
+        if ($operation === 'update') {
+            $this->assertSame([1 => 'changed', 2 => 'other', 3 => 'own second', 4 => 'other second'], $this->names());
+            $this->assertSame(['changed', 1, 1, 1], $this->queries[0]['parameters']);
+        } else {
+            $this->assertSame([2, 3, 4], $this->ids());
+            $this->assertSame([1, 1, 1], $this->queries[0]['parameters']);
+        }
+    }
+
     public function testFastWritesKeepTheirExplicitBatchOrSemantics(): void
     {
         $where = static function (QueryBuilder $query): void {
@@ -204,6 +230,23 @@ class RequiredWhereRecord extends AbstractEntity
     public ?string $name;
 
     public function tableName(): string { return 'required_where_records'; }
+}
+
+class RequiredWhereScopedRecord extends RequiredWhereRecord
+{
+    public function queryLimit(): Query
+    {
+        return parent::queryLimit()->where('flag_a', 1)->orWhere('flag_b', 1);
+    }
+}
+
+class RequiredWhereTableRecord extends RequiredWhereRecord
+{
+    public function tableName(): string
+    {
+        $this->queryLimit()->where('flag_a', 1)->orWhere('flag_b', 1);
+        return parent::tableName();
+    }
 }
 
 #[OnUpdate('appendOr')]

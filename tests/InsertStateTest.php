@@ -328,7 +328,10 @@ final class InsertStateTest extends TestCase
         $this->assertSame('pending', $this->client->row(20)['name']);
     }
 
-    public function testSuccessfulDuplicateNoOpAcceptsTheWrittenValuesEvenWithZeroAffectedRows(): void
+    public static function duplicateOptions(): array { return ['insert argument' => [false], 'builder' => [true]]; }
+
+    #[DataProvider('duplicateOptions')]
+    public function testSuccessfulDuplicateNoOpAcceptsTheWrittenValuesEvenWithZeroAffectedRows(bool $builderOption): void
     {
         $this->client->database->exec("INSERT INTO insert_state (id,name) VALUES (20,'same')");
         $entity = new InsertStateRecord(['id' => 20, 'name' => 'old']);
@@ -336,13 +339,36 @@ final class InsertStateTest extends TestCase
         $entity->score = 7;
         // MySQL 的重复键更新未改变数据时，执行成功但影响行数为零。
         $this->client->nextNoOp = true;
-        $this->assertTrue($entity->insert(['name']));
+        if ($builderOption) {
+            $entity->queryLimit()->func(static fn (QueryBuilder $builder) => $builder->onDuplicate(['name']));
+        }
+        $this->assertTrue($entity->insert($builderOption ? null : ['name']));
         $this->assertSame(['score' => 7], $entity->getChanges());
         $this->assertSame(0, $this->client->row(20)['score']);
         $this->assertTrue($entity->update());
         $this->assertSame([7, 20], $this->client->queries[1]['parameters']);
         $this->assertSame('same', $this->client->row(20)['name']);
         $this->assertSame(7, $this->client->row(20)['score']);
+    }
+
+    public static function writeOperations(): array { return [['insert'], ['update']]; }
+
+    #[DataProvider('writeOperations')]
+    public function testFieldsExcludedByTableNameStayPending(string $operation): void
+    {
+        $entity = new LateFieldSelectionRecord(['name' => 'before', 'score' => 0]);
+        if ($operation === 'update') {
+            $this->client->database->exec("INSERT INTO insert_state (id,name) VALUES (1,'before')");
+            $entity->setData(['id' => 1], true);
+        }
+        $entity->setData(['name' => 'saved', 'score' => 9]);
+        $this->assertTrue($entity->{$operation}());
+        $this->assertSame('saved', $this->client->row()['name']);
+        $this->assertSame(0, $this->client->row()['score']);
+        $this->assertSame(['score' => 9], $entity->getChanges());
+        $entity->limitWriteFields = false;
+        $this->assertTrue($entity->update());
+        $this->assertSame(9, $this->client->row()['score']);
     }
 
     public function testExplicitDuplicateValueDoesNotAcceptTheEntityValue(): void
@@ -421,6 +447,19 @@ class InsertStateList extends ConvertList
 }
 
 /** 通过正常 FastDb 执行路径运行 SQLite SQL，模拟 MySQL 无变化结果及指定单次失败。 */
+class LateFieldSelectionRecord extends InsertStateRecord
+{
+    public bool $limitWriteFields = true;
+
+    public function tableName(): string
+    {
+        if ($this->limitWriteFields) {
+            $this->queryLimit()->__getQueryBuilder()->fields(['name']);
+        }
+        return parent::tableName();
+    }
+}
+
 class InsertStateConnection extends Connection
 {
     public array $queries = [];

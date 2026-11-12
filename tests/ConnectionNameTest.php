@@ -33,7 +33,7 @@ final class ConnectionNameTest extends TestCase
         $client = $this->createStub(Connection::class);
         $client->connectionName = 'actual';
         $client->method('isInTransaction')->willReturn(in_array($operation, ['commit', 'rollback'], true));
-        $db = (new FastDb())->addDb(new Config(), 'other')->isEnableQueryStack(true);
+        $db = (new FastDb())->addDb(new Config(), 'other')->configureQueryStack(true);
         (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($db,
             [Coroutine::getCid() => ['default' => $client]]);
         $failure = new \RuntimeException('SQL error');
@@ -78,7 +78,7 @@ final class ConnectionNameTest extends TestCase
     {
         $instance = new \ReflectionProperty(FastDb::class, 'instance');
         $original = $instance->getValue();
-        $db = (new FastDb())->addDb(new Config(), 'other')->isEnableQueryStack(true);
+        $db = (new FastDb())->addDb(new Config(), 'other')->configureQueryStack(true);
         $client = $this->createStub(Connection::class);
         $client->connectionName = 'actual';
         $failure = new \RuntimeException('original SQL failure');

@@ -9,6 +9,7 @@ use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\Pool;
 use EasySwoole\Mysqli\Config as DriverConfig;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Swoole\Coroutine;
 
@@ -46,7 +47,7 @@ final class RecycleContextTest extends TestCase
         }
         $this->set($db, 'currentConnection', [Coroutine::getCid() => ['idle' => $idle, 'active' => $active]]);
         $this->set($db, 'pools', $pools);
-        $db->isEnableQueryStack(true)->selectConnection('idle');
+        $db->configureQueryStack(true)->selectConnection('idle');
         $db->rawQuery('SELECT original_log');
         $db->recycleContext();
         $this->assertFalse($active->isInTransaction());
@@ -60,7 +61,7 @@ final class RecycleContextTest extends TestCase
 
     public function testRecyclingDoesNotAffectOtherCoroutineSessions(): void
     {
-        $db = (new FastDb())->addDb(new Config())->isEnableQueryStack(true);
+        $db = (new FastDb())->addDb(new Config())->configureQueryStack(true);
         $idle = $this->connection(false);
         $other = $this->connection(false);
         $pool = $this->getMockBuilder(Pool::class)->disableOriginalConstructor()->onlyMethods(['getObj', 'recycleObj'])->getMock();
@@ -96,6 +97,83 @@ final class RecycleContextTest extends TestCase
         $this->assertTrue($finished->pop(2));
         $this->assertNull($failure);
         $this->assertFalse($other->isInTransaction());
+    }
+
+    public static function recycleFailures(): array
+    {
+        return ['pool throws' => ['exception'], 'warning becomes exception' => ['warning'], 'pool rejects' => ['false']];
+    }
+
+    #[DataProvider('recycleFailures')]
+    public function testFailedReturnDoesNotInterruptOtherReturnsOrCallGc(string $failure): void
+    {
+        $db = new FastDb();
+        $failed = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()->onlyMethods(['gc'])->getMock();
+        $failed->expects($this->never())->method('gc');
+        $active = $this->connection(true);
+        $firstPool = $this->createMock(Pool::class);
+        $firstPool->expects($this->once())->method('recycleObj')->with($failed)->willReturnCallback(
+            static function () use ($failure): bool {
+                if ($failure === 'exception') { throw new \RuntimeException('pool recycle failed'); }
+                if ($failure === 'warning') { trigger_error('pool warning'); }
+                return false;
+            }
+        );
+        $secondPool = $this->createMock(Pool::class);
+        $secondPool->expects($this->once())->method('recycleObj')->with($active)->willReturnCallback(
+            static function (Connection $client): bool {
+                $client->objectRestore();
+                return true;
+            }
+        );
+        $this->set($db, 'currentConnection', [Coroutine::getCid() => ['first' => $failed, 'second' => $active]]);
+        $this->set($db, 'pools', ['first' => $firstPool, 'second' => $secondPool]);
+
+        $warnings = [];
+        set_error_handler(static function (int $severity, string $message) use (&$warnings): never {
+            $warnings[] = $message;
+            throw new \ErrorException($message, severity: $severity);
+        });
+        try {
+            $db->recycleContext();
+        } finally {
+            restore_error_handler();
+        }
+
+        $this->assertSame($failure === 'warning' ? ['pool warning'] : [], $warnings);
+        $this->assertFalse($active->isInTransaction());
+        $this->assertSame([], (new \ReflectionProperty(FastDb::class, 'currentConnection'))->getValue($db));
+    }
+
+    public static function invokeOutcomes(): array
+    {
+        return ['business result' => [false], 'business exception' => [true]];
+    }
+
+    #[DataProvider('invokeOutcomes')]
+    public function testInvokeKeepsTheCallbackOutcomeWhenRecyclingThrows(bool $callbackThrows): void
+    {
+        $db = (new FastDb())->addDb(new Config());
+        $connection = $this->connection(false);
+        $pool = $this->createMock(Pool::class);
+        $pool->expects($this->once())->method('getObj')->willReturn($connection);
+        $pool->expects($this->once())->method('recycleObj')->with($connection)
+            ->willThrowException(new \RuntimeException('pool recycle failed'));
+        $this->set($db, 'pools', ['default' => $pool]);
+
+        $businessError = new \RuntimeException('business failure');
+        $result = $error = null;
+        try {
+            $result = $db->invoke(static function () use ($callbackThrows, $businessError): string {
+                if ($callbackThrows) { throw $businessError; }
+                return 'business result';
+            });
+        } catch (\Throwable $failure) {
+            $error = $failure;
+        }
+        $this->assertSame($callbackThrows ? null : 'business result', $result);
+        $this->assertSame($callbackThrows ? $businessError : null, $error);
+        $this->assertNull($db->currentConnection());
     }
 
     public function testEmptyContextIsSafe(): void

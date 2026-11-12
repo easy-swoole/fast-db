@@ -144,11 +144,7 @@ class Connection extends Client implements ObjectInterface
 
     function gc(): void
     {
-        if ($this->discardDisconnectedSession()) { return; }
-        if ($this->shouldRollback()) {
-            try { $this->rollbackTransaction(); }
-            catch (\Throwable $error) { trigger_error($error->getMessage()); }
-        }
+        // 淘汰时直接关闭会话，归还后继续复用的连接才需要先执行回滚。
         $this->close();
     }
 

@@ -26,7 +26,7 @@ final class QueryTimingTest extends TestCase
             }
             return [];
         });
-        $db = (new FastDb())->isEnableQueryStack(true);
+        $db = (new FastDb())->configureQueryStack(true);
         (new \ReflectionProperty(FastDb::class, 'currentConnection'))
             ->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $client]]);
         $logged = null;
@@ -91,7 +91,7 @@ final class QueryTimingTest extends TestCase
             }
             return true;
         });
-        $db = (new FastDb())->isEnableQueryStack(true);
+        $db = (new FastDb())->configureQueryStack(true);
         $logged = null;
         $db->setOnQuery(function (QueryResult $result) use (&$logged): void {
             $logged = $result;

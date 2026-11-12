@@ -21,7 +21,7 @@ final class QueryStackTest extends TestCase
     {
         $client = $this->createStub(Connection::class);
         $client->method('rawQuery')->willReturn([]);
-        $db = (new FastDb())->isEnableQueryStack(true, $capacity);
+        $db = (new FastDb())->configureQueryStack(true, $capacity);
         (new \ReflectionProperty(FastDb::class, 'currentConnection'))
             ->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $client]]);
         return $db;
@@ -36,7 +36,7 @@ final class QueryStackTest extends TestCase
     private function pooledDatabase(int $capacity): FastDb
     {
         $config = new Config(['maxObjectNum' => 2, 'minObjectNum' => 0, 'intervalCheckTime' => 0]);
-        $db = (new FastDb())->addDb($config)->isEnableQueryStack(true, $capacity);
+        $db = (new FastDb())->addDb($config)->configureQueryStack(true, $capacity);
         (new \ReflectionProperty(FastDb::class, 'pools'))->setValue($db, ['default' => new QueryStackPool($config)]);
         return $db;
     }
@@ -106,18 +106,18 @@ final class QueryStackTest extends TestCase
     {
         $db = $this->database(3);
         for ($i = 0; $i < 5; $i++) { $db->rawQuery('SELECT ' . $i); }
-        $this->assertSame($db, $db->isEnableQueryStack(true, 2));
+        $this->assertSame($db, $db->configureQueryStack(true, 2));
         $this->assertSame(['SELECT 3', 'SELECT 4'], $this->sql($db));
-        $db->isEnableQueryStack(true, 4);
+        $db->configureQueryStack(true, 4);
         foreach ([5, 6, 7] as $i) { $db->rawQuery('SELECT ' . $i); }
         $this->assertSame(['SELECT 4', 'SELECT 5', 'SELECT 6', 'SELECT 7'], $this->sql($db));
-        $db->isEnableQueryStack(true, 1);
+        $db->configureQueryStack(true, 1);
         $this->assertSame(['SELECT 7'], $this->sql($db));
         $db->rawQuery('SELECT 8');
         $this->assertSame(['SELECT 8'], $this->sql($db));
         $this->assertSame($db->getQueryStack(0), $db->getQueryStack(-1));
         $this->assertNull($db->getQueryStack(1));
-        $db->isEnableQueryStack(true, 3);
+        $db->configureQueryStack(true, 3);
         $db->rawQuery('SELECT 9');
         $this->assertSame(['SELECT 8', 'SELECT 9'], $this->sql($db));
     }
@@ -142,13 +142,13 @@ final class QueryStackTest extends TestCase
         $db = $this->database(2);
         foreach ([1, 2, 3] as $i) { $db->rawQuery('SELECT ' . $i); }
         $snapshot = $db->getQueryStack();
-        try { $db->isEnableQueryStack(false, $capacity); $this->fail('A non-positive capacity must be rejected'); }
+        try { $db->configureQueryStack(false, $capacity); $this->fail('A non-positive capacity must be rejected'); }
         catch (\InvalidArgumentException) { $this->addToAssertionCount(1); }
         $this->assertSame($snapshot, $db->getQueryStack());
         $db->rawQuery('SELECT 4');
         $this->assertSame(['SELECT 3', 'SELECT 4'], $this->sql($db));
-        $db->isEnableQueryStack(false, 2);
-        try { $db->isEnableQueryStack(true, $capacity); $this->fail('An invalid request cannot enable logging'); }
+        $db->configureQueryStack(false, 2);
+        try { $db->configureQueryStack(true, $capacity); $this->fail('An invalid request cannot enable logging'); }
         catch (\InvalidArgumentException) { $this->addToAssertionCount(1); }
         $db->rawQuery('SELECT 5');
         $this->assertSame(['SELECT 3', 'SELECT 4'], $this->sql($db));
@@ -159,10 +159,10 @@ final class QueryStackTest extends TestCase
         $db = $this->database(2);
         foreach ([1, 2, 3] as $i) { $db->rawQuery('SELECT ' . $i); }
         $snapshot = $db->getQueryStack();
-        $this->assertSame($db, $db->isEnableQueryStack(false, 2));
+        $this->assertSame($db, $db->configureQueryStack(false, 2));
         $db->rawQuery('SELECT 4');
         $this->assertSame($snapshot, $db->getQueryStack());
-        $db->isEnableQueryStack(true, 2);
+        $db->configureQueryStack(true, 2);
         $db->rawQuery('SELECT 5');
         $this->assertSame(['SELECT 3', 'SELECT 5'], $this->sql($db));
     }
@@ -171,13 +171,13 @@ final class QueryStackTest extends TestCase
     {
         $db = $this->database(300);
         for ($i = 0; $i < 300; $i++) { $db->rawQuery('SELECT ' . $i); }
-        $db->isEnableQueryStack(false);
+        $db->configureQueryStack(false);
         $this->assertCount(256, $db->getQueryStack());
         $this->assertSame('SELECT 44', $db->getQueryStack(0)->rawQuery);
         $this->assertSame('SELECT 299', $db->getQueryStack(-1)->rawQuery);
         $db->rawQuery('SELECT 300');
         $this->assertSame('SELECT 299', $db->getQueryStack(-1)->rawQuery);
-        $db->isEnableQueryStack(false, 1);
+        $db->configureQueryStack(false, 1);
         $this->assertSame(['SELECT 299'], $this->sql($db));
     }
 
@@ -196,7 +196,7 @@ final class QueryStackTest extends TestCase
         $client->method('rawQuery')->willReturn([]);
         $pool = $this->createStub(Pool::class);
         $pool->method('getObj')->willReturnOnConsecutiveCalls(null, null, null, null, $client);
-        $db = (new FastDb())->addDb(new Config())->isEnableQueryStack(true, 2);
+        $db = (new FastDb())->addDb(new Config())->configureQueryStack(true, 2);
         (new \ReflectionProperty(FastDb::class, 'pools'))->setValue($db, ['default' => $pool]);
         $errors = [];
         try {
@@ -208,11 +208,11 @@ final class QueryStackTest extends TestCase
             $this->assertSame($errors[1], $db->getQueryStack(0)->exception);
             $this->assertSame($errors[2], $db->getQueryStack(-1)->exception);
             $snapshot = $db->getQueryStack();
-            $db->isEnableQueryStack(false, 2);
+            $db->configureQueryStack(false, 2);
             try { $db->rawQuery('SELECT still_not_sent'); $this->fail('The disabled acquisition also fails'); }
             catch (RuntimeError) { $this->addToAssertionCount(1); }
             $this->assertSame($snapshot, $db->getQueryStack());
-            $db->isEnableQueryStack(true, 2);
+            $db->configureQueryStack(true, 2);
             $db->rawQuery('SELECT 1');
             $this->assertSame(['connectionAcquire', 'query'], array_column($db->getQueryStack(), 'type'));
             $this->assertNull($db->getQueryStack(0)->exception);
@@ -226,7 +226,7 @@ final class QueryStackTest extends TestCase
     {
         $pool = $this->createStub(Pool::class);
         $pool->method('getObj')->willReturn(null);
-        $db = (new FastDb())->addDb(new Config())->isEnableQueryStack(true, 2);
+        $db = (new FastDb())->addDb(new Config())->configureQueryStack(true, 2);
         (new \ReflectionProperty(FastDb::class, 'pools'))->setValue($db, ['default' => $pool]);
         try {
             for ($i = 0; $i < 3; $i++) {
@@ -284,9 +284,9 @@ final class QueryStackTest extends TestCase
             $this->assertSame('a', $ready->pop(2));
             $this->assertSame('b', $ready->pop(2));
             $this->assertNull($db->getQueryStack(), 'The parent coroutine cannot see either child stack.');
-            $db->isEnableQueryStack(true, 2);
+            $db->configureQueryStack(true, 2);
             // 后续调大容量不能恢复已经裁掉的记录。
-            $db->isEnableQueryStack(true, 4);
+            $db->configureQueryStack(true, 4);
             $resume->push(true);
             $resume->push(true);
             $this->assertSame('a', $finished->pop(2));

@@ -212,8 +212,8 @@ final class ConnectionAcquireTimingTest extends TestCase
         $db->setOnQuery(static function (QueryResult $result) use (&$observed): void { $observed[] = $result; });
         $builder = (new QueryBuilder())->setQueryOption('SQL_CALC_FOUND_ROWS')->get('rows', 1);
         $result = $db->query($builder);
-        $this->assertSame(37, $db->getTotalCount($result));
-        $this->assertSame([$result, $db->getTotalResult($result)], $observed);
+        $this->assertSame(37, $result->getTotalCount());
+        $this->assertSame([$result, $result->getTotalResult()], $observed);
         $this->assertSame(['connectionAcquire', 'query', 'query'], array_column($db->getQueryStack(), 'type'));
         $this->assertCount(2, $clients['default']->sql);
         $this->assertSame(1, $pools['default']->borrows);
@@ -253,7 +253,7 @@ final class ConnectionAcquireTimingTest extends TestCase
     public function testDisabledStackLeavesNoEventsButStillCallsTheSqlObserver(): void
     {
         [$db, $pools] = $this->database();
-        $db->isEnableQueryStack(false);
+        $db->configureQueryStack(false);
         $observed = [];
         $db->setOnQuery(static function (QueryResult $result) use (&$observed): void { $observed[] = $result; });
         $result = $db->rawQuery('SELECT success');
@@ -270,10 +270,10 @@ final class ConnectionAcquireTimingTest extends TestCase
     public function testDisablingTheStackDuringAcquisitionDropsTheStartedAcquireEvent(): void
     {
         [$db, $pools] = $this->database();
-        $pools['default']->onAcquire = static fn () => $db->isEnableQueryStack(false);
+        $pools['default']->onAcquire = static fn () => $db->configureQueryStack(false);
         $db->rawQuery('SELECT after_disabling');
         $this->assertNull($db->getQueryStack());
-        $db->isEnableQueryStack(true);
+        $db->configureQueryStack(true);
         $db->rawQuery('SELECT reused');
         $this->assertSame(['query'], array_column($db->getQueryStack(), 'type'));
     }
@@ -281,7 +281,7 @@ final class ConnectionAcquireTimingTest extends TestCase
     public function testEnablingTheStackDuringAcquisitionDoesNotInventAnAcquireStartTime(): void
     {
         [$db, $pools] = $this->database(stack: false);
-        $pools['default']->onAcquire = static fn () => $db->isEnableQueryStack(true);
+        $pools['default']->onAcquire = static fn () => $db->configureQueryStack(true);
         $db->rawQuery('SELECT after_enabling');
         $this->assertSame(['query'], array_column($db->getQueryStack(), 'type'));
         $this->assertSame('SELECT after_enabling', $db->getQueryStack(0)->rawQuery);
@@ -293,7 +293,7 @@ final class ConnectionAcquireTimingTest extends TestCase
         $observed = [];
         $result = $db->query(static function (QueryBuilder $builder) use ($db, &$observed): void {
             $db->setOnQuery(static function (QueryResult $result) use (&$observed): void { $observed[] = $result; });
-            $db->isEnableQueryStack(true);
+            $db->configureQueryStack(true);
             $builder->raw('SELECT enabled_in_factory');
         });
         $this->assertSame([$result], $observed);
@@ -305,7 +305,7 @@ final class ConnectionAcquireTimingTest extends TestCase
     public function testAnAcquireFailureAfterMidBorrowEnablingDoesNotInventAnEvent(): void
     {
         [$db, $pools] = $this->database(stack: false);
-        $pools['default']->onAcquire = static fn () => $db->isEnableQueryStack(true);
+        $pools['default']->onAcquire = static fn () => $db->configureQueryStack(true);
         $pools['default']->failure = false;
         try { $db->rawQuery('SELECT never_sent'); $this->fail('Expected borrowing failure'); }
         catch (RuntimeError) { $this->addToAssertionCount(1); }
@@ -325,7 +325,7 @@ final class ConnectionAcquireTimingTest extends TestCase
         }
         $config = new Config(['maxObjectNum' => 1, 'minObjectNum' => 0, 'intervalCheckTime' => 0]);
         $pool = new AcquireTimingRetryPool($config, $clients);
-        $db = (new FastDb())->addDb($config)->isEnableQueryStack(true);
+        $db = (new FastDb())->addDb($config)->configureQueryStack(true);
         $this->databases[] = $db;
         (new \ReflectionProperty(FastDb::class, 'pools'))->setValue($db, ['default' => $pool]);
         try {
@@ -383,7 +383,7 @@ final class ConnectionAcquireTimingTest extends TestCase
     private function database(array $names = ['default'], ?FastDb $db = null, bool $stack = true): array
     {
         $db ??= new FastDb();
-        if ($stack) { $db->isEnableQueryStack(true); }
+        if ($stack) { $db->configureQueryStack(true); }
         $this->databases[] = $db;
         $pools = $clients = [];
         foreach ($names as $name) {
@@ -400,7 +400,7 @@ final class ConnectionAcquireTimingTest extends TestCase
     {
         $config = new Config(['maxObjectNum' => 1, 'minObjectNum' => 0, 'intervalCheckTime' => 0, 'getObjectTimeout' => $timeout]);
         $pool = new AcquireTimingRetryPool($config, [new AcquireTimingClient()]);
-        $db = (new FastDb())->addDb($config)->isEnableQueryStack(true);
+        $db = (new FastDb())->addDb($config)->configureQueryStack(true);
         $this->databases[] = $db;
         (new \ReflectionProperty(FastDb::class, 'pools'))->setValue($db, ['default' => $pool]);
         return [$db, $pool];

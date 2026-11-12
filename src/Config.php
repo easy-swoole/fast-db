@@ -194,13 +194,13 @@ class Config extends \EasySwoole\Pool\Config
     /** @param array<array-key, TlsVersion|string> $versions */
     public function setTlsVersions(array $versions): void { $this->tlsVersions = $versions; }
 
-    public function isIsForceRollback(): bool
+    public function isForceRollback(): bool
     {
         return $this->isForceRollback;
     }
 
-    public function setIsForceRollback(bool $isForceRollback): void
+    public function setForceRollback(bool $enabled): void
     {
-        $this->isForceRollback = $isForceRollback;
+        $this->isForceRollback = $enabled;
     }
 }

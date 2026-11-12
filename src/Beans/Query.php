@@ -3,6 +3,7 @@
 namespace EasySwoole\FastDb\Beans;
 
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
+use EasySwoole\FastDb\Internal\EntityQueryBuilder;
 use EasySwoole\FastDb\Internal\FieldSelection;
 use EasySwoole\Mysqli\QueryBuilder;
 
@@ -22,7 +23,7 @@ class Query
     /** 字段输出配置不需要 SQL 构造器，首次添加 SQL 条件或显式访问时再创建。 */
     private function builder(): QueryBuilder
     {
-        return $this->queryBuilder ??= new QueryBuilder();
+        return $this->queryBuilder ??= new EntityQueryBuilder();
     }
 
     function limit(int $num,bool $withTotalCount = false):Query
@@ -101,14 +102,19 @@ class Query
         if ($this->selection !== null) {
             $properties = $this->selection->filterProperties($properties, $forOutput);
         }
-        if (!$forOutput && $this->queryBuilder !== null) {
-            // 写入先合并底层字段白名单，再转换实际参与 SQL 的字段。
-            $fields = $this->queryBuilder->getField();
-            if ($fields !== ['*']) {
-                return array_filter($properties, static fn ($field) => in_array($field, $fields, true), ARRAY_FILTER_USE_KEY);
-            }
+        return !$forOutput && $this->queryBuilder !== null
+            ? self::filterWriteFields($properties, $this->queryBuilder) : $properties;
+    }
+
+    /** @internal 转换前筛选属性，构建 SQL 前再按同一规则确认实际写入的列。 */
+    public static function filterWriteFields(array $values, QueryBuilder $builder): array
+    {
+        $fields = $builder->getField();
+        // mysqli 的 getField() 把默认通配符和显式白名单 ['*'] 都返回为同一个数组。
+        if ($fields === ['*'] && !($builder instanceof EntityQueryBuilder && $builder->hasExplicitFields())) {
+            return $values;
         }
-        return $properties;
+        return array_filter($values, static fn ($field) => in_array($field, $fields), ARRAY_FILTER_USE_KEY);
     }
 
     /** 声明本次查询需要批量加载的关系方法；空数组清除声明。 */

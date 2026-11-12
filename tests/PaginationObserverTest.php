@@ -21,13 +21,13 @@ final class PaginationObserverTest extends TestCase
     {
         $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
             $events = [];
-            $db->isEnableQueryStack(true);
+            $db->configureQueryStack(true);
             $page = $this->page();
             $sql = $page->getLastPrepareQuery();
             $db->setOnQuery(function (QueryResult $result) use ($db, $page, &$events): void {
                 if ($result->getRawSql() === null) {
                     $events[] = 'global-main';
-                    $this->assertSame(37, $db->getTotalCount($result));
+                    $this->assertSame(37, $result->getTotalCount());
                     $this->assertSame(1, $result->getAffectedRows());
                     $page->raw('SELECT changed_by_observer');
                     $db->rawQuery('SELECT 1 AS probe');
@@ -43,7 +43,7 @@ final class PaginationObserverTest extends TestCase
             });
             $this->assertSame([['id' => 7]], $result->getResult());
             $this->assertSame($sql, $result->getQueryBuilder()->getLastPrepareQuery());
-            $this->assertSame(37, $db->getTotalCount($result));
+            $this->assertSame(37, $result->getTotalCount());
             $this->assertSame(['global-main', 'global-probe', 'global-count', 'local-main'], $events);
             $this->assertSame([null, 'SELECT FOUND_ROWS() as count', 'SELECT 1 AS probe'], array_column($db->getQueryStack(), 'rawQuery'));
             $commands = $this->commands($peer, 5);
@@ -56,7 +56,7 @@ final class PaginationObserverTest extends TestCase
     public function testCompletionReentryAndResultMutationPreserveRecordedPageSql(): void
     {
         $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
-            $db->isEnableQueryStack(true);
+            $db->configureQueryStack(true);
             $page = $this->page();
             $sql = $page->getLastPrepareQuery();
             $this->queuePage($peer);
@@ -78,11 +78,11 @@ final class PaginationObserverTest extends TestCase
     public function testGlobalObserverCannotChangeRecordingOfTheAlreadyExecutedPage(): void
     {
         $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
-            $db->setOnQuery(static function () use ($db): void { $db->isEnableQueryStack(true); });
+            $db->setOnQuery(static function () use ($db): void { $db->configureQueryStack(true); });
             $this->queuePage($peer); $this->textRows($peer, 'count', 37);
             $db->query($this->page());
             $this->assertNull($db->getQueryStack());
-            $db->setOnQuery(static function () use ($db): void { $db->isEnableQueryStack(false); });
+            $db->setOnQuery(static function () use ($db): void { $db->configureQueryStack(false); });
             $this->queuePage($peer); $this->textRows($peer, 'count', 37);
             $db->query($this->page());
             $this->assertSame([null, 'SELECT FOUND_ROWS() as count'], array_column($db->getQueryStack(), 'rawQuery'));
@@ -103,7 +103,7 @@ final class PaginationObserverTest extends TestCase
             });
             $this->queuePage($peer); $this->textRows($peer, 'count', 37);
             $result = $db->query($this->page());
-            $this->assertSame(37, $db->getTotalCount($result));
+            $this->assertSame(37, $result->getTotalCount());
             $this->assertSame(['original-main', 'replacement-count'], $events);
             $this->assertNextQuerySucceeds($db, $peer);
         });
@@ -113,7 +113,7 @@ final class PaginationObserverTest extends TestCase
     {
         $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
             $failure = new \RuntimeException('main global observer'); $global = [];
-            $db->isEnableQueryStack(true);
+            $db->configureQueryStack(true);
             $db->setOnQuery(static function (QueryResult $result) use ($failure, &$global): void { $global[] = $result; throw $failure; });
             $this->queuePage($peer); $this->textRows($peer, 'count', 37);
             try { $db->query($this->page()); $this->fail('Expected observer failure'); }
@@ -121,7 +121,7 @@ final class PaginationObserverTest extends TestCase
             $this->assertCount(1, $global);
             $this->assertSame([['id' => 7]], $global[0]->getResult());
             $this->assertNull($global[0]->getException());
-            $this->assertSame(37, $db->getTotalCount($global[0]));
+            $this->assertSame(37, $global[0]->getTotalCount());
             $this->assertSame([null, 'SELECT FOUND_ROWS() as count'], array_column($db->getQueryStack(), 'rawQuery'));
             $this->assertNull($db->getQueryStack(-1)->exception);
             $this->assertNextQuerySucceeds($db, $peer);
@@ -143,7 +143,7 @@ final class PaginationObserverTest extends TestCase
             $this->assertSame([['id' => 7]], $global[0]->getResult());
             $this->assertSame([['count' => 37]], $global[1]->getResult());
             $this->assertNull($global[1]->getException());
-            $this->assertSame(37, $db->getTotalCount($global[0]));
+            $this->assertSame(37, $global[0]->getTotalCount());
             $this->reply($peer, "\0\0\0\x02\0\0\0", 1);
             $this->assertTrue($db->rawQuery('DO 1')->getResult());
             $this->assertNull($global[2]->getException());
@@ -165,7 +165,7 @@ final class PaginationObserverTest extends TestCase
             $this->assertNull($global[0]->getException());
             $this->assertSame($original, $global[1]->getException());
             $this->assertNull($global[1]->getResult());
-            $this->assertNull($db->getTotalCount($global[0]));
+            $this->assertNull($global[0]->getTotalCount());
             $this->assertNextQuerySucceeds($db, $peer);
         });
     }
@@ -174,7 +174,7 @@ final class PaginationObserverTest extends TestCase
     {
         $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
             $failure = new \RuntimeException('global observer failure'); $global = [];
-            $db->isEnableQueryStack(true);
+            $db->configureQueryStack(true);
             $db->setOnQuery(static function (QueryResult $result) use ($failure, &$global): void { $global[] = $result; throw $failure; });
             $this->queuePage($peer); $this->reply($peer, "\xff" . pack('v', 1064) . '#42000count failed', 1);
             try { $db->query($this->page()); $this->fail('Expected the original count SQL error'); }
@@ -198,7 +198,7 @@ final class PaginationObserverTest extends TestCase
         $db->setOnQuery(static function (QueryResult $result) use (&$events): void { $events[] = $result->getRawSql() === null ? 'main' : 'count'; });
         try {
             $result = $db->query($query, timeout: 0.2);
-            $this->assertSame(37, $db->getTotalCount($result));
+            $this->assertSame(37, $result->getTotalCount());
             $this->assertSame(['main', 'count'], $events);
         } finally { $current->setValue($db, []); }
     }

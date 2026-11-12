@@ -108,4 +108,24 @@ final class QueryFailureTest extends TestCase
         $this->expectExceptionMessage('logger failure');
         $db->rawQuery('SELECT 1');
     }
+
+    public function testBorrowFailureKeepsTheOriginalQueryAfterBuilderReuse(): void
+    {
+        $db = new FastDb();
+        $builder = (new QueryBuilder())->raw('SELECT ? AS original_query', [1]);
+        $failureResult = null;
+        try {
+            $db->query($builder, connection: 'unregistered',
+                onQuery: static function (QueryResult $result) use (&$failureResult): void {
+                    $failureResult = $result;
+                });
+            $this->fail('Expected an unregistered connection error');
+        } catch (\EasySwoole\FastDb\Exception\RuntimeError $error) {
+            $this->assertSame($error, $failureResult->getException());
+        }
+        $builder->raw('SELECT ? AS next_query', [2]);
+
+        $this->assertSame('SELECT ? AS original_query', $failureResult->getQueryBuilder()->getLastPrepareQuery());
+        $this->assertSame([1], $failureResult->getQueryBuilder()->getLastBindParams());
+    }
 }
