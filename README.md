@@ -527,7 +527,7 @@ $entity->chunk(function (User $user): void {
 
 `chunk($callback, $chunkSize = 10)` 按 OFFSET 分页读取，每次回调接收一条记录，不是一个数组块。请提供稳定排序；遍历中删除记录或修改筛选条件可能改变后续页的偏移，不适合需要稳定游标的迁移任务。 `chunk()` 不主动请求总数统计，按公开查询回调处理前的原始页条数判断是否继续；调用前显式开启的总数统计选项仍保留。
 
-回调返回严格的 `false` 时立即停止，不再交付本批剩余记录或查询后续批次；没有返回值或返回其他值时继续。`chunk()` 本身不返回累计处理条数。
+`$chunkSize` 必须大于 0。回调返回严格的 `false` 时立即停止，不再交付本批剩余记录或查询后续批次；没有返回值或返回其他值时继续。`chunk()` 本身不返回累计处理条数。
 
 #### 按稳定键分块
 
@@ -550,7 +550,7 @@ echo $processed; // 已交付给回调的记录数。
 
 回调返回严格的 `false` 时立即停止，返回的计数包含触发停止的这一条；没有返回值或返回其他值时继续。每页通过 FastDb 的统一执行入口查询，沿用 `all()` 的实体转换和输出规则，保留查询条件及查询回调，不自动开启事务或统计总数。方法结束或抛异常后清理本次查询配置。
 
-使用 `fields()` 时必须显式选中原始游标列，例如 `fields(['id', 'name', 'status'])`，不能只把游标列选为 `id AS cursor` 这样的别名；库不会为遍历悄悄扩大字段白名单。
+使用 `fields()` 时必须显式选中原始游标列，例如 `fields(['id', 'name', 'status'])`，不能只把游标列选为 `id AS cursor` 这样的别名；库不会为遍历悄悄扩大字段白名单。非空批次的末行缺少游标列或游标值为 null 时，会在交付该批数据前抛出异常。
 
 `hideFields()` 可以隐藏游标列，方法会在公开查询回调前从原始结果保存末行游标和页大小，再转换实体或隐藏输出字段。因此隐藏游标、修改回调对象或在 `onQuery` 中改写交付数据，都不会改变翻页位置及原始页的结束判断。返回实体后持续隐藏字段仍沿用 `persistFieldLimit()` 的规则。调用者负责选中符合约定的游标列，并保证其稳定、唯一且非 NULL；组件不逐行扫描校验游标。不要在数据库中修改用于本次遍历的游标列。
 
@@ -606,7 +606,7 @@ $id = $user->id; // 自增主键由 last insert id 回填。
 $user->insert(['name', 'score']);
 ```
 
-参数为底层 `onDuplicate()` 的更新列列表；命中重复键时按构建器语义更新这些列。该方法按 SQL 执行结果返回是否成功，重复键更新未改变数据时也可返回 true，不能用返回值区分本次是插入还是重复键更新；需要准确的最终记录时重新查询。
+命中重复键时，按底层 `onDuplicate()` 的规则更新指定列。返回值表示 SQL 是否成功，重复键更新未改变数据时也可以返回 `true`。实体只更新两个分支都能确认写入实体值的字段基准。未列入更新列表或使用显式冲突更新值的字段保留原基准。需要准确的最终记录时重新查询。
 
 ### 检查待保存修改
 
@@ -665,6 +665,8 @@ $user->update(); // 保存尚未写入的 score。
 
 `toArray()` 在转换前应用 `fields()` 和 `hideFields()`；`insert()` / `update()` 在转换及变更比较前只应用 `fields()`。被排除的字段不会执行 `toValue` 回调或转换对象的 `toValue()`，不会因其转换失败阻止本次操作。部分更新只接受实际写入字段的比较基准，其他修改仍可在后续放开白名单后保存。
 
+通过 `func()` 配置底层构建器的字段白名单时，`update()` 在构建 SQL 前按该白名单筛选已编码的数据，只接受实际提交的字段基准。若筛选后没有字段可写，直接返回 `true`。
+
 `fields(null)` 或 `fields([])` 不限制更新字段。成功执行的更新会重置查询配置，需要每次重新设置限制。影响行数依赖 MySQL 返回结果，不代表是否命中记录的完整信息。
 
 ### 快捷更新
@@ -679,6 +681,8 @@ $affected = User::fastUpdate(function (QueryBuilder $query): void {
 ```
 
 签名：`fastUpdate($updateLimit, $data, $tableName = null, $onQuery = null)`，通常返回影响行数。它直接写入 `$data`，不执行实体更新钩子，也不做属性转换或变更比较。
+
+`findRecord()`、`findAll()`、`fastUpdate()` 和 `fastDelete()` 直接使用显式传入的表名。省略表名时，才构造实体调用 `tableName()` 推导表名。返回实体的查询仍会按返回行构造实体。
 
 `findRecord()`、`findAll()`、`fastUpdate()`、`fastDelete()` 共用条件解析规则：条件数组中的普通值表示等值条件，数组值展开为 `[值, 运算符]`；回调接收原始 QueryBuilder。`findRecord()` 的字符串主键始终是单个值，另外三个方法的逗号主键简写表示 `IN`，各片段保留字符串，不强制转为整数。不做空白裁剪；主键本身包含逗号时，用条件数组显式指定。
 
@@ -1211,7 +1215,7 @@ class AuditedUser extends User
 
 ### 定义一对一和一对多关联
 
-`type` 使用 `EasySwoole\FastDb\RelationType` 枚举：`RelationType::One` 表示单条关联，`RelationType::Many` 表示多条关联。`type` 必填；构造参数顺序为 `targetEntity`、`targetProperty`、`type`，其余参数可按名称传入。`One` 只能调用 `relateOne()`，`Many` 只能调用 `relateMany()`；类型与调用不一致时，在执行查询和配置方法前直接抛出 `RuntimeError`。
+`type` 使用 `EasySwoole\FastDb\RelationType` 枚举：`RelationType::One` 表示单条关联，`RelationType::Many` 表示多条关联。`type` 必填且为只读属性。构造参数顺序为 `targetEntity`、`targetProperty`、`type`，其余参数可按名称传入。`One` 只能调用 `relateOne()`，`Many` 只能调用 `relateMany()`；类型与调用不一致时，在执行查询和配置方法前直接抛出 `RuntimeError`。
 
 例如用户有一条 profile 和多条 order；目标实体要声明 `userId` 属性，数据库中需要对应字段：
 
@@ -1835,7 +1839,7 @@ $insertId = $result->getInsertId();
 
 连接名在执行 SQL 前从实际连接记录，查询失败时也保留。查询栈统一读取该快照，不会因为构建器回调或日志回调切换连接而记错数据库。模型查询失败时的实体回调同样保留发起查询时的连接名。
 
-FastDb 在 Connection 返回后立即保存结果行、影响行数、自增 ID、SQL、参数和耗时。需要总数时，在同一连接上先取得 `FOUND_ROWS()`，然后才调用完成回调和查询观察者。查询结果保存的是本次执行的返回值，后续数据库变化不会自动刷新这些 PHP 数据；需要新数据时应再次查询。
+FastDb 在 Connection 返回后立即保存结果行、影响行数、自增 ID、SQL、参数和耗时。需要总数时，在同一连接上先取得 `FOUND_ROWS()`，然后才调用完成回调和查询观察者。显式传入的 `$timeout` 分别应用于主查询和总数查询。查询结果保存的是本次执行的返回值，后续数据库变化不会自动刷新这些 PHP 数据；需要新数据时应再次查询。
 
 Connection 的 `getLastAffectRows()` / `getLastInsertId()` 始终表示最后一条实际执行 SQL 的元数据，包括回调中的 SQL 或分页总数查询。通过 FastDb 执行时，使用返回的 `QueryResult` 获取该次操作的影响行数和自增 ID。
 

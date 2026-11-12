@@ -186,7 +186,7 @@ class FastDb
         return $this->execute($client, static function () use ($client, $builder, $build, $timeout) {
             if ($build !== null) { $build($builder); }
             return $client->query($builder, $timeout);
-        }, $builder, null, $onComplete);
+        }, $builder, onComplete: $onComplete, countTimeout: $timeout);
     }
 
     public function rawQuery(string $sql, ?float $timeout = null, ?callable $onComplete = null,
@@ -197,7 +197,7 @@ class FastDb
     }
 
     private function execute(Connection $client, callable $operation, ?QueryBuilder $builder = null,
-        ?string $sql = null, ?callable $onComplete = null): QueryResult
+        ?string $sql = null, ?callable $onComplete = null, ?float $countTimeout = null): QueryResult
     {
         $result = $this->executeResult($client, $operation, $builder, $sql);
         $error = $result->getException();
@@ -205,7 +205,7 @@ class FastDb
         if ($error === null && $builder !== null
             && in_array('SQL_CALC_FOUND_ROWS', $result->getQueryBuilder()->getLastQueryOptions(), true)) {
             // 必须先取得总数，再允许任何完成回调或观察回调执行其他 SQL。
-            $count = $this->executeResult($client, static fn () => $client->rawQuery('SELECT FOUND_ROWS() as count'),
+            $count = $this->executeResult($client, static fn () => $client->rawQuery('SELECT FOUND_ROWS() as count', $countTimeout),
                 null, 'SELECT FOUND_ROWS() as count');
             $error = $count->getException();
             if ($error === null) { $result->setTotalResult($count); }
@@ -265,10 +265,11 @@ class FastDb
         try { return $call($client); }
         finally {
             if ($ownsConnection) {
-                $this->returnConnection($name, $client);
                 $cid = Coroutine::getCid();
+                // 回调可能已主动归还连接，先确认当前协程的登记再归还。
                 if (($this->currentConnection[$cid][$name] ?? null) === $client) {
                     unset($this->currentConnection[$cid][$name]);
+                    $this->returnConnection($name, $client);
                 }
             }
         }

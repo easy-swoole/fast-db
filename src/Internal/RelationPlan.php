@@ -11,7 +11,6 @@ use EasySwoole\Mysqli\QueryBuilder;
 final class RelationPlan
 {
     public function __construct(
-        public readonly RelationType $kind,
         public readonly Relate $relate,
         public readonly string $tableName,
         public readonly Query $query,
@@ -21,9 +20,9 @@ final class RelationPlan
 
     /** 按需加载及预加载的缓存查询共用关联范围、字段和单条限制规则。 */
     public static function buildLookup(QueryBuilder $query, string $tableName, Relate $relate,
-        RelationType $kind, mixed $selfValue, ?array $fields): QueryBuilder
+        mixed $selfValue, ?array $fields): QueryBuilder
     {
         return $query->groupExistingWhere()->where($relate->targetProperty, $selfValue)
-            ->get($tableName, $kind === RelationType::One ? 2 : null, $fields);
+            ->get($tableName, $relate->type === RelationType::One ? 2 : null, $fields);
     }
 }

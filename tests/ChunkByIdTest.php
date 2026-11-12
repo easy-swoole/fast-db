@@ -349,6 +349,32 @@ final class ChunkByIdTest extends TestCase
         $this->assertClean($owner);
     }
 
+    public static function missingCursors(): array
+    {
+        return [['id', ['name']], ['id', ['id AS cursor']], ['stable_key', ['stable_key']]];
+    }
+
+    #[DataProvider('missingCursors')]
+    public function testMissingOrNullLastCursorStopsBeforeDeliveringRows(string $column, array $fields): void
+    {
+        $this->seed(2);
+        if ($column === 'stable_key') {
+            $this->connection->database->exec('UPDATE keyset_chunk_records SET stable_key = NULL');
+        }
+        $owner = new KeysetChunkRecord();
+        $owner->queryLimit()->fields($fields);
+        $calls = 0;
+        try {
+            $owner->chunkById(static function () use (&$calls): bool { $calls++; return false; }, 2, $column);
+            $this->fail('Missing or null cursor must fail');
+        } catch (RuntimeError $error) {
+            $this->assertStringContainsString('non-null cursor value for column: ' . $column, $error->getMessage());
+        }
+        $this->assertSame(0, $calls);
+        $this->assertCount(1, $this->pages());
+        $this->assertClean($owner);
+    }
+
     public static function invalidSizes(): array { return [[0], [-1]]; }
 
     #[DataProvider('invalidSizes')]

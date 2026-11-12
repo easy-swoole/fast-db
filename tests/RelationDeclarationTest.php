@@ -17,7 +17,6 @@ final class RelationDeclarationTest extends TestCase
     {
         $parent = new DeclarationParent(['id'=>1, 'tenant'=>7]);
         $plan = $parent->__relationPlan('plain');
-        $this->assertSame(RelationType::Many, $plan->kind);
         $this->assertSame(RelationType::Many, $plan->relate->type);
         $this->assertSame(1, $plan->selfValue);
         $this->assertSame('id', $plan->relate->selfProperty);
@@ -33,7 +32,7 @@ final class RelationDeclarationTest extends TestCase
             $held = $parent->queryLimit()->where('existing', 5);
             $builder = $held->__getQueryBuilder();
             $plan = $parent->__relationPlan('configured');
-            $this->assertSame(RelationType::One, $plan->kind);
+            $this->assertSame(RelationType::One, $plan->relate->type);
             $this->assertSame($held, $parent->queryLimit());
             $this->assertSame($builder, $held->__getQueryBuilder());
             $this->assertSame([5], $builder->get('children')->getLastBindParams());
@@ -77,7 +76,7 @@ final class RelationDeclarationTest extends TestCase
         $query = $parent->queryLimit()->withRelations(['PROTECTEDGETTER', 'parameterizedGetter', 'protectedGetter']);
         $this->assertSame(['protectedGetter', 'parameterizedGetter'], $query->getRelations());
         foreach ($query->getRelations() as $name) {
-            $this->assertSame(RelationType::Many, $parent->__relationPlan($name)->kind);
+            $this->assertSame(RelationType::Many, $parent->__relationPlan($name)->relate->type);
         }
     }
 

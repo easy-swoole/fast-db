@@ -325,12 +325,27 @@ final class InsertStateTest extends TestCase
         $this->client->database->exec("INSERT INTO insert_state (id,name) VALUES (20,'same')");
         $entity = new InsertStateRecord(['id' => 20, 'name' => 'old']);
         $entity->name = 'same';
+        $entity->score = 7;
         // MySQL 的重复键更新未改变数据时，执行成功但影响行数为零。
         $this->client->nextNoOp = true;
         $this->assertTrue($entity->insert(['name']));
+        $this->assertSame(['score' => 7], $entity->getChanges());
+        $this->assertSame(0, $this->client->row(20)['score']);
         $this->assertTrue($entity->update());
-        $this->assertCount(1, $this->client->queries);
+        $this->assertSame([7, 20], $this->client->queries[1]['parameters']);
         $this->assertSame('same', $this->client->row(20)['name']);
+        $this->assertSame(7, $this->client->row(20)['score']);
+    }
+
+    public function testExplicitDuplicateValueDoesNotAcceptTheEntityValue(): void
+    {
+        $this->client->database->exec("INSERT INTO insert_state (id,name) VALUES (20,'database')");
+        $entity = new InsertStateRecord(['id' => 20, 'name' => 'old']);
+        $entity->name = 'entity';
+        $this->client->nextNoOp = true;
+        $this->assertTrue($entity->insert(['name', 'name' => 'database']));
+        $this->assertSame(['name' => 'entity'], $entity->getChanges());
+        $this->assertSame('database', $this->client->row(20)['name']);
     }
 
     public function testObserverExceptionDoesNotForgetAnAlreadySuccessfulInsert(): void

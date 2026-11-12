@@ -64,6 +64,25 @@ final class ChunkTest extends TestCase
         });
     }
 
+    public static function invalidChunkSizes(): array { return [[0], [-1]]; }
+
+    #[DataProvider('invalidChunkSizes')]
+    public function testInvalidChunkSizeFailsBeforeQueryAndClearsSelection(int $size): void
+    {
+        $this->withDatabase([], function (array &$queries) use ($size): void {
+            $entity = new ChunkEntity();
+            $entity->queryLimit()->fields(['id']);
+            try {
+                $entity->chunk(static function (): void { self::fail('Unexpected callback'); }, $size);
+                $this->fail('Expected invalid chunk size to fail');
+            } catch (\InvalidArgumentException $error) {
+                $this->assertSame('Chunk size must be greater than zero', $error->getMessage());
+            }
+            $this->assertSame([], $queries);
+            $this->assertNull($entity->queryLimit()->getFields());
+        });
+    }
+
     public function testEmptyResultDoesNotCallTheCallback(): void
     {
         $this->withDatabase([[]], function (array &$queries, array &$rawQueries): void {

@@ -78,7 +78,7 @@ final class PaginationObserverTest extends TestCase
                 });
             });
             $this->queuePage($peer); $this->textRows($peer, 'count', 37);
-            $result = $db->query($this->page());
+            $result = $db->query($query, timeout: 0.2);
             $this->assertSame(37, $db->getTotalCount($result));
             $this->assertSame(['original-main', 'replacement-count'], $events);
             $this->assertNextQuerySucceeds($db, $peer);
@@ -161,18 +161,19 @@ final class PaginationObserverTest extends TestCase
         });
     }
 
-    public function testCustomConnectionsStillFetchTheCountOnce(): void
+    public function testCustomConnectionsUseTheExplicitTimeoutForBothQueries(): void
     {
         $connection = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()->onlyMethods(['query', 'rawQuery'])->getMock();
         $connection->connectionName = 'default';
-        $connection->expects($this->once())->method('query')->willReturn([['id' => 7]]);
-        $connection->expects($this->once())->method('rawQuery')->with('SELECT FOUND_ROWS() as count')->willReturn([['count' => 37]]);
+        $query = $this->page();
+        $connection->expects($this->once())->method('query')->with($query, 0.2)->willReturn([['id' => 7]]);
+        $connection->expects($this->once())->method('rawQuery')->with('SELECT FOUND_ROWS() as count', 0.2)->willReturn([['count' => 37]]);
         $db = new FastDb(); $events = [];
         $current = new \ReflectionProperty(FastDb::class, 'currentConnection');
         $current->setValue($db, [Coroutine::getCid() => ['default' => $connection]]);
         $db->setOnQuery(static function (QueryResult $result) use (&$events): void { $events[] = $result->getRawSql() === null ? 'main' : 'count'; });
         try {
-            $result = $db->query($this->page());
+            $result = $db->query($query, timeout: 0.2);
             $this->assertSame(37, $db->getTotalCount($result));
             $this->assertSame(['main', 'count'], $events);
         } finally { $current->setValue($db, []); }

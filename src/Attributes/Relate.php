@@ -10,7 +10,7 @@ class Relate
     function __construct(
         public string $targetEntity,
         public string $targetProperty,
-        public RelationType $type,
+        public readonly RelationType $type,
         public ?string $selfProperty = null,
         public bool $cacheResult = false,
         public ?string $configure = null,

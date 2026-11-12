@@ -59,7 +59,7 @@ final class RelationPreloader
                 }
                 // 数组模式释放临时父模型，不通过 Query 所有者延长其生命周期。
                 if ($asArray) {
-                    $plan = new RelationPlan($plan->kind, $plan->relate, $plan->tableName,
+                    $plan = new RelationPlan($plan->relate, $plan->tableName,
                         $plan->query->forEntity($source), $plan->connectionName, $value);
                 }
                 $db->selectConnection($plan->connectionName);
@@ -70,13 +70,12 @@ final class RelationPreloader
                 $preview = (clone $builder)->get($table, null, $columns);
                 // 数组结果直接附加关联数据，不需要生成用于实体缓存匹配的查询。
                 $lookup = $asArray ? null : RelationPlan::buildLookup(clone $builder, $table, $plan->relate,
-                    $plan->kind, $value, $columns);
+                    $value, $columns);
                 $mode = (bool) ($fields['returnAsArray'] ?? false);
-                $key = hash('sha256', serialize([$plan->connectionName, $plan->kind,
+                $key = hash('sha256', serialize([$plan->connectionName, $plan->relate->type,
                     $plan->relate->targetEntity, $plan->relate->targetProperty, $table, $mode,
                     $preview->getLastPrepareQuery(), $preview->getLastBindParams(), $preview->getLastQueryOptions()]));
-                $groups[$key][] = ['position' => $position, 'method' => $method, 'plan' => $plan,
-                    'value' => $value, 'lookup' => $lookup, 'arrayMode' => $mode];
+                $groups[$key][] = ['position' => $position, 'method' => $method, 'plan' => $plan, 'lookup' => $lookup];
             }
             $position++;
             unset($parent);
@@ -92,14 +91,10 @@ final class RelationPreloader
             $db->selectConnection($entries[0]['plan']->connectionName);
             $matches = $this->fetch($entries, $execute);
             foreach ($entries as $entry) {
-                $matched = $matches[serialize($entry['value'])] ?? [];
                 $plan = $entry['plan'];
-                if ($plan->kind === RelationType::One && count($matched) > 1) {
-                    throw new RuntimeError('more than one record hit is no allow in relateOne method');
-                }
-                $arrayMode = $asArray || $entry['arrayMode'];
+                $matched = $matches[serialize($plan->selfValue)] ?? [];
                 $db->selectConnection($plan->connectionName);
-                $data = $this->materialize($plan, $matched, $arrayMode, $asArray);
+                $data = $this->materialize($plan, $matched, $asArray);
                 if ($asArray) {
                     $parents[$entry['position']][$entry['method']] = $data;
                 } else {
@@ -116,7 +111,10 @@ final class RelationPreloader
         $first = $entries[0];
         $plan = $first['plan'];
         $values = [];
-        foreach ($entries as $entry) { $values[serialize($entry['value'])] = $entry['value']; }
+        foreach ($entries as $entry) {
+            $value = $entry['plan']->selfValue;
+            $values[serialize($value)] = $value;
+        }
         $matches = [];
         foreach (array_chunk($values, self::BATCH_SIZE, true) as $batch) {
             $token = '__fd_rel_' . bin2hex(random_bytes(6));
@@ -157,9 +155,13 @@ final class RelationPreloader
         return $matches;
     }
 
-    private function materialize(RelationPlan $plan, array $rows, bool $asArray, bool $plainList): mixed
+    private function materialize(RelationPlan $plan, array $rows, bool $parentAsArray): mixed
     {
-        if ($plan->kind === RelationType::One) {
+        $asArray = $parentAsArray || ($plan->query->getFields()['returnAsArray'] ?? false);
+        if ($plan->relate->type === RelationType::One) {
+            if (count($rows) > 1) {
+                throw new RuntimeError('more than one record hit is no allow in relateOne method');
+            }
             if ($rows === []) { return null; }
             return $asArray ? $rows[0] : new ($plan->relate->targetEntity)($rows[0]);
         }
@@ -167,6 +169,6 @@ final class RelationPreloader
             foreach ($rows as $index => $row) { $rows[$index] = new ($plan->relate->targetEntity)($row); }
         }
         // 数组父结果直接附加行列表；实体的 returnAsArray 关系仍返回 ListResult。
-        return $plainList ? $rows : new ListResult($rows);
+        return $parentAsArray ? $rows : new ListResult($rows);
     }
 }

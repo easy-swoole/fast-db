@@ -51,6 +51,19 @@ final class ContextReleaseTest extends TestCase
         } finally { $db->recycleContext(); $db->reset(); }
     }
 
+    public function testInvokeDoesNotReturnAConnectionAlreadyRecycledByItsCallback(): void
+    {
+        [$db, $pool] = $this->database();
+        try {
+            $db->invoke(function (Connection $client) use ($db): void {
+                $this->assertSame($client, $db->currentConnection());
+                $db->recycleContext();
+                $this->assertNull($db->currentConnection());
+            });
+            $this->assertSame(1, $pool->recycles);
+        } finally { $db->recycleContext(); $db->reset(); }
+    }
+
     public function testReturningAnActiveSessionRollsBackBeforeTheNextBorrowing(): void
     {
         [$db, $pool] = $this->database();

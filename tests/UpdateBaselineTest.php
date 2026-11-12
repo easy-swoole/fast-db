@@ -80,6 +80,32 @@ final class UpdateBaselineTest extends TestCase
         $this->assertStringNotContainsString('`name` =', $this->queries[1]);
     }
 
+    public function testBuilderFieldSelectionLeavesOtherChangesPending(): void
+    {
+        $this->mockUpdates(2);
+        $user = new User(['id' => 1, 'name' => 'A', 'score' => 1]);
+        $user->setData(['name' => 'B', 'score' => 2]);
+        $user->queryLimit()->func(static fn (QueryBuilder $builder) => $builder->fields(['name']));
+        $this->assertTrue($user->update());
+        $this->assertSame(['score' => 2], $user->getChanges());
+        $this->assertStringContainsString("`name` = 'B'", $this->queries[0]);
+        $this->assertStringNotContainsString('`score` =', $this->queries[0]);
+
+        $this->assertTrue($user->update());
+        $this->assertSame([], $user->getChanges());
+        $this->assertStringContainsString("`score` = '2'", $this->queries[1]);
+    }
+
+    public function testBuilderFieldsWithNoChangedColumnSkipSql(): void
+    {
+        $this->mockUpdates(0);
+        $user = new User(['id' => 1, 'name' => 'A', 'score' => 1]);
+        $user->name = 'B';
+        $user->queryLimit()->func(static fn (QueryBuilder $builder) => $builder->fields(['score']));
+        $this->assertTrue($user->update());
+        $this->assertSame(['name' => 'B'], $user->getChanges());
+    }
+
     public function testFailedUpdateDoesNotAcceptChanges(): void
     {
         $this->mockUpdates(2, [0, 1]);

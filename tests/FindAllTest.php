@@ -43,6 +43,42 @@ final class FindAllTest extends TestCase
         }
     }
 
+    public function testExplicitTableSkipsModelConstructionExceptForReturnedEntities(): void
+    {
+        $client = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()
+            ->onlyMethods(['query', 'getLastAffectRows', 'getLastInsertId'])->getMock();
+        $client->method('getLastAffectRows')->willReturn(1);
+        $client->method('getLastInsertId')->willReturn(0);
+        $rows = [['id' => 1, 'name' => 'one']];
+        $client->expects($this->exactly(4))->method('query')
+            ->with($this->callback(function (QueryBuilder $query): bool {
+                $this->assertStringContainsString('`explicit_users`', $query->getLastPrepareQuery());
+                return true;
+            }))
+            ->willReturnOnConsecutiveCalls(true, true, $rows, $rows);
+        $db = new FastDb();
+        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue(
+            $db, [\Swoole\Coroutine::getCid() => ['default' => $client]]
+        );
+        $instance = new \ReflectionProperty(FastDb::class, 'instance');
+        $original = $instance->getValue();
+        $instance->setValue(null, $db);
+        ExplicitTableUser::$constructed = 0;
+        try {
+            $this->assertSame(1, ExplicitTableUser::fastUpdate(1, ['name' => 'one'], tableName: 'explicit_users'));
+            $this->assertSame(1, ExplicitTableUser::fastDelete(2, tableName: 'explicit_users'));
+            $this->assertSame($rows, ExplicitTableUser::findAll('1', tableName: 'explicit_users', returnAsArray: true));
+            $this->assertSame(0, ExplicitTableUser::$constructed);
+
+            $user = ExplicitTableUser::findRecord(1, tableName: 'explicit_users');
+            $this->assertInstanceOf(ExplicitTableUser::class, $user);
+            $this->assertSame(1, $user->id);
+            $this->assertSame(1, ExplicitTableUser::$constructed);
+        } finally {
+            $instance->setValue(null, $original);
+        }
+    }
+
     public static function primaryKeyQueries(): array
     {
         return [
@@ -52,5 +88,16 @@ final class FindAllTest extends TestCase
             'multiple primary keys' => ['1,2', "WHERE  `id` IN ( '1', '2' )"],
             'unfiltered query' => [null, ''],
         ];
+    }
+}
+
+final class ExplicitTableUser extends User
+{
+    public static int $constructed = 0;
+
+    public function __construct(?array $data = null)
+    {
+        self::$constructed++;
+        parent::__construct($data);
     }
 }

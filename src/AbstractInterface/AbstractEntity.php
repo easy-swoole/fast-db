@@ -49,7 +49,7 @@ abstract class AbstractEntity implements \JsonSerializable
     public function __setRelationData(RelationPlan $plan, QueryBuilder $lookup, string $connectionName, mixed $data): static
     {
         $this->relationLoader ??= new RelationLoader();
-        $this->relationLoader->prime($plan->relate, $lookup, $plan->kind,
+        $this->relationLoader->prime($plan->relate, $lookup,
             (bool) ($plan->query->getFields()['returnAsArray'] ?? false), $connectionName, $data);
         return $this;
     }
@@ -116,6 +116,9 @@ abstract class AbstractEntity implements \JsonSerializable
     function chunk(callable $func,int $chunkSize = 10)
     {
         try {
+            if ($chunkSize < 1) {
+                throw new \InvalidArgumentException('Chunk size must be greater than zero');
+            }
             $page = 1;
             while (true){
                 // 仅按本页数量判断是否结束，不为每一页额外查询总数。
@@ -177,7 +180,11 @@ abstract class AbstractEntity implements \JsonSerializable
                     static function (QueryResult $result) use ($column, &$rowCount, &$nextId): void {
                         $rows = $result->getResult();
                         $rowCount = count($rows);
-                        if ($rowCount > 0) { $nextId = $rows[array_key_last($rows)][$column]; }
+                        if ($rowCount === 0) { return; }
+                        $nextId = $rows[array_key_last($rows)][$column] ?? null;
+                        if ($nextId === null) {
+                            throw new RuntimeError('chunkById requires a non-null cursor value for column: ' . $column);
+                        }
                     })->list();
                 if ($rowCount === 0) { return $delivered; }
                 $this->reset();
@@ -315,9 +322,8 @@ abstract class AbstractEntity implements \JsonSerializable
             return 0;
         }
 
-        $entity = new static();
-        if (empty($tableName)) {
-            $tableName = $entity->tableName();
+        if ($tableName === null || $tableName === '') {
+            $tableName = (new static())->tableName();
         }
         $query = new QueryBuilder();
         self::applyQueryLimit($query, $deleteLimit, true, 'delete record');
@@ -346,7 +352,15 @@ abstract class AbstractEntity implements \JsonSerializable
             $pk = $this->primaryKeyCheck('update');
             $this->queryLimit()->whereRequired($pk,$this->entityState->primaryKey($this, $pk));
             $query = $this->queryLimit()->__getQueryBuilder();
-            $query->update($this->tableName(),$data);
+            $tableName = $this->tableName();
+            $writeFields = $query->getField();
+            if ($writeFields !== ['*']) {
+                // 底层构建器的白名单也会限制 UPDATE，比较基准以实际提交的列为准。
+                $data = array_filter($data, static fn ($field) => in_array($field, $writeFields), ARRAY_FILTER_USE_KEY);
+                if ($data === []) { return true; }
+                $compareValues = array_intersect_key($compareValues, $data);
+            }
+            $query->update($tableName, $data);
             // 按 SQL 成功顺序接受基准，再通知观察回调；重入保存可据此写回原值。
             $ret = static::callQuery($query,$this->onQuery,
                 function (QueryResult $result) use ($compareValues): void {
@@ -367,9 +381,8 @@ abstract class AbstractEntity implements \JsonSerializable
         callable|null $onQuery = null
     ):bool|int|string
     {
-        $entity = new static();
-        if(empty($tableName)){
-            $tableName = $entity->tableName();
+        if ($tableName === null || $tableName === '') {
+            $tableName = (new static())->tableName();
         }
         $query = new QueryBuilder();
         self::applyQueryLimit($query, $updateLimit, true, 'update record');
@@ -407,10 +420,22 @@ abstract class AbstractEntity implements \JsonSerializable
             $properties = $this->queryLimit()->filterProperties($entityRef->allProperties());
             $data = FieldCodec::values($this, $properties, true, $compareValues);
             $query = $this->queryLimit()->__getQueryBuilder();
-            if($updateDuplicateCols){
+            if ($updateDuplicateCols) {
                 $query->onDuplicate($updateDuplicateCols);
+                $query->insert($this->tableName(), $data);
+                // 构建器验证更新列后，只保留两个分支都写入实体值的字段。
+                // 显式更新值可能覆盖实体值，因此对应字段保留原基准。
+                $confirmed = [];
+                foreach ($updateDuplicateCols as $key => $column) {
+                    if (is_int($key) && array_key_exists($column, $compareValues)
+                        && !array_key_exists($column, $updateDuplicateCols)) {
+                        $confirmed[$column] = $compareValues[$column];
+                    }
+                }
+                $compareValues = $confirmed;
+            } else {
+                $query->insert($this->tableName(), $data);
             }
-            $query->insert($this->tableName(),$data);
             $isSuccess = false;
             $primaryKey = $entityRef->getPrimaryKey();
             static::callQuery($query, $this->onQuery,
@@ -439,9 +464,8 @@ abstract class AbstractEntity implements \JsonSerializable
         callable|null $onQuery = null
     ): ?static
     {
-        $entity = new static();
-        if (empty($tableName)) {
-            $tableName = $entity->tableName();
+        if ($tableName === null || $tableName === '') {
+            $tableName = (new static())->tableName();
         }
         $query = new QueryBuilder();
         self::applyQueryLimit($query, $queryLimit, false, 'find record');
@@ -465,9 +489,8 @@ abstract class AbstractEntity implements \JsonSerializable
         callable|null $onQuery = null
     ):mixed
     {
-        $entity = new static();
-        if (empty($tableName)) {
-            $tableName = $entity->tableName();
+        if ($tableName === null || $tableName === '') {
+            $tableName = (new static())->tableName();
         }
         $query = new QueryBuilder();
         self::applyQueryLimit($query, $queryLimit, true, 'find all record');
@@ -509,7 +532,7 @@ abstract class AbstractEntity implements \JsonSerializable
         $query = clone $this->queryLimit();
         $this->configureRelation($relate, $query);
         $target = new $relate->targetEntity();
-        return new RelationPlan($relate->type, $relate, $target->tableName(), $query,
+        return new RelationPlan($relate, $target->tableName(), $query,
             FastDb::getInstance()->selectConnection(), FieldCodec::compare($this->{$relate->selfProperty} ?? null));
     }
 
@@ -760,16 +783,16 @@ abstract class AbstractEntity implements \JsonSerializable
         }
     }
 
-    private function loadRelation(RelationType $kind, Relate $relate, ?string $tableName): mixed
+    private function loadRelation(RelationType $expectedType, Relate $relate, ?string $tableName): mixed
     {
         try {
             // 声明与调用入口必须一致，在配置、缓存读取和 SQL 执行前拦截。
-            if ($relate->type !== $kind) {
+            if ($relate->type !== $expectedType) {
                 throw new RuntimeError('Declared relation type does not match its getter');
             }
             $this->relationLoader ??= new RelationLoader();
             $this->configureRelation($relate, $this->queryLimit());
-            return $this->relationLoader->load($this, $relate, $tableName, $kind,
+            return $this->relationLoader->load($this, $relate, $tableName,
                 fn ($query) => static::callQuery($query, $this->onQuery), fn () => $this->reset(), fn ($result) => $this->readTotal($result));
         } finally {
             $this->reset();

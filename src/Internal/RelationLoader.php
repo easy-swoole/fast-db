@@ -19,16 +19,16 @@ final class RelationLoader
     public function clear(): void { $this->cache = $this->preloaded = []; }
 
     /** 显式预取独立于按需缓存，null 同样是有效结果。 */
-    public function prime(Relate $relate, QueryBuilder $lookup, RelationType $kind, bool $returnAsArray, string $connectionName, mixed $data): void
+    public function prime(Relate $relate, QueryBuilder $lookup, bool $returnAsArray, string $connectionName, mixed $data): void
     {
-        $this->preloaded[$this->fingerprint($relate, $lookup, $kind, $returnAsArray, $connectionName)] = $data;
+        $this->preloaded[$this->fingerprint($relate, $lookup, $returnAsArray, $connectionName)] = $data;
     }
 
     /** 两种关联共用构建、缓存查找和写回流程，结果组装分别处理。 */
-    public function load(AbstractEntity $entity, Relate $relate, ?string $tableName, RelationType $kind,
+    public function load(AbstractEntity $entity, Relate $relate, ?string $tableName,
         callable $execute, callable $beforeOneHydration, callable $readTotal): mixed
     {
-        [$target, $query, $returnAsArray, $key] = $this->prepare($entity, $relate, $tableName, $kind);
+        [$target, $query, $returnAsArray, $key] = $this->prepare($entity, $relate, $tableName);
         if ($key !== null && array_key_exists($key, $this->preloaded)) {
             return $this->preloaded[$key];
         }
@@ -38,7 +38,7 @@ final class RelationLoader
 
         $result = $execute($query);
         $rows = $result->getResult();
-        if ($kind === RelationType::One) {
+        if ($relate->type === RelationType::One) {
             if (empty($rows)) { $data = null; }
             elseif (count($rows) > 1) { throw new RuntimeError('more than one record hit is no allow in relateOne method'); }
             elseif ($returnAsArray) { $data = $rows[0]; }
@@ -61,24 +61,24 @@ final class RelationLoader
     }
 
     /** 目标初始化、表名求值和缓存键计算的先后顺序与普通关联查询一致。 */
-    private function prepare(AbstractEntity $entity, Relate $relate, ?string $tableName, RelationType $kind): array
+    private function prepare(AbstractEntity $entity, Relate $relate, ?string $tableName): array
     {
         $target = new $relate->targetEntity();
         $selection = $entity->queryLimit();
         $query = $selection->__getQueryBuilder();
         $fields = $selection->getFields();
         $returnAsArray = $fields['returnAsArray'] ?? false;
-        RelationPlan::buildLookup($query, $tableName ?: $target->tableName(), $relate, $kind,
+        RelationPlan::buildLookup($query, $tableName ?: $target->tableName(), $relate,
             FieldCodec::compare($entity->{$relate->selfProperty} ?? null), $fields['fields'] ?? null);
         $key = $relate->cacheResult || $this->preloaded !== []
-            ? $this->fingerprint($relate, $query, $kind, $returnAsArray, FastDb::getInstance()->selectConnection()) : null;
+            ? $this->fingerprint($relate, $query, $returnAsArray, FastDb::getInstance()->selectConnection()) : null;
         return [$target, $query, $returnAsArray, $key];
     }
 
-    private function fingerprint(Relate $relate, QueryBuilder $query, RelationType $kind, bool $returnAsArray, string $connectionName): string
+    private function fingerprint(Relate $relate, QueryBuilder $query, bool $returnAsArray, string $connectionName): string
     {
         return hash('sha256', serialize([
-            $connectionName, $kind, $relate->targetEntity, $returnAsArray,
+            $connectionName, $relate->type, $relate->targetEntity, $returnAsArray,
             $query->getLastPrepareQuery(), $query->getLastBindParams(), $query->getLastQueryOptions(),
         ]));
     }
