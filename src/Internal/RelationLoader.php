@@ -50,34 +50,39 @@ final class RelationLoader
         $db = !$returnAsArray && $rows !== [] ? FastDb::getInstance() : null;
         $connectionToRestore = $db?->selectConnection();
         try {
-            if ($relate->type === RelationType::One) {
-                if (empty($rows)) { $data = null; }
-                elseif (count($rows) > 1) { throw new RuntimeError('more than one record hit is no allow in relateOne method'); }
-                elseif ($returnAsArray) { $data = $rows[0]; }
-                else {
-                    // 单条实体赋值前结束父查询配置，子类赋值或字段转换时可重入父模型；最终清理由实体入口负责。
-                    $beforeOneHydration();
-                    $db->selectConnection($result->getConnectionName());
-                    $data = $hydrate($relate->targetEntity, $rows[0], $target);
-                }
-            } else {
-                $items = [];
-                foreach ($rows as $row) {
-                    if ($returnAsArray) {
-                        $items[] = $row;
-                    } else {
-                        // 上一个模型的初始化可能切库，每次填充都使用本次查询的连接。
-                        $db->selectConnection($result->getConnectionName());
-                        $items[] = $hydrate($relate->targetEntity, $row);
-                    }
-                }
-                $data = new ListResult($items);
+            if (!$returnAsArray && $relate->type === RelationType::One && count($rows) === 1) {
+                // 目标模型赋值时可能重入父模型，先清理本次关联条件。
+                $beforeOneHydration();
             }
+            $data = self::materialize($relate, $rows, $returnAsArray, $result->getConnectionName(), $hydrate, $target);
         } finally {
             if ($db !== null) { $db->selectConnection($connectionToRestore); }
         }
+        if ($relate->type === RelationType::Many) { $data = new ListResult($data); }
         if ($relate->cacheResult) { $this->cache[$key] = $data; }
         return $data;
+    }
+
+    /** 按需加载与预加载共用基数检查；调用方负责恢复选库并组装列表返回值。 */
+    public static function materialize(Relate $relate, array $rows, bool $returnAsArray, string $connectionName,
+        callable $hydrate, ?AbstractEntity $target): AbstractEntity|array|null
+    {
+        $single = $relate->type === RelationType::One;
+        if ($single && count($rows) > 1) {
+            throw new RuntimeError('more than one record hit is no allow in relateOne method');
+        }
+
+        $db = $returnAsArray ? null : FastDb::getInstance();
+        $result = [];
+        foreach ($rows as $row) {
+            if ($db !== null) {
+                // 上一条记录的构造器可能切库，每条都从查询连接开始回填。
+                $db->selectConnection($connectionName);
+                $row = $hydrate($relate->targetEntity, $row, $single ? $target : null);
+            }
+            $result[] = $row;
+        }
+        return $single ? ($result[0] ?? null) : $result;
     }
 
     private function fingerprint(Relate $relate, QueryBuilder $query, bool $returnAsArray, string $connectionName): string

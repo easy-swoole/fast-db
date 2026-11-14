@@ -248,6 +248,19 @@ final class RelationPreloadTest extends TestCase
         $this->assertCount(3, $this->connection->queries);
     }
 
+    public function testManyPreloadStartsEveryChildOnTheQueryConnection(): void
+    {
+        $parent = new PreloadFixtureParent();
+        $parent->queryLimit()->where('id', 1)->withRelations('switchingChildren');
+        $row = $parent->all()->first();
+
+        $this->assertSame('default', $this->db->selectConnection());
+        $children = $row->switchingChildren()->list();
+        $this->assertSame([11, 12], array_column($children, 'id'));
+        $this->assertSame(['default', 'default'], array_column($children, 'hydrationConnection'));
+        $this->assertCount(2, $this->connection->queries);
+    }
+
     public function testDuplicateOneRelationStillRaisesTheExistingCardinalityError(): void
     {
         $this->connection->database->exec("INSERT INTO preload_profiles VALUES (24,3,'duplicate')");
@@ -755,6 +768,14 @@ class PreloadFixtureParent extends AbstractEntity
     #[Relate(PreloadFixtureChild::class, 'parent_id', cacheResult: true, type: RelationType::Many)]
     public function children() { return $this->relateMany(); }
 
+    #[Relate(PreloadFixtureSwitchingChild::class, 'parent_id', type: RelationType::Many, configure: 'orderSwitchingChildren')]
+    public function switchingChildren() { return $this->relateMany(); }
+
+    protected function orderSwitchingChildren(QueryBuilder $query): void
+    {
+        $query->orderBy('id', 'ASC');
+    }
+
     #[Relate(PreloadFixtureChild::class, 'parent_id', type: RelationType::Many)]
     public function redirectedChildren()
     {
@@ -876,6 +897,21 @@ class PreloadFixtureChild extends AbstractEntity
     #[Property] public ?string $name;
     #[Property(convertObject: ConvertList::class)] public ?ConvertList $payload;
     public function tableName(): string { return 'preload_children'; }
+}
+
+class PreloadFixtureSwitchingChild extends PreloadFixtureChild
+{
+    public string $hydrationConnection;
+
+    public function __construct(?array $data = null)
+    {
+        parent::__construct($data);
+        if ($data !== null) {
+            $db = FastDb::getInstance();
+            $this->hydrationConnection = $db->selectConnection();
+            $db->selectConnection('other');
+        }
+    }
 }
 
 class PreloadFixtureProfile extends AbstractEntity

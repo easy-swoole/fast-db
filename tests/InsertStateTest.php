@@ -202,6 +202,38 @@ final class InsertStateTest extends TestCase
         $this->assertCount(3, $this->client->queries);
     }
 
+    #[DataProvider('observerModes')]
+    public function testInsertDiscardsFieldsSetByItsObserverAfterReturnOrException(string $mode): void
+    {
+        foreach ([false, true] as $throws) {
+            $entity = new InsertStateRecord(['name' => 'inserted']);
+            $failure = new \RuntimeException('observer failed');
+            $this->observe($mode, $entity, function (QueryResult $result) use ($entity, $throws, $failure): void {
+                if (!str_starts_with($result->getLastPrepareQuery() ?? '', 'INSERT')) { return; }
+                $this->assertSame(['name' => 'inserted'], $entity->queryLimit()->fields(['name'])->returnEntity()->toArray());
+                $entity->queryLimit()->__getQueryBuilder()->fields(['name']);
+                $entity->queryLimit()->hideFields('payload');
+                if ($throws) { throw $failure; }
+            });
+
+            try {
+                $this->assertTrue($entity->insert());
+                $this->assertFalse($throws);
+            } catch (\RuntimeException $error) {
+                $this->assertTrue($throws);
+                $this->assertSame($failure, $error);
+            }
+
+            $this->assertNull($entity->queryLimit()->getFields());
+            $this->assertSame(['payload'], $entity->queryLimit()->getHideFields());
+            $entity->score = 50;
+            $this->assertTrue($entity->update());
+            $this->assertFalse($entity->hasChange('score'));
+            $this->assertSame(50, (int) $this->client->database
+                ->query('SELECT score FROM insert_state WHERE id = ' . $entity->id)->fetchColumn());
+        }
+    }
+
     public function testDateObjectIdentityTimezoneAndTimestampSurviveInsert(): void
     {
         $timezone = date_default_timezone_get();
@@ -307,10 +339,20 @@ final class InsertStateTest extends TestCase
 
         $this->assertSame(['id' => 1, 'name' => 'before'], $entity->toArray());
         $this->assertSame(['id' => 1, 'name' => 'before'], json_decode(json_encode($entity, JSON_THROW_ON_ERROR), true));
+        $entity->queryLimit()->returnAsArray();
+        $this->assertSame(['id' => 1, 'name' => 'before'], $entity->toArray());
+        $entity->queryLimit()->fields(null);
         $entity->score = 60;
+        $this->assertSame(60, $entity->toArray()['score']);
+        $this->assertArrayNotHasKey('payload', $entity->toArray());
         $this->assertTrue($entity->update());
         $this->assertSame(60, $this->client->row()['score']);
         $this->assertSame([60, 1], $this->client->queries[1]['parameters']);
+        $this->assertSame(['id' => 1, 'name' => 'before'], $entity->toArray());
+        $this->assertSame(['id' => 1, 'name' => 'before'], json_decode(json_encode($entity, JSON_THROW_ON_ERROR), true));
+        $this->assertTrue($entity->update());
+        $this->assertCount(2, $this->client->queries);
+        $this->assertSame(['id' => 1, 'name' => 'before'], $entity->toArray());
 
         $entity = $owner->queryLimit()->fields(['id', 'name'])->persistFieldLimit()->returnEntity()->all()->first();
         $entity->name = 'after';
@@ -321,6 +363,7 @@ final class InsertStateTest extends TestCase
         $this->assertSame('after', $this->client->row()['name']);
         $this->assertSame(60, $this->client->row()['score']);
         $this->assertSame(['score' => 70], $entity->getChanges());
+        $this->assertSame(['id' => 1, 'name' => 'after'], $entity->toArray());
     }
 
     public function testHiddenFieldsStillParticipateInDatabaseWrites(): void

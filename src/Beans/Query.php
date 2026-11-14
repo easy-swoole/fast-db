@@ -62,7 +62,6 @@ class Query
     function fields(?array $fields = null,bool $returnAsArray = false):Query
     {
         $this->selection ??= new FieldSelection();
-        $this->selection->inheritedOutputFields = null;
         $this->selection->fields = [
             'fields'=>$fields,
             'returnAsArray'=>$returnAsArray
@@ -73,7 +72,6 @@ class Query
     function returnAsArray():Query
     {
         $selection = $this->selection ??= new FieldSelection();
-        $selection->fields ??= ['fields'=>null];
         $selection->fields['returnAsArray'] = true;
         return $this;
     }
@@ -90,19 +88,34 @@ class Query
 
     function getHideFields():?array
     {
-        return $this->selection?->hideFields;
+        return $this->selection?->hideFields ?? $this->selection?->inheritedHideFields;
     }
 
     function getFields():?array
     {
-        return $this->selection?->fields;
+        $fields = $this->selection?->fields;
+        // 仅开启数组模式时保持公开字段结构，内部仍能区分是否显式选列。
+        return $fields === null || array_key_exists('fields', $fields) ? $fields : ['fields' => null] + $fields;
     }
 
     /** @internal 将父查询选列传给结果实体的序列化。 */
-    public function inheritOutputFields(?array $fields): void
+    public function inheritOutputFields(?array $fields, array $hideFields): void
     {
         $this->selection ??= new FieldSelection();
         $this->selection->inheritedOutputFields = $fields;
+        $this->selection->inheritedHideFields = $hideFields;
+        $this->selection->hideFields = null;
+    }
+
+    /** @internal 更新后仅传回从原查询继承的输出配置。 */
+    public function keepInheritedOutput(): ?Query
+    {
+        if ($this->selection?->inheritedHideFields === null) {
+            return null;
+        }
+        $query = new Query($this->entity);
+        $query->inheritOutputFields($this->selection->inheritedOutputFields, $this->selection->inheritedHideFields);
+        return $query;
     }
 
     /** @internal 显式选列作用于输出和写入，继承选列只作用于输出。 */

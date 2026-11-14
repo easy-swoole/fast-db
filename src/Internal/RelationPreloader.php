@@ -121,7 +121,6 @@ final class RelationPreloader
     private function attachResults(array $parentResults, array $groups, bool $returnAsArray, callable $execute,
         callable $hydrate): array
     {
-        $db = FastDb::getInstance();
         // 只遍历分组键，避免遍历期间 PHP 保留整份分组数据，便于回填后释放每组的缓存查询和结果行。
         foreach (array_keys($groups) as $groupKey) {
             $group = $groups[$groupKey];
@@ -131,8 +130,13 @@ final class RelationPreloader
             foreach ($group['parentEntries'] as $parentEntry) {
                 $parentPosition = $parentEntry['parentPosition'];
                 $matchedRows = $rowsByParentKey[$parentEntry['serializedParentKey']] ?? [];
-                $db->selectConnection($batchPlan->connectionName);
-                $relationData = $this->materialize($batchPlan, $matchedRows, $returnAsArray, $hydrate, $parentEntry['target']);
+                $relationData = RelationLoader::materialize(
+                    $batchPlan->relate, $matchedRows, $returnAsArray || $batchPlan->returnAsArray,
+                    $batchPlan->connectionName, $hydrate, $parentEntry['target']
+                );
+                if (!$returnAsArray && $batchPlan->relate->type === RelationType::Many) {
+                    $relationData = new ListResult($relationData);
+                }
                 if ($returnAsArray) {
                     $parentResults[$parentPosition][$parentEntry['relationMethod']] = $relationData;
                 } else {
@@ -194,23 +198,5 @@ final class RelationPreloader
             }
         }
         return $matches;
-    }
-
-    private function materialize(RelationPlan $plan, array $rows, bool $parentAsArray, callable $hydrate,
-        ?AbstractEntity $target): mixed
-    {
-        $asArray = $parentAsArray || $plan->returnAsArray;
-        if ($plan->relate->type === RelationType::One) {
-            if (count($rows) > 1) {
-                throw new RuntimeError('more than one record hit is no allow in relateOne method');
-            }
-            if ($rows === []) { return null; }
-            return $asArray ? $rows[0] : $hydrate($plan->relate->targetEntity, $rows[0], $target);
-        }
-        if (!$asArray) {
-            foreach ($rows as $index => $row) { $rows[$index] = $hydrate($plan->relate->targetEntity, $row); }
-        }
-        // 数组父结果直接附加行列表；实体的 returnAsArray 关系仍返回 ListResult。
-        return $parentAsArray ? $rows : new ListResult($rows);
     }
 }
