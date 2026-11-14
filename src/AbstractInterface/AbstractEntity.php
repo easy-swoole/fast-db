@@ -290,11 +290,9 @@ abstract class AbstractEntity implements \JsonSerializable
     {
         try {
             $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
-            if($entityRef->getOnDelete()){
-                $ret = $this->callHook($entityRef->getOnDelete());
-                if($ret === false){
-                    return false;
-                }
+            $hook = $entityRef->getOnDelete();
+            if ($hook !== null && $this->callHook($hook) === false) {
+                return false;
             }
             $query = $this->queryLimit()->__getQueryBuilder();
             $tableName = $this->tableName();
@@ -327,11 +325,9 @@ abstract class AbstractEntity implements \JsonSerializable
     {
         try {
             $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
-            if($entityRef->getOnUpdate()){
-                $ret = $this->callHook($entityRef->getOnUpdate());
-                if($ret === false){
-                    return  false;
-                }
+            $hook = $entityRef->getOnUpdate();
+            if ($hook !== null && $this->callHook($hook) === false) {
+                return false;
             }
             $selection = $this->queryLimit();
             $query = $selection->__getQueryBuilder();
@@ -392,11 +388,9 @@ abstract class AbstractEntity implements \JsonSerializable
                 && empty($this->entityState->providedFields[$primaryKey])) {
                 throw new RuntimeError('can not insert entity without primary key value');
             }
-            if($entityRef->getOnInsert()){
-                $ret = $this->callHook($entityRef->getOnInsert());
-                if($ret === false){
-                    return false;
-                }
+            $hook = $entityRef->getOnInsert();
+            if ($hook !== null && $this->callHook($hook) === false) {
+                return false;
             }
             // 省略值为 null 的属性，让数据库使用默认值。
             $selection = $this->queryLimit();
@@ -564,8 +558,9 @@ abstract class AbstractEntity implements \JsonSerializable
             // 类型属性可能在赋值时转换默认值，按实际属性值建立比较基准。
             $this->entityState->baseline[$name] = FieldCodec::compare($this->{$name} ?? null);
         }
-        if($entityRef->getOnInitialize()){
-            $this->callHook($entityRef->getOnInitialize());
+        $hook = $entityRef->getOnInitialize();
+        if ($hook !== null) {
+            $this->callHook($hook);
         }
     }
 
@@ -609,7 +604,8 @@ abstract class AbstractEntity implements \JsonSerializable
         $list = self::hydrateRows($rows, $parentQueryConnection, $returnAsArray, $hideFields, $inheritedOutput);
         if ($relations !== []) {
             $list = (new RelationPreloader())->load($this, $list, $rows, $relations, $returnAsArray,
-                $parentQueryConnection, $hideFields, fn (QueryBuilder $builder) => FastDb::getInstance()->query($builder, onQuery: $this->onQuery),
+                $parentQueryConnection, $hideFields,
+                fn (QueryBuilder $builder, string $connection) => $db->query($builder, connection: $connection, onQuery: $this->onQuery),
                 self::hydrateEntity(...));
         }
         return new ListResult($list, $total);

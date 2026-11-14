@@ -78,7 +78,6 @@ final class RelationPreloader
                 if ($parentKeyValue !== null && !is_int($parentKeyValue) && !is_string($parentKeyValue)) {
                     throw new RuntimeError('Parent relation fields must contain an integer, string or null');
                 }
-                $db->selectConnection($relationPlan->connectionName);
                 $tableName = $relationPlan->tableName;
                 $builder = $relationPlan->builder;
                 RelationPlan::checkPagination($builder, $relationPlan->relate->type, preload: true);
@@ -156,9 +155,9 @@ final class RelationPreloader
         $db = FastDb::getInstance();
         $matches = [];
         $foreign = RelationPlan::foreignKey($plan->builder, $plan->tableName, $plan->relate->targetProperty);
+        // 同一计划的所有批次使用同一连接，外层负责恢复调用前的选库。
+        $db->selectConnection($plan->connectionName);
         foreach (array_chunk($values, self::BATCH_SIZE, true) as $batch) {
-            // 前一批的查询回调可能已选中其他连接。
-            $db->selectConnection($plan->connectionName);
             $token = '__fd_rel_' . bin2hex(random_bytes(6));
             $indexName = $token . '_index';
             $alias = $token . '_parents';
@@ -190,7 +189,7 @@ final class RelationPreloader
                 }
             })
                 ->get($plan->tableName, null, $columns);
-            $rows = $execute($builder)->getResult();
+            $rows = $execute($builder, $plan->connectionName)->getResult();
             foreach ($rows as $row) {
                 $identity = $identities[$row[$indexName]];
                 unset($row[$indexName]);

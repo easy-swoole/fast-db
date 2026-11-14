@@ -29,7 +29,7 @@ class Connection extends Client implements ObjectInterface
         // 成功通信只更新活跃时间；共享回调不捕获连接实例。
         static $dispatcher = null;
         $this->onQuery = $dispatcher ??= static function (bool|array $result, Client $client): void {
-            $client->lastActiveTick = $result === false ? null : hrtime(true);
+            $client->lastActiveTick = hrtime(true);
         };
     }
 
@@ -51,7 +51,7 @@ class Connection extends Client implements ObjectInterface
         $returned = false;
         try {
             $connected = parent::connect($timeout);
-            if ($connected && !$alreadyConnected) {
+            if (!$alreadyConnected) {
                 $this->lastActiveTick = hrtime(true);
             }
             $returned = true;
@@ -64,15 +64,13 @@ class Connection extends Client implements ObjectInterface
     public function close(): bool
     {
         $closed = parent::close();
-        if ($closed) {
-            $this->lastActiveTick = null;
-        }
+        $this->lastActiveTick = null;
         return $closed;
     }
 
     public function query(QueryBuilder $builder, ?float $timeout = null): bool|array
     {
-        return $this->executeQuery($builder, $builder->getLastPrepareQuery(), $timeout);
+        return $this->executeQuery($builder, null, $timeout);
     }
 
     public function rawQuery(string $query, ?float $timeout = null): bool|array
@@ -89,15 +87,11 @@ class Connection extends Client implements ObjectInterface
             return $value;
         } catch (DriverTimeoutException $error) {
             // 仅在这里补充驱动超时上下文，普通 SQL 异常直接向上层传播。
-            throw $this->withTimeoutContext($error, $sql, $builder);
+            throw new TimeoutException($error->getMessage(), (int) $error->getCode(), $error,
+                $builder?->getLastPrepareQuery() ?? $sql, $builder);
         } finally {
             if (!$returned) { $this->lastActiveTick = null; }
         }
-    }
-
-    private function withTimeoutContext(DriverTimeoutException $error, ?string $sql, ?QueryBuilder $builder = null): TimeoutException
-    {
-        return new TimeoutException($error->getMessage(), (int) $error->getCode(), $error, $sql, $builder);
     }
 
     public function beginTransaction(TransactionStartFlags $flags, ?float $timeout = null): bool
@@ -168,10 +162,7 @@ class Connection extends Client implements ObjectInterface
             return true;
         }
         try {
-            if ($protocol->query('select 1') === false) {
-                $this->lastActiveTick = null;
-                return false;
-            }
+            $protocol->query('select 1');
             $this->lastActiveTick = hrtime(true);
             return true;
         } catch (\Throwable) {
