@@ -189,7 +189,7 @@ final class RelationPreloadCacheTest extends TestCase
             (new \ReflectionProperty(AbstractEntity::class, 'queryBuilder'))->setValue($parent, null);
         };
         try {
-            return $loader->load($parent, $parent->queryLimit(), $relation, $table,
+            return $loader->load($parent->id, $parent->queryLimit(), $relation, $table,
                 function (QueryBuilder $query) use ($parent): QueryResult {
                     $this->queries++;
                     return new QueryResult(0.0, 0.0, 0.0, 'default',

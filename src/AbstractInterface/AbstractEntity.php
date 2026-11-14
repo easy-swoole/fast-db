@@ -31,6 +31,8 @@ abstract class AbstractEntity implements \JsonSerializable
     // update() 据此识别变化，也能识别对象内部属性被修改的情况。
     private EntityState $entityState;
     private bool $missingLoadedPrimaryKey = false;
+    // 部分投影未赋值的映射字段，不能直接用默认值查询关联。
+    private array $unloadedFields = [];
 
     // 当前实体积累的查询条件和字段限制，执行后通常由 reset() 清理。
     private ?Query $queryBuilder = null;
@@ -95,6 +97,7 @@ abstract class AbstractEntity implements \JsonSerializable
             /** @var Property $property */
             $property = $allProperties[$key];
             $this->{$key} = FieldCodec::assign($property, $val);
+            unset($this->unloadedFields[$key]);
             if ($mergeCompare) {
                 $this->entityState->baseline[$key] = FieldCodec::compare($this->{$key});
             }
@@ -114,7 +117,9 @@ abstract class AbstractEntity implements \JsonSerializable
         } else {
             $entity->setData($row, true);
         }
-        $key = ReflectionCache::getInstance()->parseEntity($class)->getPrimaryKey();
+        $mapping = ReflectionCache::getInstance()->parseEntity($class);
+        $entity->unloadedFields = array_fill_keys(array_keys(array_diff_key($mapping->allProperties(), $row)), true);
+        $key = $mapping->getPrimaryKey();
         $entity->missingLoadedPrimaryKey = $key !== null && (!array_key_exists($key, $row) || $row[$key] === null);
         return $entity;
     }
@@ -338,7 +343,7 @@ abstract class AbstractEntity implements \JsonSerializable
             $this->requirePrimaryKey($query, $entityRef, 'update');
             if ($data === []) { return true; }
             $query->update($tableName, $data);
-            // 按 SQL 成功顺序接受基准，再通知观察回调；重入保存可据此写回原值。
+            // SQL 成功即接受比较基准，后续执行检查抛异常也不会改变写入事实。
             return self::callQuery($query, $this->onQuery, function (QueryResult $result) use ($data): void {
                 if ($result->getAffectedRows() > 0) { $this->entityState->accept($data); }
             })->getAffectedRows() > 0;
@@ -422,8 +427,6 @@ abstract class AbstractEntity implements \JsonSerializable
                 // 显式写入自增字段时保留调用方给出的值。
                 $autoIncrement = null;
             }
-            // 执行前消费本次配置，公开回调可以用新配置发起查询。
-            $this->resetInsertQueryOptions();
             $result = self::callQuery($query, $this->onQuery,
                 function (QueryResult $result) use ($compareValues, $autoIncrement): void {
                     if ($result->getResult() !== true) { return; }
@@ -434,12 +437,12 @@ abstract class AbstractEntity implements \JsonSerializable
                         $this->{$field} = FieldCodec::assign($autoIncrement, $insertId);
                         $compareValues[$field] = FieldCodec::compare($this->{$field});
                     }
-                    // 只接受本次成功写入字段，不重新赋值，也不覆盖稍后公开回调的修改。
+                    // 只更新本次已确认写入字段的比较基准。
                     $this->entityState->accept($compareValues);
                 });
             return $result->getResult() === true;
         } finally {
-            // 回调内临时设置的白名单也只在本次调用内生效。
+            // 插入结束后只保留本次显式隐藏配置。
             $this->resetInsertQueryOptions();
         }
     }
@@ -581,10 +584,11 @@ abstract class AbstractEntity implements \JsonSerializable
         $table = $page['table'] ?? $this->tableName();
         $query->get($table, null, $fields['fields'] ?? null);
         $relations = $selection->getRelations();
-        $result = static::callQuery($query, $this->onQuery, connection: $page['connection'] ?? null,
-            onTotalQuery: $this->notifyTotalQuery(...));
-        $total = $result->getTotalCount();
         $hideFields = $selection->getHideFields() ?? [];
+        $persistFieldLimit = !$returnAsArray && $selection->isPersistFieldLimit();
+        $observer = $this->onQuery;
+        $result = static::callQuery($query, $observer, connection: $page['connection'] ?? null, onTotalQuery: $observer);
+        $total = $result->getTotalCount();
         $rows = $result->getResult();
         $parentQueryConnection = $result->getConnectionName();
         if ($page !== null) {
@@ -597,8 +601,9 @@ abstract class AbstractEntity implements \JsonSerializable
                     ?? throw new RuntimeError('chunkById requires a non-null cursor value for column: ' . $cursorField);
             }
         }
-        $inheritedOutput = !$returnAsArray && $selection->isPersistFieldLimit()
-            ? ['fields' => $selection->getFields()['fields'] ?? null, 'hideFields' => $hideFields] : [];
+        // SQL 结果列已经按投影及别名命名，序列化只匹配这些实际列名。
+        $inheritedOutput = $persistFieldLimit && $rows !== []
+            ? ['fields' => array_keys($rows[array_key_first($rows)]), 'hideFields' => $hideFields] : [];
         $list = self::hydrateRows($rows, $parentQueryConnection, $returnAsArray, $hideFields, $inheritedOutput);
         if ($relations !== []) {
             $list = (new RelationPreloader())->load($this, $list, $rows, $relations, $returnAsArray,
@@ -621,7 +626,7 @@ abstract class AbstractEntity implements \JsonSerializable
         }
 
         $db = $returnAsArray ? null : FastDb::getInstance();
-        // 查询回调可能选了其他库，实体回填结束后恢复该选择。
+        // 回填使用查询连接，避免实体初始化时的选库影响调用方。
         $connectionToRestore = $db?->selectConnection();
         try {
             foreach ($rows as $item) {
@@ -645,14 +650,6 @@ abstract class AbstractEntity implements \JsonSerializable
             }
         }
         return $list;
-    }
-
-    /** 主查询回调可能替换实体观察者，总数通知使用当时的回调。 */
-    private function notifyTotalQuery(QueryResult $result): void
-    {
-        if ($this->onQuery !== null) {
-            ($this->onQuery)($result);
-        }
     }
 
     private function aggregate(string $aggregate, string|array $cols, string|null $group = null, bool $force = false): int|array|float|string
@@ -801,10 +798,15 @@ abstract class AbstractEntity implements \JsonSerializable
             if ($relate->type !== $expectedType) {
                 throw new RuntimeError('Declared relation type does not match its getter');
             }
+            $parentField = $relate->selfProperty;
+            if (isset($this->unloadedFields[$parentField])
+                || (!isset($this->{$parentField}) && !array_key_exists($parentField, get_object_vars($this)))) {
+                throw new RuntimeError('Relation requires a loaded or explicitly assigned parent field: ' . $parentField);
+            }
             $this->relationLoader ??= new RelationLoader();
             $selection = $this->queryLimit();
             $this->configureRelation($relate, $selection);
-            return $this->relationLoader->load($this, $selection, $relate, $tableName,
+            return $this->relationLoader->load(FieldCodec::compare($this->{$parentField}), $selection, $relate, $tableName,
                 fn ($query) => static::callQuery($query, $this->onQuery),
                 fn () => $this->resetQueryOptions(), self::hydrateEntity(...));
         } finally {

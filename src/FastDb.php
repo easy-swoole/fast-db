@@ -173,7 +173,7 @@ class FastDb
         if (!$client->isInTransaction() && !$client->mysqlClient()?->isTransactionLost()) { return true; }
         $sql = ($rollback ? 'ROLLBACK' : 'COMMIT') . $flags->toSqlSuffix();
         $onComplete = $flags->releasesConnection() ? function (QueryResult $result, Connection $client): void {
-            // 显式 RELEASE 已关闭会话，先淘汰本次借用，查询回调才能正常借用新连接。
+            // 显式 RELEASE 已关闭会话，立即淘汰本次借用。
             if ($result->getResult() === true && isset($client->connectionName)) {
                 $this->recycleConnection(Coroutine::getCid(), $client->connectionName, $client, discard: true);
             }
@@ -234,13 +234,13 @@ class FastDb
         $totalQueryResult = null;
         $queryResult = $this->executeResult($client, $operation, $builder, $sql, $totalQueryTimeout, $totalQueryResult);
         $firstError = $queryResult->getException() ?? $totalQueryResult?->getException();
-        // 先记录已经执行的 SQL，回调里发起的查询才能按实际执行顺序入栈。
+        // 执行记录先于观察回调，回调抛异常也保留已经执行的 SQL。
         $this->diagnostics?->record($queryResult);
         if ($totalQueryResult !== null) {
             $this->diagnostics?->record($totalQueryResult);
         }
 
-        // 完成回调先处理内部状态，例如接受写入基准，供观察回调中的后续操作使用。
+        // 内部完成回调先接收执行结果，例如接受写入基准。
         if ($onComplete !== null) {
             try {
                 $onComplete($queryResult, $client);
@@ -249,11 +249,7 @@ class FastDb
             }
         }
         try {
-            // 每次通知读取当前全局观察回调，主查询回调可为后续总数通知更换观察者。
-            $this->diagnostics?->notify($queryResult);
-            if ($totalQueryResult !== null) {
-                $this->diagnostics?->notify($totalQueryResult);
-            }
+            $this->diagnostics?->notify($queryResult, $totalQueryResult);
         } catch (\Throwable $callbackError) {
             $firstError ??= $callbackError;
         }

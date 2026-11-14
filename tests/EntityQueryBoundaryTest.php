@@ -412,7 +412,7 @@ final class EntityQueryBoundaryTest extends TestCase
         $this->assertNull($entity->queryLimit()->getFields());
     }
 
-    public function testTotalNotificationUsesTheEntityObserverInstalledByTheMainQuery(): void
+    public function testOneEntityObserverReceivesBothResultsOfTheCurrentQuery(): void
     {
         $entity = new QueryBoundaryRecord(['id' => 'owner', 'grp' => 1]);
         $entity->queryLimit()->limit(1, true);
@@ -420,13 +420,8 @@ final class EntityQueryBoundaryTest extends TestCase
         $this->db->setOnQuery(static function (QueryResult $result) use (&$events): void {
             $events[] = $result->getRawSql() === null ? 'global-main' : 'global-total';
         });
-        $entity->setOnQuery(function (QueryResult $result) use ($entity, &$events): void {
-            $events[] = 'entity-main';
-            $this->assertNull($result->getRawSql());
-            $entity->setOnQuery(function (QueryResult $total) use (&$events): void {
-                $events[] = 'entity-total';
-                $this->assertSame('SELECT FOUND_ROWS() as count', $total->getRawSql());
-            });
+        $entity->setOnQuery(static function (QueryResult $result) use (&$events): void {
+            $events[] = $result->getRawSql() === null ? 'entity-main' : 'entity-total';
         });
 
         $list = $entity->all();

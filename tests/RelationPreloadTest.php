@@ -593,10 +593,41 @@ final class RelationPreloadTest extends TestCase
         try {
             $parent->children();
             $this->fail('An uninitialized parent field must fail');
-        } catch (\Error $error) {
-            $this->assertStringContainsString('must not be accessed before initialization', $error->getMessage());
+        } catch (RuntimeError $error) {
+            $this->assertSame('Relation requires a loaded or explicitly assigned parent field: id', $error->getMessage());
         }
         $this->assertSame([], $this->connection->queries);
+    }
+
+    public static function missingParentKeySelections(): array
+    {
+        return [
+            'omitted' => [['id', 'name'], []],
+            'aliased' => [['id', 'name', 'group_code AS code'], []],
+            'hidden' => [['id', 'name', 'group_code'], ['group_code']],
+        ];
+    }
+
+    #[DataProvider('missingParentKeySelections')]
+    public function testLazyRelationRejectsAParentKeyThatWasNotHydrated(array $fields, array $hidden): void
+    {
+        $owner = new PreloadFixtureDefaultGroupParent();
+        $owner->queryLimit()->where('id', 3)->fields($fields)->hideFields($hidden);
+        $parent = $owner->all()->first();
+        $this->assertSame('a', $parent->group_code);
+
+        try {
+            $parent->groupChildren();
+            $this->fail('A default value must not replace a missing parent key');
+        } catch (RuntimeError $error) {
+            $this->assertSame('Relation requires a loaded or explicitly assigned parent field: group_code', $error->getMessage());
+        }
+        $this->assertCount(1, $this->connection->queries);
+
+        $this->connection->database->exec("INSERT INTO preload_children VALUES (14,3,NULL,'null child','[14]')");
+        $parent->setData(['group_code' => null]);
+        $this->assertSame([14], array_column($parent->groupChildren()->list(), 'id'));
+        $this->assertCount(2, $this->connection->queries);
     }
 
     public function testExplicitEmptyRelationFieldsFailBeforeBatchQuery(): void
@@ -913,6 +944,12 @@ class PreloadFixtureInitializingParent extends PreloadFixtureParent
     {
         self::$connections[] = FastDb::getInstance()->selectConnection();
     }
+}
+
+class PreloadFixtureDefaultGroupParent extends PreloadFixtureParent
+{
+    #[Property(defaultValue: 'a')]
+    public ?string $group_code;
 }
 
 class PreloadFixtureCollisionParent extends PreloadFixtureParent

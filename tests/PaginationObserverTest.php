@@ -91,21 +91,21 @@ final class PaginationObserverTest extends TestCase
         });
     }
 
-    public function testCountUsesTheGlobalObserverRegisteredByTheMainObserver(): void
+    public function testObserverReplacementAppliesToTheNextQuery(): void
     {
         $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
             $events = [];
             $db->setOnQuery(static function (QueryResult $result) use ($db, &$events): void {
-                $events[] = 'original-main';
-                $db->setOnQuery(static function (QueryResult $result) use (&$events): void {
-                    $events[] = $result->getRawSql() === 'SELECT FOUND_ROWS() as count' ? 'replacement-count' : 'replacement-other';
-                });
+                $events[] = $result->getRawSql() === null ? 'original-main' : 'original-count';
+                $db->setOnQuery(static function () use (&$events): void { $events[] = 'replacement'; });
             });
             $this->queuePage($peer); $this->textRows($peer, 'count', 37);
             $result = $db->query($this->page());
             $this->assertSame(37, $result->getTotalCount());
-            $this->assertSame(['original-main', 'replacement-count'], $events);
-            $this->assertNextQuerySucceeds($db, $peer);
+            $this->assertSame(['original-main', 'original-count'], $events);
+            $this->reply($peer, "\0\0\0\x02\0\0\0", 1);
+            $this->assertTrue($db->rawQuery('DO 1')->getResult());
+            $this->assertSame(['original-main', 'original-count', 'replacement'], $events);
         });
     }
 

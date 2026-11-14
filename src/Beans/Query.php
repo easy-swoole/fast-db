@@ -109,7 +109,8 @@ class Query
             if (!array_key_exists('fields', $selection ?? [])) {
                 $fields = $inheritedOutput['fields'] ?? null;
             }
-            $hideFields = $this->getHideFields() ?? $inheritedOutput['hideFields'] ?? [];
+            // 实体本次设置的隐藏字段只能补充原查询继承的隐藏限制。
+            $hideFields = array_merge($inheritedOutput['hideFields'] ?? [], $this->getHideFields() ?? []);
             return FieldSelection::filterProperties($properties, $fields, $hideFields);
         }
         $properties = FieldSelection::filterProperties($properties, $fields);

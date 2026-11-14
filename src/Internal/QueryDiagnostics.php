@@ -68,9 +68,12 @@ final class QueryDiagnostics
     }
 
     /** 用户观察回调独立于执行记录，异常不影响已执行 SQL 的 trace。 */
-    public function notify(QueryResult $result): void
+    public function notify(QueryResult $result, ?QueryResult $totalResult = null): void
     {
-        if ($this->onQuery !== null) { ($this->onQuery)($result); }
+        $observer = $this->onQuery;
+        if ($observer === null) { return; }
+        $observer($result);
+        if ($totalResult !== null) { $observer($totalResult); }
     }
 
     public function recordAcquire(string $name, float $startTime, float $endTime, float $duration,

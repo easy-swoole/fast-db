@@ -257,29 +257,16 @@ final class EntityReentryTest extends TestCase
     public static function listModes(): array { return [['global', false], ['entity', false], ['global', true], ['entity', true]]; }
 
     #[DataProvider('listModes')]
-    public function testAllReentryPreservesTheCurrentQueryAndCallbackSelectionChanges(string $mode, bool $arrays): void
+    public function testListObserverReadsTheExecutedResultBeforeOutputFiltering(string $mode, bool $arrays): void
     {
         $entity = $this->entity();
-        $entity->queryLimit()->fields(['id', 'a', 'b', 'secret'], $arrays)->hideFields('b')->persistFieldLimit();
-        $entered = false;
-        $this->observe($mode, $entity, function () use ($entity, &$entered): void {
-            if ($entered) { return; }
-            $entered = true;
-            $entity->queryLimit()->hideFields(['b', 'secret']);
-            $entity->all();
+        $entity->queryLimit()->fields(['id', 'a', 'b', 'secret'], $arrays)->hideFields('secret')->persistFieldLimit();
+        $this->observe($mode, $entity, function (QueryResult $result): void {
+            $this->assertSame('private', $result->getResultOne()['secret']);
         });
 
         $item = $entity->all()->first();
-        $this->assertSame(['id' => 1, 'a' => 0], $arrays ? $item : $item->toArray());
-    }
-
-    #[DataProvider('observerModes')]
-    public function testNonReentrantCallbacksCanStillChangeCurrentSelection(string $mode): void
-    {
-        $entity = $this->entity();
-        $entity->queryLimit()->persistFieldLimit();
-        $this->observe($mode, $entity, static function () use ($entity): void { $entity->queryLimit()->hideFields('secret'); });
-        $this->assertArrayNotHasKey('secret', $entity->all()->first()->toArray());
+        $this->assertSame(['id' => 1, 'a' => 0, 'b' => 0], $arrays ? $item : $item->toArray());
     }
 
     public function testProtocolCompletionAcceptsTheWriteBeforeGlobalObserverReentry(): void

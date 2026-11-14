@@ -26,7 +26,7 @@ final class RelationLoader
     }
 
     /** 两种关联共用构建、缓存查找和写回流程，结果组装分别处理。 */
-    public function load(AbstractEntity $entity, Query $selection, Relate $relate, ?string $tableName,
+    public function load(mixed $parentValue, Query $selection, Relate $relate, ?string $tableName,
         callable $execute, callable $beforeHydration, callable $hydrate): mixed
     {
         $target = new $relate->targetEntity();
@@ -34,8 +34,7 @@ final class RelationLoader
         $fields = $selection->getFields();
         $returnAsArray = $fields['returnAsArray'] ?? false;
         RelationPlan::checkPagination($query, $relate->type);
-        RelationPlan::buildLookup($query, $tableName ?? $target->tableName(), $relate,
-            FieldCodec::compare($entity->{$relate->selfProperty}), $fields['fields'] ?? null);
+        RelationPlan::buildLookup($query, $tableName ?? $target->tableName(), $relate, $parentValue, $fields['fields'] ?? null);
         $key = $relate->cacheResult || $this->preloaded !== []
             ? $this->fingerprint($relate, $query, $returnAsArray, FastDb::getInstance()->selectConnection()) : null;
         if ($key !== null && array_key_exists($key, $this->preloaded)) {
