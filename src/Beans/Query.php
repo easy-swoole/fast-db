@@ -88,7 +88,7 @@ class Query
 
     function getHideFields():?array
     {
-        return $this->selection?->hideFields ?? $this->selection?->inheritedHideFields;
+        return $this->selection?->hideFields;
     }
 
     function getFields():?array
@@ -98,33 +98,22 @@ class Query
         return $fields === null || array_key_exists('fields', $fields) ? $fields : ['fields' => null] + $fields;
     }
 
-    /** @internal 将父查询选列传给结果实体的序列化。 */
-    public function inheritOutputFields(?array $fields, array $hideFields): void
+    /** @internal 显式选列作用于输出和写入，继承的限制只在序列化时传入。 */
+    public function filterProperties(array $properties, bool $forOutput = false, ?QueryBuilder $builder = null,
+        array $inheritedOutput = []): array
     {
-        $this->selection ??= new FieldSelection();
-        $this->selection->inheritedOutputFields = $fields;
-        $this->selection->inheritedHideFields = $hideFields;
-        $this->selection->hideFields = null;
-    }
-
-    /** @internal 更新后仅传回从原查询继承的输出配置。 */
-    public function keepInheritedOutput(): ?Query
-    {
-        if ($this->selection?->inheritedHideFields === null) {
-            return null;
+        $selection = $this->selection?->fields;
+        $fields = $selection['fields'] ?? null;
+        if ($forOutput) {
+            // fields(null) 显式取消选列限制，仅切换数组模式时继续沿用继承的选列。
+            if (!array_key_exists('fields', $selection ?? [])) {
+                $fields = $inheritedOutput['fields'] ?? null;
+            }
+            $hideFields = $this->getHideFields() ?? $inheritedOutput['hideFields'] ?? [];
+            return FieldSelection::filterProperties($properties, $fields, $hideFields);
         }
-        $query = new Query($this->entity);
-        $query->inheritOutputFields($this->selection->inheritedOutputFields, $this->selection->inheritedHideFields);
-        return $query;
-    }
-
-    /** @internal 显式选列作用于输出和写入，继承选列只作用于输出。 */
-    public function filterProperties(array $properties, bool $forOutput = false, ?QueryBuilder $builder = null): array
-    {
-        if ($this->selection !== null) {
-            $properties = $this->selection->filterProperties($properties, $forOutput);
-        }
-        return $forOutput ? $properties : self::filterWriteFields($properties, $builder ?? $this->__getQueryBuilder());
+        $properties = FieldSelection::filterProperties($properties, $fields);
+        return self::filterWriteFields($properties, $builder ?? $this->__getQueryBuilder());
     }
 
     /** @internal 在转换前按底层构建器的写入白名单筛选字段。 */

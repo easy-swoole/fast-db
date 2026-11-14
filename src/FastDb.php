@@ -32,7 +32,6 @@ class FastDb
     protected array $selectConnection = [];
 
     // 每个协程只登记一次退出清理；提前回收后仍保留登记，防止退出回调累积。
-    // false 表示只登记了外部连接/选库，本实例尚未承担池连接的归还责任。
     private array $contextCleanupRegistered = [];
 
     public function configureQueryStack(bool $enabled, int $maxStackSize = 256): static
@@ -344,32 +343,27 @@ class FastDb
         if (($this->currentConnection[$cid][$name] ?? null) !== $client) { return; }
         unset($this->currentConnection[$cid][$name]);
         if ($this->currentConnection[$cid] === []) { unset($this->currentConnection[$cid]); }
+        // 没有对应池的外部连接只解除当前协程的引用。
+        $pool = $this->pools[$name] ?? null;
+        if ($pool === null) { return; }
         try {
             if ($discard) {
-                ($this->pools[$name] ?? null)?->unsetObj($client);
+                $pool->unsetObj($client);
             } else {
-                $this->pools[$name]->recycleObj($client);
+                $pool->recycleObj($client);
             }
         } catch (\Throwable) {
             // 连接池负责处理归还失败。隔离异常，避免清理覆盖业务结果或中断其他连接归还。
         }
     }
 
-    private function registerContextCleanup(int $cid, bool $recycleConnections = false): void
+    private function registerContextCleanup(int $cid): void
     {
-        if ($cid < 0) { return; }
-        if (isset($this->contextCleanupRegistered[$cid])) {
-            $this->contextCleanupRegistered[$cid] = $this->contextCleanupRegistered[$cid] || $recycleConnections;
-            return;
-        }
-        $this->contextCleanupRegistered[$cid] = $recycleConnections;
+        if ($cid < 0 || isset($this->contextCleanupRegistered[$cid])) { return; }
+        $this->contextCleanupRegistered[$cid] = true;
         Coroutine::defer(function () use ($cid): void {
             try {
-                if ($this->contextCleanupRegistered[$cid]) {
-                    $this->recycleContext();
-                } else {
-                    $this->diagnostics?->clear($cid);
-                }
+                $this->recycleContext();
             } finally {
                 unset($this->currentConnection[$cid], $this->selectConnection[$cid], $this->contextCleanupRegistered[$cid]);
             }
@@ -381,7 +375,7 @@ class FastDb
         $cid = Coroutine::getCid();
         $name ??= $this->selectConnection();
         if (isset($this->currentConnection[$cid][$name])) { return $this->currentConnection[$cid][$name]; }
-        $this->registerContextCleanup($cid, true);
+        $this->registerContextCleanup($cid);
         $pool = $this->pools[$name] ?? null;
         if ($pool === null) {
             $config = $this->getConfig($name);

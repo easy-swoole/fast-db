@@ -99,6 +99,34 @@ final class RecycleContextTest extends TestCase
         $this->assertFalse($other->isInTransaction());
     }
 
+    public function testCoroutineExitCleansAnEmptyContextAfterSelectionAndFailedBorrow(): void
+    {
+        $db = (new FastDb())->addDb(new Config(), 'failed')->configureQueryStack(true);
+        $pool = $this->createMock(Pool::class);
+        $pool->expects($this->once())->method('getObj')->willThrowException(new \RuntimeException('borrow failed'));
+        $pool->expects($this->never())->method('recycleObj');
+        $this->set($db, 'pools', ['failed' => $pool]);
+
+        $finished = new Coroutine\Channel(1);
+        foreach ([false, true] as $borrow) {
+            Coroutine::create(static function () use ($db, $finished, $borrow): void {
+                $cid = Coroutine::getCid();
+                Coroutine::defer(static fn () => $finished->push($cid));
+                $db->selectConnection('failed');
+                if ($borrow) {
+                    try { $db->rawQuery('SELECT 1'); }
+                    catch (\EasySwoole\FastDb\Exception\RuntimeError) {}
+                }
+            });
+            $cid = $finished->pop(2);
+            $this->assertIsInt($cid);
+            foreach (['selectConnection', 'currentConnection', 'contextCleanupRegistered'] as $name) {
+                $contexts = (new \ReflectionProperty(FastDb::class, $name))->getValue($db);
+                $this->assertArrayNotHasKey($cid, $contexts);
+            }
+        }
+    }
+
     public static function recycleFailures(): array
     {
         return ['pool throws' => ['exception'], 'warning becomes exception' => ['warning'], 'pool rejects' => ['false']];

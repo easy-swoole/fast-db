@@ -14,6 +14,7 @@ use EasySwoole\FastDb\Internal\EntityState;
 use EasySwoole\FastDb\Internal\EntityQueryBuilder;
 use EasySwoole\FastDb\Internal\BatchWriter;
 use EasySwoole\FastDb\Internal\FieldCodec;
+use EasySwoole\FastDb\Internal\FieldSelection;
 use EasySwoole\FastDb\Internal\RelationLoader;
 use EasySwoole\FastDb\Internal\RelationPlan;
 use EasySwoole\FastDb\Internal\RelationPreloader;
@@ -33,6 +34,10 @@ abstract class AbstractEntity implements \JsonSerializable
 
     // 当前实体积累的查询条件和字段限制，执行后通常由 reset() 清理。
     private ?Query $queryBuilder = null;
+
+    // 从加载查询继承的配置只用于序列化，后续查询和回调清理不会改变它。
+    /** @var array{fields: ?array, hideFields: array}|array{} */
+    private array $inheritedOutput = [];
 
     // 实体级查询回调，与 FastDb 的全局 onQuery 回调独立。
     private mixed $onQuery = null;
@@ -217,7 +222,10 @@ abstract class AbstractEntity implements \JsonSerializable
         $properties = $entityRef->allProperties();
         // 标准实体没有输出配置时直接转换；子类覆写 queryLimit 的行为仍然生效。
         if ($this->queryBuilder !== null || $entityRef->hasCustomQueryLimit) {
-            $properties = $this->queryLimit()->filterProperties($properties, true);
+            $properties = $this->queryLimit()->filterProperties($properties, true, inheritedOutput: $this->inheritedOutput);
+        } elseif ($this->inheritedOutput !== []) {
+            $properties = FieldSelection::filterProperties($properties,
+                $this->inheritedOutput['fields'], $this->inheritedOutput['hideFields']);
         }
         return FieldCodec::values($this, $properties, $filterNull);
     }
@@ -335,8 +343,7 @@ abstract class AbstractEntity implements \JsonSerializable
                 if ($result->getAffectedRows() > 0) { $this->entityState->accept($data); }
             })->getAffectedRows() > 0;
         } finally {
-            // 写入配置只用一次，查询结果继承的序列化限制继续生效。
-            $this->queryBuilder = $this->queryBuilder?->keepInheritedOutput();
+            $this->resetQueryOptions();
         }
     }
 
@@ -460,12 +467,8 @@ abstract class AbstractEntity implements \JsonSerializable
             $query->selectForUpdate();
         }
         $query->get($tableName);
-        $ret = static::callQuery($query,$onQuery)->getResult();
-        if (!empty($ret[0])) {
-            return self::hydrateEntity(static::class, $ret[0]);
-        }
-
-        return null;
+        $result = static::callQuery($query, $onQuery);
+        return self::hydrateRows($result->getResult(), $result->getConnectionName())[0] ?? null;
     }
 
     public static function findAll(
@@ -486,16 +489,9 @@ abstract class AbstractEntity implements \JsonSerializable
         }
 
         $query->get($tableName);
-        $result = self::callQuery($query,$onQuery)->getResult();
-        if (!$returnAsArray) {
-            $list = [];
-            foreach ($result as $item) {
-                $list[] = self::hydrateEntity(static::class, $item);
-            }
-            return $list;
-        } else {
-            return $result;
-        }
+        $result = self::callQuery($query, $onQuery);
+        return $returnAsArray ? $result->getResult()
+            : self::hydrateRows($result->getResult(), $result->getConnectionName());
     }
 
     public function jsonSerialize(): mixed
@@ -601,7 +597,9 @@ abstract class AbstractEntity implements \JsonSerializable
                     ?? throw new RuntimeError('chunkById requires a non-null cursor value for column: ' . $cursorField);
             }
         }
-        $list = $this->hydrateRows($rows, $selection, $returnAsArray, $hideFields, $relations === [] ? null : $parentQueryConnection);
+        $inheritedOutput = !$returnAsArray && $selection->isPersistFieldLimit()
+            ? ['fields' => $selection->getFields()['fields'] ?? null, 'hideFields' => $hideFields] : [];
+        $list = self::hydrateRows($rows, $parentQueryConnection, $returnAsArray, $hideFields, $inheritedOutput);
         if ($relations !== []) {
             $list = (new RelationPreloader())->load($this, $list, $rows, $relations, $returnAsArray,
                 $parentQueryConnection, $hideFields, fn (QueryBuilder $builder) => static::callQuery($builder, $this->onQuery),
@@ -610,10 +608,11 @@ abstract class AbstractEntity implements \JsonSerializable
         return new ListResult($list, $total);
     }
 
-    /** 实体查询及游标分块共用字段隐藏、转换和输出配置传播。 */
-    private function hydrateRows(mixed $rows, Query $selection, bool $returnAsArray, array $hideFields,
-        ?string $parentQueryConnection): array
+    /** 查询与分块共用字段隐藏和实体回填，使用 SQL 实际执行的连接。 */
+    private static function hydrateRows(array $rows, string $queryConnection, bool $returnAsArray = false,
+        array $hideFields = [], array $inheritedOutput = []): array
     {
+        if ($rows === []) { return []; }
         $list = [];
         if ($returnAsArray && $hideFields === []) {
             // 按值重建列表，保留重编号、解引用和初始迭代位置的既有语义。
@@ -621,15 +620,9 @@ abstract class AbstractEntity implements \JsonSerializable
             return $list;
         }
 
-        $persistFieldLimit = $selection->isPersistFieldLimit();
-        $outputFields = $persistFieldLimit ? ($selection->getFields()['fields'] ?? null) : null;
-        $db = null;
-        $connectionToRestore = null;
-        if ($parentQueryConnection !== null && !$returnAsArray) {
-            $db = FastDb::getInstance();
-            // 父查询的公开回调可能选了其他库，初始化父模型后恢复该选择。
-            $connectionToRestore = $db->selectConnection();
-        }
+        $db = $returnAsArray ? null : FastDb::getInstance();
+        // 查询回调可能选了其他库，实体回填结束后恢复该选择。
+        $connectionToRestore = $db?->selectConnection();
         try {
             foreach ($rows as $item) {
                 foreach ($hideFields as $field) {
@@ -640,14 +633,10 @@ abstract class AbstractEntity implements \JsonSerializable
                     continue;
                 }
 
-                if ($db !== null) {
-                    // 上一条记录的初始化钩子可能切库，每条记录都要重新选回父查询的连接。
-                    $db->selectConnection($parentQueryConnection);
-                }
+                // 上一条记录的初始化钩子可能切库，每条记录都从查询连接开始回填。
+                $db->selectConnection($queryConnection);
                 $entity = self::hydrateEntity(static::class, $item);
-                if ($persistFieldLimit) {
-                    $entity->queryLimit()->inheritOutputFields($outputFields, $hideFields);
-                }
+                $entity->inheritedOutput = $inheritedOutput;
                 $list[] = $entity;
             }
         } finally {

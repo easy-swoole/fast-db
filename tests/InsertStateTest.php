@@ -366,6 +366,33 @@ final class InsertStateTest extends TestCase
         $this->assertSame(['id' => 1, 'name' => 'after'], $entity->toArray());
     }
 
+    #[DataProvider('observerModes')]
+    public function testReloadAndObserverReentryKeepInheritedLimitsForSerializationOnly(string $mode): void
+    {
+        $this->client->database->exec("INSERT INTO insert_state (id, name, score) VALUES (1, 'before', 33)");
+        $owner = new InsertStateRecord();
+        $owner->queryLimit()->fields(['id', 'name', 'score'])->hideFields('score')->persistFieldLimit();
+        $entity = $owner->all()->first();
+        $entity->name = 'updated';
+
+        $this->assertTrue($entity->update());
+        $this->assertSame(['id' => 1, 'name' => 'updated'], $entity->toArray());
+        $entity->queryLimit()->where('id', 1)->returnAsArray();
+        $this->assertSame(33, $entity->all()->first()['score']);
+        $this->assertSame(['id' => 1, 'name' => 'updated'], $entity->toArray());
+
+        $nestedCount = null;
+        $this->observe($mode, $entity, static function (QueryResult $result) use ($entity, &$nestedCount): void {
+            if (str_starts_with($result->getLastPrepareQuery() ?? '', 'UPDATE')) {
+                $nestedCount = $entity->count();
+            }
+        });
+        $entity->name = 'reentered';
+        $this->assertTrue($entity->update());
+        $this->assertSame(1, $nestedCount);
+        $this->assertSame(['id' => 1, 'name' => 'reentered'], $entity->jsonSerialize());
+    }
+
     public function testHiddenFieldsStillParticipateInDatabaseWrites(): void
     {
         $entity = new InsertStateRecord(['name' => 'hidden', 'payload' => '[1]']);

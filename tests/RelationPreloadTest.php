@@ -127,6 +127,19 @@ final class RelationPreloadTest extends TestCase
         } finally { ReentrantProfile::$parent = null; }
     }
 
+    public function testManyRelationClearsItsSelectionBeforeHydrationReentersTheParent(): void
+    {
+        $parent = new ReentrantProfileParent(['id' => 1]);
+        $parent->queryLimit()->fields(['id', 'parent_id', 'name'])->where('name', 'profile-1');
+        ReentrantProfile::$parent = $parent;
+        ReentrantProfile::$parentCount = null;
+        try {
+            $this->assertSame(21, $parent->reentrantProfiles()->first()->id);
+            $this->assertSame(3, ReentrantProfile::$parentCount);
+            $this->assertCount(2, $this->connection->queries);
+        } finally { ReentrantProfile::$parent = null; }
+    }
+
     public function testQueriesWithoutPreloadingDoNotExecuteRelationSql(): void
     {
         $parents = (new PreloadFixtureParent())->all()->list();
@@ -386,6 +399,26 @@ final class RelationPreloadTest extends TestCase
         $this->db->selectConnection('default');
         $this->assertSame([11, 12], $arrays ? array_column($parents[0]['children'], 'id') : $this->childIds($parents[0]));
         $this->assertCount(2, $this->connection->queries);
+    }
+
+    public function testQueriesInitializeEntitiesOnTheQueryConnectionAndRestoreObserverSelection(): void
+    {
+        $owner = new PreloadFixtureInitializingParent();
+        $this->db->setOnQuery(function (): void { $this->db->selectConnection('observer'); });
+        $queries = [
+            'all' => [static fn () => $owner->all(), 3],
+            'findAll' => [static fn () => PreloadFixtureInitializingParent::findAll(tableName: 'preload_parents'), 3],
+            'findRecord' => [static fn () => PreloadFixtureInitializingParent::findRecord(1, tableName: 'preload_parents'), 1],
+        ];
+
+        foreach ($queries as $entry => [$run, $count]) {
+            $this->db->selectConnection('default');
+            PreloadFixtureInitializingParent::$connections = [];
+            $run();
+            $this->assertSame(array_fill(0, $count, 'default'), PreloadFixtureInitializingParent::$connections, $entry);
+            $this->assertSame('observer', $this->db->selectConnection(), $entry);
+        }
+        $this->db->selectConnection('default');
     }
 
     #[DataProvider('parentOutputModes')]
@@ -1007,6 +1040,9 @@ class ReentrantProfileParent extends PreloadFixtureParent
 {
     #[Relate(ReentrantProfile::class,'parent_id',type:RelationType::One)]
     public function reentrantProfile() { return $this->relateOne(); }
+
+    #[Relate(ReentrantProfile::class, 'parent_id', type: RelationType::Many)]
+    public function reentrantProfiles() { return $this->relateMany(); }
 }
 class ReentrantProfile extends AbstractEntity
 {

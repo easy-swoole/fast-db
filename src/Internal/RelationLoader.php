@@ -27,7 +27,7 @@ final class RelationLoader
 
     /** 两种关联共用构建、缓存查找和写回流程，结果组装分别处理。 */
     public function load(AbstractEntity $entity, Query $selection, Relate $relate, ?string $tableName,
-        callable $execute, callable $beforeOneHydration, callable $hydrate): mixed
+        callable $execute, callable $beforeHydration, callable $hydrate): mixed
     {
         $target = new $relate->targetEntity();
         $query = $selection->__getQueryBuilder();
@@ -50,9 +50,9 @@ final class RelationLoader
         $db = !$returnAsArray && $rows !== [] ? FastDb::getInstance() : null;
         $connectionToRestore = $db?->selectConnection();
         try {
-            if (!$returnAsArray && $relate->type === RelationType::One && count($rows) === 1) {
-                // 目标模型赋值时可能重入父模型，先清理本次关联条件。
-                $beforeOneHydration();
+            if ($db !== null) {
+                // 子模型初始化或赋值可能重入父模型，回填前结束本次关联的查询配置。
+                $beforeHydration();
             }
             $data = self::materialize($relate, $rows, $returnAsArray, $result->getConnectionName(), $hydrate, $target);
         } finally {

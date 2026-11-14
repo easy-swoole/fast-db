@@ -866,7 +866,7 @@ $result = $entity->all();
 echo json_encode($result, JSON_THROW_ON_ERROR);
 ```
 
-`hideFields()` 接受字符串或字符串数组；隐藏配置会过滤返回数组/实体输入数据，`persistFieldLimit(true)` 将 `fields`、`hideFields` 配置传给 `all()` 返回的子实体。继承的选列用于 `toArray()` 和 JSON 序列化。执行 `update()` 后，继承的选列和隐藏字段仍用于序列化。更新期间可以用 `fields()` 显式限列，本次更新结束后恢复继承的序列化配置。
+`hideFields()` 接受字符串或字符串数组；隐藏配置会过滤返回数组/实体输入数据，`persistFieldLimit(true)` 将 `fields`、`hideFields` 配置传给 `all()` 返回的子实体。继承的选列和隐藏字段只作用于该实体的 `toArray()` 和 JSON 序列化，执行更新、重新查询或加载关联后仍然保留。后续读写使用本次查询显式设置的字段选项。临时设置的 `fields()` 和 `hideFields()` 也会影响调用期间的序列化，查询结束后继续沿用继承的配置。
 
 实体初始化仍可能生成被查询省略字段的默认值或 null。需要确保输出键也被隐藏时，使用 `persistFieldLimit()`，或者直接返回数组。
 
@@ -1937,6 +1937,8 @@ $user = User::findRecord(1, onQuery: function (QueryResult $result): void {
 ```
 
 `findAll()`、`fastUpdate()`、`fastDelete()` 也有 `$onQuery` 参数。全局回调与实体/单次回调可以同时执行。实体查询在获得结果前失败时会创建替代 `QueryResult`，该结果提供时间、SQL 信息、执行异常及空结果，不保证拥有可用连接。
+
+查询回调可以切换当前选库。后续实体初始化使用本条 SQL 实际执行的连接，回填结束后恢复回调选中的连接；普通查询、分块和预加载都遵循这条规则。
 
 实体借用连接失败时，这份替代结果的 `getDuration()` 可能包含失败调用区间；此时不能把它当作实际 SQL 执行窗口。开启查询栈后的独立 `connectionAcquire` 失败事件能更准确地区分获取耗时和异常。
 
