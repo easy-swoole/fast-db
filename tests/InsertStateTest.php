@@ -418,25 +418,25 @@ final class InsertStateTest extends TestCase
         $this->assertSame('[2]', $this->client->row()['items']);
     }
 
-    public function testSqlFailureDoesNotAcceptFieldsAndKeepsObserverChangesForRetry(): void
+    public function testObserverFailureAfterSqlFailureLeavesPendingFieldsForRetry(): void
     {
         $this->client->database->exec("INSERT INTO insert_state (id,name) VALUES (20,'before')");
         $entity = new InsertStateRecord(['id' => 20, 'name' => 'before']);
         $entity->name = 'pending';
         $failure = new \RuntimeException('insert SQL failed');
+        $observerFailure = new \RuntimeException('observer failure');
         $this->client->nextFailure = $failure;
-        $entity->setOnQuery(function (QueryResult $result) use ($failure, $entity): void {
+        $entity->setOnQuery(function (QueryResult $result) use ($failure, $observerFailure): void {
             $this->assertSame($failure, $result->getException());
-            $entity->name = 'after-failure';
-            throw new \RuntimeException('observer failure');
+            throw $observerFailure;
         });
-        try { $entity->insert(); $this->fail('SQL failure must propagate'); }
-        catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
-        $this->assertSame('after-failure', $entity->name);
+        try { $entity->insert(); $this->fail('Observer failure must propagate'); }
+        catch (\RuntimeException $error) { $this->assertSame($observerFailure, $error); }
+        $this->assertSame('pending', $entity->name);
         $entity->setOnQuery(null);
         $this->assertTrue($entity->update());
-        $this->assertSame(['after-failure', 20], $this->client->queries[1]['parameters']);
-        $this->assertSame('after-failure', $this->client->row(20)['name']);
+        $this->assertSame(['pending', 20], $this->client->queries[1]['parameters']);
+        $this->assertSame('pending', $this->client->row(20)['name']);
     }
 
     public function testFalseInsertResultIsNotAcceptedJustBecauseDuplicateColumnsWereRequested(): void

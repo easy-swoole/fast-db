@@ -582,10 +582,17 @@ abstract class AbstractEntity implements \JsonSerializable
         $relations = $selection->getRelations();
         $hideFields = $selection->getHideFields() ?? [];
         $persistFieldLimit = !$returnAsArray && $selection->isPersistFieldLimit();
-        $result = FastDb::getInstance()->query($query, onQuery: $this->onQuery, connection: $page['connection'] ?? null);
-        $total = $result->getTotalCount();
-        $rows = $result->getResult();
+        $withTotalCount = in_array('SQL_CALC_FOUND_ROWS', $query->getLastQueryOptions(), true);
+        $db = FastDb::getInstance();
+        $result = $db->query($query, onQuery: $this->onQuery, connection: $page['connection'] ?? null);
         $parentQueryConnection = $result->getConnectionName();
+        $total = null;
+        if ($withTotalCount) {
+            // FOUND_ROWS() 读取当前会话的统计，在回填实体和查询关联前执行。
+            $count = $db->rawQuery('SELECT FOUND_ROWS() as count', connection: $parentQueryConnection);
+            $total = (int) $count->getResultOne()['count'];
+        }
+        $rows = $result->getResult();
         if ($page !== null) {
             // 使用实际查询的连接和原始结果翻页，字段隐藏和实体转换只影响交付的数据。
             $page['table'] = $table;

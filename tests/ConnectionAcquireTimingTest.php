@@ -217,8 +217,9 @@ final class ConnectionAcquireTimingTest extends TestCase
         $db->setOnQuery(static function (QueryResult $result) use (&$observed): void { $observed[] = $result; });
         $builder = (new QueryBuilder())->setQueryOption('SQL_CALC_FOUND_ROWS')->get('rows', 1);
         $result = $db->query($builder);
-        $this->assertSame(37, $result->getTotalCount());
-        $this->assertSame([$result, $result->getTotalResult()], $observed);
+        $count = $db->rawQuery('SELECT FOUND_ROWS() as count', connection: $result->getConnectionName());
+        $this->assertSame(['count' => 37], $count->getResultOne());
+        $this->assertSame([$result, $count], $observed);
         $this->assertSame(['connectionAcquire', 'query', 'query'], array_column($db->getQueryStack(), 'type'));
         $this->assertCount(2, $clients['default']->sql);
         $this->assertSame(1, $pools['default']->borrows);

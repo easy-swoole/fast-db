@@ -292,9 +292,10 @@ final class BulkWriteTest extends TestCase
         $this->assertCount(2, $this->connection->queries);
     }
 
-    public function testFailurePreservesTheFirstBatchAndNotifiesObserversWithoutReplacingTheError(): void
+    public function testSecondBatchFailurePreservesTheFirstBatchAndPropagatesTheObserverException(): void
     {
         $failure = new \RuntimeException('second batch failed');
+        $observerFailure = new \RuntimeException('local logger failed');
         $this->connection->failAt = 2;
         $this->connection->failure = $failure;
         $localEvents = [];
@@ -302,12 +303,12 @@ final class BulkWriteTest extends TestCase
             $this->events[] = $result;
         });
         try {
-            BulkWriteFixtureRecord::fastInsertAll($this->rows(5), onQuery: static function (QueryResult $result) use (&$localEvents): void {
+            BulkWriteFixtureRecord::fastInsertAll($this->rows(5), onQuery: static function (QueryResult $result) use (&$localEvents, $observerFailure): void {
                 $localEvents[] = $result;
-                if ($result->getException() !== null) { throw new \RuntimeException('local logger failed'); }
+                if ($result->getException() !== null) { throw $observerFailure; }
             }, batchSize: 2);
-            $this->fail('The original second-batch error must propagate');
-        } catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
+            $this->fail('The observer error must propagate');
+        } catch (\RuntimeException $error) { $this->assertSame($observerFailure, $error); }
         $this->assertSame($this->rows(2), $this->stored());
         $this->assertCount(2, $this->connection->queries);
         $this->assertCount(2, $this->events);

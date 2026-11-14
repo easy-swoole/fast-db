@@ -23,9 +23,10 @@ final class QueryFailureTest extends TestCase
     }
 
     #[DataProvider('failedQueries')]
-    public function testFailureCallbacksDoNotReplaceQueryException(bool $raw, bool $callbackThrows): void
+    public function testFailedQueriesNotifyObserversAndPropagateTheirExceptions(bool $raw, bool $callbackThrows): void
     {
         $failure = new \RuntimeException('original SQL failure');
+        $observerFailure = new \RuntimeException('logger failure');
         $method = $raw ? 'rawQuery' : 'query';
         $client = $this->createStub(Connection::class);
         $client->method($method)->willThrowException($failure);
@@ -33,7 +34,7 @@ final class QueryFailureTest extends TestCase
         (new \ReflectionProperty(FastDb::class, 'currentConnection'))
             ->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $client]]);
         $called = false;
-        $db->setOnQuery(function (QueryResult $result) use (&$called, $callbackThrows, $failure): void {
+        $db->setOnQuery(function (QueryResult $result) use (&$called, $callbackThrows, $failure, $observerFailure): void {
             $called = true;
             $this->assertNull($result->getResult());
             $this->assertSame($failure, $result->getException());
@@ -41,7 +42,7 @@ final class QueryFailureTest extends TestCase
             $this->assertNull($result->getInsertId());
             $this->assertNull($result->getResultOne());
             if ($callbackThrows) {
-                throw new \RuntimeException('logger failure');
+                throw $observerFailure;
             }
         });
         try {
@@ -52,9 +53,9 @@ final class QueryFailureTest extends TestCase
                 $query->raw('SELECT invalid');
                 $db->query($query);
             }
-            $this->fail('Expected original SQL exception');
+            $this->fail('Expected an exception');
         } catch (\RuntimeException $exception) {
-            $this->assertSame($failure, $exception);
+            $this->assertSame($callbackThrows ? $observerFailure : $failure, $exception);
         }
         $this->assertTrue($called);
     }
@@ -64,9 +65,10 @@ final class QueryFailureTest extends TestCase
         return [[true, false], [false, false], [true, true], [false, true]];
     }
 
-    public function testEntityCallbackAlsoPreservesOriginalFailure(): void
+    public function testEntityCallbackFailurePropagatesDirectly(): void
     {
         $failure = new \RuntimeException('original SQL failure');
+        $observerFailure = new \RuntimeException('entity logger failure');
         $client = $this->createStub(Connection::class);
         $client->method('query')->willThrowException($failure);
         $db = new FastDb();
@@ -78,18 +80,18 @@ final class QueryFailureTest extends TestCase
         $called = false;
         try {
             $user = new User();
-            $user->setOnQuery(function (QueryResult $result) use (&$called, $failure): void {
+            $user->setOnQuery(function (QueryResult $result) use (&$called, $failure, $observerFailure): void {
                 $called = true;
                 $this->assertNull($result->getResult());
                 $this->assertSame($failure, $result->getException());
                 $this->assertNotNull($result->getLastPrepareQuery());
-                throw new \RuntimeException('entity logger failure');
+                throw $observerFailure;
             });
             try {
                 $user->all();
-                $this->fail('Expected original SQL exception');
+                $this->fail('Expected observer exception');
             } catch (\RuntimeException $exception) {
-                $this->assertSame($failure, $exception);
+                $this->assertSame($observerFailure, $exception);
             }
             $this->assertTrue($called);
         } finally {

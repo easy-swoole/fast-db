@@ -515,7 +515,7 @@ $currentSize = count($page); // 本页返回的数量。
 
 `page($page, $withTotalCount = false, $pageSize = 10)` 从第 1 页开始；偏移量为 `($page - 1) * $pageSize`。`limit($num, $withTotalCount = false)` 仅限制数量。
 
-总数统计通过 `SQL_CALC_FOUND_ROWS` 和额外的 `SELECT FOUND_ROWS()` 完成，不是独立的 `COUNT(*)` 查询。对于使用相应 MySQL 特性的环境，可根据业务用单独计数查询替代。
+开启总数统计后，实体列表用 `SQL_CALC_FOUND_ROWS` 查询当前页。主查询及其回调正常返回后，列表立即在同一个会话执行 `SELECT FOUND_ROWS()`，再回填实体、预加载关联并通过 `ListResult::totalCount()` 返回总数。即使当前页为空，也会读取总数。
 
 ```php
 use EasySwoole\FastDb\Beans\Page;
@@ -1825,7 +1825,7 @@ $result = FastDb::getInstance()->query(function (QueryBuilder $query): void {
 });
 ```
 
-`query()` 的构建回调需要完成 `get()` / `insert()` / `update()` / `delete()` / `raw()` 等最终构建动作。FastDb 先确定执行连接名，再运行构建回调。构建失败或构建器没有 SQL 时直接抛异常，此次调用不会借连接或通知查询观察者。可以用 `onQuery:` 为本次主查询指定观察回调，接收 `QueryResult`，在全局查询回调之后执行。单次或实体 `onQuery` 每次分页只收到主查询结果，可通过 `getTotalCount()` 或 `getTotalResult()` 查看总数。实体列表和按需加载的关联列表在组装行对象前通知各自的实体回调。
+`query()` 的构建回调需要完成 `get()` / `insert()` / `update()` / `delete()` / `raw()` 等最终构建动作。FastDb 先确定执行连接名，再运行构建回调。构建失败或构建器没有 SQL 时直接抛异常，此次调用不会借连接或通知查询观察者。可以用 `onQuery:` 为本条 SQL 指定观察回调，接收 `QueryResult`，在全局查询回调之后执行。实体分页的回调收到主查询结果，分页总数从 `ListResult::totalCount()` 读取。实体列表和按需加载的关联列表在组装行对象前通知各自的实体回调。
 
 ### 原始 SQL
 
@@ -1848,8 +1848,8 @@ $row = $result->getResultOne();
 | `getConnectionName()` | 本次查询的执行连接名快照（string），供慢日志和异常定位使用；执行前必须设置 |
 | `getAffectedRows()` | 本次成功查询的影响行数快照；未取得结果或查询失败时为 null |
 | `getInsertId()` | 本次成功查询的自增 ID 快照；未取得结果或查询失败时为 null |
-| `getTotalCount(): ?int` | 请求分页总数后的统计结果；未读取总数时为 null |
-| `getTotalResult(): ?self` | 总数查询的 QueryResult；未读取总数时为 null |
+| `getTotalCount(): ?int` | 从构造时提供的总数结果读取统计值。FastDb 执行结果返回 null |
+| `getTotalResult(): ?self` | 构造时提供的总数查询结果。FastDb 执行结果返回 null |
 | `getLastQuery(): ?string` | 按需展开绑定参数生成日志 SQL |
 | `getLastPrepareQuery(): ?string` | 保留占位符的 SQL |
 | `getLastBindParams(): array` | 按占位符顺序排列的绑定参数 |
@@ -1868,13 +1868,13 @@ $insertId = $result->getInsertId();
 
 连接名在执行 SQL 前从实际连接记录，查询失败时也保留。查询栈统一读取该快照，不会因为构建器回调或日志回调切换连接而记错数据库。
 
-FastDb 在 Connection 返回后立即保存结果行、影响行数、自增 ID、SQL、参数和耗时。需要总数时，主查询结果保存后在同一连接上单独执行 `FOUND_ROWS()`，成功时将总数结果附到主结果，再统一通知查询观察者。总数 SQL 失败会单独记录并向调用方抛出原异常。显式传入的 `$timeout` 分别应用于主查询和总数查询。查询结果保存的是本次执行的返回值，后续数据库变化不会自动刷新这些 PHP 数据；需要新数据时应再次查询。
+FastDb 的 `query()` 和 `rawQuery()` 每次执行一条 SQL。Connection 返回后立即保存结果行、影响行数、自增 ID、SQL、参数和耗时。查询结果只反映本次执行，读取新数据需要再次查询。
 
 Connection 的 `getLastAffectRows()` / `getLastInsertId()` 始终表示最后一条实际执行 SQL 的元数据，包括分页总数查询。通过 FastDb 执行时，使用返回的 `QueryResult` 获取该次操作的影响行数和自增 ID。
 
 影响行数和自增 ID 类型为 `int|string|null`，超大无符号值保留为字符串，未查询或查询失败时为 null。影响行数与自增 ID 在查询成功后、日志回调执行前记录为快照，不会被后续 SQL 覆盖。`query()` 和 `rawQuery()` 的可选 `$timeout` 控制本次查询超时。
 
-分页总数及对应查询结果随主查询的 QueryResult 一起保存，可直接读取 `$result->getTotalCount()` 和 `$result->getTotalResult()`。实体列表从本次查询结果读取总数。
+直接通过 `FastDb::query()` 执行带 `SQL_CALC_FOUND_ROWS` 的查询时，调用方通过 `rawQuery()` 显式读取总数，连接名传入主查询的 `getConnectionName()`。FastDb 返回的 `QueryResult` 对应单条 SQL，因此 `getTotalResult()` 和 `getTotalCount()` 均返回 null。需要分页总数时，实体列表使用 `ListResult::totalCount()`。
 
 `getDuration()` 只记录驱动执行阶段，排除 SQL 构建、获取连接、池连接淘汰和查询观察回调。
 
@@ -1935,7 +1935,7 @@ $db->setOnQuery(function (QueryResult $result): void {
 
 查询执行阶段的开始时间在获得连接之后记录，执行耗时不包含获取连接；获取阶段另记为独立查询栈事件。`query()` / `rawQuery()` 结束时间在执行结束或失败后、调用日志回调之前记录，不包含日志回调耗时。begin/commit/rollback 实际执行后，无论成功、SQL 错误或超时，都进入日志回调和查询栈。事务 rawSql 与 flags 生成的执行 SQL 一致。全局 `onQuery` 只接收查询执行结果，连接获取成功或失败均不调用它。
 
-`query()` / `rawQuery()` 和事务执行抛异常时，回调中的 `getException()` 返回该次执行抛出的同一异常对象，`getResult()` / `getResultOne()` 为 null。成功执行时 getException() 为 null。回调抛异常会停止后续通知。SQL 执行已失败时向调用方抛出原始执行异常，其余情况下直接抛出回调异常。
+`query()` / `rawQuery()` 和事务执行抛异常时，回调中的 `getException()` 返回本条 SQL 的驱动执行异常，`getResult()` / `getResultOne()` 为 null。成功执行时 getException() 为 null。回调抛出的异常直接向调用方传播，并中止后续通知。SQL 失败的异常保存在该条 SQL 的查询记录中，观察回调正常返回后向调用方抛出。
 
 底层 `getLastQuery()` 是用于调试的占位符替换文本，可能与实际绑定执行的细节不同；尤其 null 的展示不能代替实际 SQL 判断。优先记录 `getLastPrepareQuery()` 和 `getLastBindParams()`。
 
@@ -1989,7 +1989,7 @@ $db->configureQueryStack(false, maxStackSize: 2); // 停止追加，保持相同
 | `exception` | SQL 执行异常，或连接获取事件中实际向外抛出的借用异常；成功时为 null |
 | `startTime` / `endTime` | 记录的起止 Unix 时间戳，用于日志定位；耗时字段使用单调时钟 |
 
-主查询与 `SELECT FOUND_ROWS() as count` 都生成独立 trace，并分别触发全局 `onQuery`。FastDb 在通知全局观察者前记录两条已执行的 SQL。查询事件通过 `getLastQuery()`、`getLastPrepareQuery()` 和 `getLastBindParams()` 读取 SQL 日志信息。查询栈与查询结果共享 SQL 快照。主查询的全局回调抛异常时，总数 SQL 的 trace 仍保留，总数查询的全局回调会跳过。SQL 执行异常优先于观察回调异常向外抛出。
+主查询与 `SELECT FOUND_ROWS() as count` 各有一条 trace，各自触发全局 `onQuery`。FastDb 对每条 SQL 先记录 trace，再通知回调。主查询或其回调抛异常时，列表停止执行，总数 SQL 不会发出。总数 SQL 的回调抛异常时，异常直接传播，已记录的 trace 保留。查询事件通过 `getLastQuery()`、`getLastPrepareQuery()` 和 `getLastBindParams()` 读取 SQL 日志信息，查询栈与查询结果共享 SQL 快照。
 
 查询栈在通知回调前记录已执行的 SQL。
 

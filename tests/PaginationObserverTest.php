@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests;
 
+use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\QueryResult;
@@ -11,192 +12,175 @@ use EasySwoole\Mysqli\Client;
 use EasySwoole\Mysqli\Config;
 use EasySwoole\Mysqli\Protocol\Connection as ProtocolConnection;
 use EasySwoole\Mysqli\QueryBuilder;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Swoole\Coroutine;
 use Swoole\Coroutine\Socket;
 
 final class PaginationObserverTest extends TestCase
 {
-    public function testTotalIsPrefetchedOnTheMainClientBeforeGlobalReentryAndBuilderMutation(): void
+    public function testFastDbExecutesOnlyTheSuppliedSqlEvenWithTheTotalOption(): void
     {
-        $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
+        $this->withConnection(function (FastDb $db, Socket $peer): void {
             $events = [];
-            $db->configureQueryStack(true);
-            $page = $this->page();
-            $sql = $page->getLastPrepareQuery();
-            $db->setOnQuery(function (QueryResult $result) use ($db, $page, &$events): void {
-                if ($result->getRawSql() === null) {
-                    $events[] = 'global-main';
-                    $this->assertSame(37, $result->getTotalCount());
-                    $this->assertSame(1, $result->getAffectedRows());
-                    $page->raw('SELECT changed_by_observer');
-                    $db->rawQuery('SELECT 1 AS probe');
-                } else {
-                    $events[] = $result->getRawSql() === 'SELECT FOUND_ROWS() as count' ? 'global-count' : 'global-probe';
+            $db->setOnQuery(static function (QueryResult $result) use (&$events): void { $events[] = $result; });
+            $builder = (new QueryBuilder())->withTotalCount()->get('sample', 1, ['id']);
+            $this->queuePage($peer);
+
+            $result = $db->query($builder);
+
+            $this->assertSame([['id' => 7]], $result->getResult());
+            $this->assertSame([$result], $events);
+            $this->assertNull($result->getTotalResult());
+            $this->assertCount(1, $db->getQueryStack());
+            $this->assertStringContainsString('SQL_CALC_FOUND_ROWS', $this->commands($peer, 3)[0]);
+            $this->assertNextQuerySucceeds($db, $peer);
+            $this->assertSame("\x03DO 1", $this->commands($peer, 1)[0]);
+        });
+    }
+
+    public function testEntityReadsTotalOnTheSameSessionAfterNotifyingTheMainQuery(): void
+    {
+        $this->withConnection(function (FastDb $db, Socket $peer): void {
+            $events = [];
+            $db->setOnQuery(function (QueryResult $result) use ($db, &$events): void {
+                $isCount = $result->getRawSql() !== null;
+                $events[] = $isCount ? 'global-count' : 'global-main';
+                $this->assertCount($isCount ? 2 : 1, $db->getQueryStack());
+                $this->assertSame('reporting', $result->getConnectionName());
+                $this->assertNull($result->getTotalResult());
+            });
+            $entity = $this->page();
+            $entity->setOnQuery(static function () use (&$events): void { $events[] = 'entity-main'; });
+            $this->queuePage($peer);
+            $this->textRows($peer, 'count', 37);
+
+            $list = $entity->all();
+
+            $this->assertSame([['id' => 7]], $list->list());
+            $this->assertSame(37, $list->totalCount());
+            $this->assertSame(['global-main', 'entity-main', 'global-count'], $events);
+            $this->assertSame([null, 'SELECT FOUND_ROWS() as count'], array_column($db->getQueryStack(), 'rawQuery'));
+            $this->assertSame("\x03SELECT FOUND_ROWS() as count", $this->commands($peer, 4)[3]);
+        }, 'reporting');
+    }
+
+    public static function failingObservers(): array { return [['global'], ['entity']]; }
+
+    #[DataProvider('failingObservers')]
+    public function testMainObserverFailureStopsBeforeCountSql(string $observer): void
+    {
+        $this->withConnection(function (FastDb $db, Socket $peer) use ($observer): void {
+            $failure = new \RuntimeException('main observer failed');
+            $callback = static function () use ($failure): void { throw $failure; };
+            $entity = $this->page();
+            if ($observer === 'global') { $db->setOnQuery($callback); }
+            else { $entity->setOnQuery($callback); }
+            $this->queuePage($peer);
+
+            try { $entity->all(); $this->fail('Expected observer failure'); }
+            catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
+
+            $this->assertCount(1, $db->getQueryStack());
+            $this->assertNull($db->getQueryStack(-1)->exception);
+            $this->assertNextQuerySucceeds($db, $peer);
+            $this->assertSame("\x03DO 1", $this->commands($peer, 4)[3]);
+        });
+    }
+
+    public function testMainSqlFailureStopsBeforeCountSql(): void
+    {
+        $this->withConnection(function (FastDb $db, Socket $peer): void {
+            $this->reply($peer, "\xff" . pack('v', 1064) . '#42000main failed', 1);
+
+            try { $this->page()->all(); $this->fail('Expected main SQL error'); }
+            catch (\EasySwoole\Mysqli\Exception\Exception $error) {
+                $this->assertSame(1064, $error->getCode());
+                $this->assertSame($error, $db->getQueryStack(-1)->exception);
+            }
+
+            $this->assertCount(1, $db->getQueryStack());
+            $this->assertNextQuerySucceeds($db, $peer);
+            $this->assertSame("\x03DO 1", $this->commands($peer, 2)[1]);
+        });
+    }
+
+    public function testCountObserverFailurePropagatesAfterCountSqlIsRecorded(): void
+    {
+        $this->withConnection(function (FastDb $db, Socket $peer): void {
+            $failure = new \RuntimeException('count observer failed');
+            $db->setOnQuery(function (QueryResult $result) use ($failure): void {
+                if ($result->getRawSql() === 'SELECT FOUND_ROWS() as count') {
+                    $this->assertSame(['count' => 37], $result->getResultOne());
+                    throw $failure;
                 }
             });
             $this->queuePage($peer);
             $this->textRows($peer, 'count', 37);
-            $this->textRows($peer, 'probe', 1);
-            $result = $db->query($page, onQuery: static function (QueryResult $result) use (&$events): void {
-                $events[] = $result->getRawSql() === null ? 'local-main' : 'local-count';
-            });
-            $this->assertSame([['id' => 7]], $result->getResult());
-            $this->assertSame($sql, $result->getLastPrepareQuery());
-            $this->assertSame(37, $result->getTotalCount());
-            $this->assertSame(['global-main', 'global-probe', 'global-count', 'local-main'], $events);
-            $this->assertSame([null, 'SELECT FOUND_ROWS() as count', 'SELECT 1 AS probe'], array_column($db->getQueryStack(), 'rawQuery'));
-            $commands = $this->commands($peer, 5);
-            $this->assertSame("\x03SELECT FOUND_ROWS() as count", $commands[3]);
-            $this->assertSame("\x03SELECT 1 AS probe", $commands[4]);
-            $this->assertNextQuerySucceeds($db, $peer);
-        });
-    }
 
-    public function testGlobalObserverCannotChangeRecordingOfTheAlreadyExecutedPage(): void
-    {
-        $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
-            $db->setOnQuery(static function () use ($db): void { $db->configureQueryStack(true); });
-            $this->queuePage($peer); $this->textRows($peer, 'count', 37);
-            $db->query($this->page());
-            $this->assertNull($db->getQueryStack());
-            $db->setOnQuery(static function () use ($db): void { $db->configureQueryStack(false); });
-            $this->queuePage($peer); $this->textRows($peer, 'count', 37);
-            $db->query($this->page());
-            $this->assertSame([null, 'SELECT FOUND_ROWS() as count'], array_column($db->getQueryStack(), 'rawQuery'));
-            $this->assertNextQuerySucceeds($db, $peer);
-            $this->assertCount(2, $db->getQueryStack());
-        });
-    }
-
-    public function testObserverReplacementAppliesToTheNextQuery(): void
-    {
-        $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
-            $events = [];
-            $db->setOnQuery(static function (QueryResult $result) use ($db, &$events): void {
-                $events[] = $result->getRawSql() === null ? 'original-main' : 'original-count';
-                $db->setOnQuery(static function () use (&$events): void { $events[] = 'replacement'; });
-            });
-            $this->queuePage($peer); $this->textRows($peer, 'count', 37);
-            $result = $db->query($this->page());
-            $this->assertSame(37, $result->getTotalCount());
-            $this->assertSame(['original-main', 'original-count'], $events);
-            $this->reply($peer, "\0\0\0\x02\0\0\0", 1);
-            $this->assertTrue($db->rawQuery('DO 1')->getResult());
-            $this->assertSame(['original-main', 'original-count', 'replacement'], $events);
-        });
-    }
-
-    public function testMainGlobalObserverFailureSkipsCountNotificationWithoutChangingSuccessfulSql(): void
-    {
-        $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
-            $failure = new \RuntimeException('main global observer'); $global = [];
-            $db->configureQueryStack(true);
-            $db->setOnQuery(static function (QueryResult $result) use ($failure, &$global): void { $global[] = $result; throw $failure; });
-            $this->queuePage($peer); $this->textRows($peer, 'count', 37);
-            try { $db->query($this->page()); $this->fail('Expected observer failure'); }
+            try { $this->page()->all(); $this->fail('Expected observer failure'); }
             catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
-            $this->assertCount(1, $global);
-            $this->assertSame([['id' => 7]], $global[0]->getResult());
-            $this->assertNull($global[0]->getException());
-            $this->assertSame(37, $global[0]->getTotalCount());
+
             $this->assertSame([null, 'SELECT FOUND_ROWS() as count'], array_column($db->getQueryStack(), 'rawQuery'));
             $this->assertNull($db->getQueryStack(-1)->exception);
             $this->assertNextQuerySucceeds($db, $peer);
         });
     }
 
-    public function testCountGlobalObserverFailureDoesNotBecomeASqlErrorOrLeakIntoTheNextQuery(): void
+    public function testCountSqlFailureIsLoggedAndPropagates(): void
     {
-        $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
-            $failure = new \RuntimeException('count global observer'); $global = [];
-            $db->setOnQuery(static function (QueryResult $result) use ($failure, &$global): void {
-                $global[] = $result;
-                if ($result->getRawSql() === 'SELECT FOUND_ROWS() as count') { throw $failure; }
-            });
-            $this->queuePage($peer); $this->textRows($peer, 'count', 37);
-            try { $db->query($this->page()); $this->fail('Expected count observer failure'); }
-            catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
-            $this->assertCount(2, $global);
-            $this->assertSame([['id' => 7]], $global[0]->getResult());
-            $this->assertSame([['count' => 37]], $global[1]->getResult());
-            $this->assertNull($global[1]->getException());
-            $this->assertSame(37, $global[0]->getTotalCount());
-            $this->reply($peer, "\0\0\0\x02\0\0\0", 1);
-            $this->assertTrue($db->rawQuery('DO 1')->getResult());
-            $this->assertNull($global[2]->getException());
-        });
-    }
+        $this->withConnection(function (FastDb $db, Socket $peer): void {
+            $events = [];
+            $db->setOnQuery(static function (QueryResult $result) use (&$events): void { $events[] = $result; });
+            $this->queuePage($peer);
+            $this->reply($peer, "\xff" . pack('v', 1064) . '#42000count failed', 1);
 
-    public function testCountSqlFailureStillNotifiesTheGlobalMainBeforeTheCount(): void
-    {
-        $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
-            $events = []; $global = [];
-            $db->setOnQuery(static function (QueryResult $result) use (&$events, &$global): void {
-                $events[] = $result->getRawSql() === null ? 'global-main' : 'global-count'; $global[] = $result;
-            });
-            $this->queuePage($peer); $this->reply($peer, "\xff" . pack('v', 1064) . '#42000count failed', 1);
-            try { $db->query($this->page()); $this->fail('Expected count SQL error'); }
-            catch (\EasySwoole\Mysqli\Exception\Exception $error) { $this->assertSame(1064, $error->getCode()); $original = $error; }
-            $this->assertSame(['global-main', 'global-count'], $events);
-            $this->assertSame([['id' => 7]], $global[0]->getResult());
-            $this->assertNull($global[0]->getException());
-            $this->assertSame($original, $global[1]->getException());
-            $this->assertNull($global[1]->getResult());
-            $this->assertNull($global[0]->getTotalCount());
+            try { $this->page()->all(); $this->fail('Expected count SQL error'); }
+            catch (\EasySwoole\Mysqli\Exception\Exception $error) {
+                $this->assertSame(1064, $error->getCode());
+                $this->assertSame($error, $db->getQueryStack(-1)->exception);
+                $this->assertSame($error, $events[1]->getException());
+            }
+
+            $this->assertSame([null, 'SELECT FOUND_ROWS() as count'], array_map(static fn(QueryResult $result) => $result->getRawSql(), $events));
+            $this->assertSame([['id' => 7]], $events[0]->getResult());
+            $this->assertNull($events[0]->getException());
             $this->assertNextQuerySucceeds($db, $peer);
         });
     }
 
-    public function testGlobalObserverFailureDoesNotReplaceThePrefetchedCountSqlError(): void
+    private function page(): AbstractEntity
     {
-        $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
-            $failure = new \RuntimeException('global observer failure'); $global = [];
-            $db->configureQueryStack(true);
-            $db->setOnQuery(static function (QueryResult $result) use ($failure, &$global): void { $global[] = $result; throw $failure; });
-            $this->queuePage($peer); $this->reply($peer, "\xff" . pack('v', 1064) . '#42000count failed', 1);
-            try { $db->query($this->page()); $this->fail('Expected the original count SQL error'); }
-            catch (\EasySwoole\Mysqli\Exception\Exception $error) { $this->assertSame(1064, $error->getCode()); $this->assertSame($error, $db->getQueryStack(-1)->exception); }
-            $this->assertCount(1, $global);
-            $this->assertNull($global[0]->getException());
-            $this->assertNextQuerySucceeds($db, $peer);
-        });
+        $entity = new class extends AbstractEntity {
+            public function tableName(): string { return 'sample'; }
+        };
+        $entity->queryLimit()->fields(['id'], true)->limit(1, true);
+        return $entity;
     }
 
-    public function testCustomConnectionsUseTheExplicitTimeoutForBothQueries(): void
+    private function withConnection(callable $test, string $name = 'default'): void
     {
-        $connection = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()->onlyMethods(['query', 'rawQuery'])->getMock();
-        $connection->connectionName = 'default';
-        $query = $this->page();
-        $connection->expects($this->once())->method('query')->with($query, 0.2)->willReturn([['id' => 7]]);
-        $connection->expects($this->once())->method('rawQuery')->with('SELECT FOUND_ROWS() as count', 0.2)->willReturn([['count' => 37]]);
-        $db = new FastDb(); $events = [];
-        $current = new \ReflectionProperty(FastDb::class, 'currentConnection');
-        $current->setValue($db, [Coroutine::getCid() => ['default' => $connection]]);
-        $db->setOnQuery(static function (QueryResult $result) use (&$events): void { $events[] = $result->getRawSql() === null ? 'main' : 'count'; });
-        try {
-            $result = $db->query($query, timeout: 0.2);
-            $this->assertSame(37, $result->getTotalCount());
-            $this->assertSame(['main', 'count'], $events);
-        } finally { $current->setValue($db, []); }
-    }
-
-    private function page(): QueryBuilder { return (new QueryBuilder())->setQueryOption('SQL_CALC_FOUND_ROWS')->get('sample', 1, ['id']); }
-
-    private function withConnection(callable $test): void
-    {
-        $check = function () use ($test): void {
+        $check = function () use ($test, $name): void {
             [$socket, $peer] = swoole_coroutine_socketpair(AF_UNIX, SOCK_STREAM, 0);
             $config = new Config(['timeout' => 0.03]); $protocol = new ProtocolConnection($config);
             $stream = (new \ReflectionProperty($protocol, 'stream'))->getValue($protocol);
             (new \ReflectionProperty($stream, 'socket'))->setValue($stream, $socket);
             $state = (new \ReflectionProperty($protocol, 'state'))->getValue($protocol); $state->established(); $state->applyServerStatus(2);
-            $connection = new Connection($config); $connection->connectionName = 'default';
+            $connection = new Connection($config); $connection->connectionName = $name;
             (new \ReflectionProperty(Client::class, 'mysqlClient'))->setValue($connection, $protocol);
-            $db = new FastDb(); $current = new \ReflectionProperty(FastDb::class, 'currentConnection');
-            $current->setValue($db, [Coroutine::getCid() => ['default' => $connection]]);
-            try { $test($db, $connection, $peer); }
-            finally { $current->setValue($db, []); $connection->close(); $peer->close(); }
+            $db = (new FastDb())->configureQueryStack(true)->selectConnection($name);
+            $current = new \ReflectionProperty(FastDb::class, 'currentConnection');
+            $current->setValue($db, [Coroutine::getCid() => [$name => $connection]]);
+            $instance = new \ReflectionProperty(FastDb::class, 'instance');
+            $previous = $instance->getValue();
+            $instance->setValue(null, $db);
+            try { $test($db, $peer); }
+            finally {
+                $instance->setValue(null, $previous);
+                $current->setValue($db, []);
+                $connection->close();
+                $peer->close();
+            }
         };
         if (Coroutine::getCid() < 0) { Coroutine\run($check); } else { $check(); }
     }

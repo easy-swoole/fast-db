@@ -212,8 +212,7 @@ class FastDb
         }
 
         $client = $this->getOrBorrowConnection($connection);
-        return $this->execute($client, static fn () => $client->query($builder, $timeout), $builder,
-            totalQueryTimeout: $timeout, onQuery: $onQuery);
+        return $this->execute($client, static fn () => $client->query($builder, $timeout), $builder, onQuery: $onQuery);
     }
 
     public function rawQuery(string $sql, ?float $timeout = null, ?string $connection = null): QueryResult
@@ -222,45 +221,20 @@ class FastDb
         return $this->execute($client, static fn () => $client->rawQuery($sql, $timeout), null, $sql);
     }
 
-    /**
-     * 执行主 SQL 和所需的总数 SQL，先记查询栈，再按顺序通知。
-     */
     private function execute(Connection $client, callable $operation, ?QueryBuilder $builder = null,
-        ?string $sql = null, ?float $totalQueryTimeout = null, ?callable $onQuery = null): QueryResult
+        ?string $sql = null, ?callable $onQuery = null): QueryResult
     {
-        $queryResult = $this->executeResult($client, $operation, $builder, $sql);
-        $totalQueryResult = null;
-        if ($queryResult->getException() === null && $builder !== null
-            && in_array('SQL_CALC_FOUND_ROWS', $builder->getLastQueryOptions(), true)) {
-            // 在同一连接上读出总数，再通知观察者。
-            $totalSql = 'SELECT FOUND_ROWS() as count';
-            $totalQueryResult = $this->executeResult(
-                $client, static fn () => $client->rawQuery($totalSql, $totalQueryTimeout), null, $totalSql
-            );
-            if ($totalQueryResult->getException() === null) {
-                $queryResult = $queryResult->withTotalResult($totalQueryResult);
-            }
-        }
-        return $this->publishQueryResult($queryResult, $totalQueryResult, $onQuery);
+        return $this->publishQueryResult($this->executeResult($client, $operation, $builder, $sql), $onQuery);
     }
 
-    private function publishQueryResult(QueryResult $queryResult, ?QueryResult $totalQueryResult = null,
-        ?callable $onQuery = null): QueryResult
+    private function publishQueryResult(QueryResult $queryResult, ?callable $onQuery = null): QueryResult
     {
-        $firstError = $queryResult->getException() ?? $totalQueryResult?->getException();
-        // 执行记录先于观察回调，回调抛异常也保留已经执行的 SQL。
+        // 先记录本条 SQL，再通知观察者。回调异常直接交给调用方。
         $this->diagnostics?->record($queryResult);
-        if ($totalQueryResult !== null) {
-            $this->diagnostics?->record($totalQueryResult);
-        }
-
-        try {
-            $this->diagnostics?->notify($queryResult, $totalQueryResult);
-            if ($onQuery !== null) { $onQuery($queryResult); }
-        } finally {
-            // 观察回调失败时，仍保留先发生的 SQL 异常。
-            if ($firstError !== null) { throw $firstError; }
-        }
+        $this->diagnostics?->notify($queryResult);
+        if ($onQuery !== null) { $onQuery($queryResult); }
+        $error = $queryResult->getException();
+        if ($error !== null) { throw $error; }
         return $queryResult;
     }
 

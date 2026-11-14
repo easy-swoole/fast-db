@@ -358,9 +358,10 @@ final class ConnectionTest extends TestCase
     }
 
     #[\PHPUnit\Framework\Attributes\DataProvider('failedTransactionModes')]
-    public function testFailedTransactionCallbackKeepsOriginalError(string $operation, bool $loggerThrows): void
+    public function testFailedTransactionRecordsTheSqlErrorAndPropagatesObserverExceptions(string $operation, bool $loggerThrows): void
     {
         $failure = new \RuntimeException('transaction execution failed');
+        $observerFailure = new \RuntimeException('logger failed');
         $connection = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()
             ->onlyMethods([$operation . 'Transaction', 'isInTransaction'])->getMock();
         $connection->expects($this->once())->method($operation . 'Transaction')->willThrowException($failure);
@@ -368,22 +369,23 @@ final class ConnectionTest extends TestCase
         $db = (new FastDb())->configureQueryStack(true);
         $called = 0;
         $expected = $operation === 'begin' ? 'START TRANSACTION' : strtoupper($operation) . ' AND NO CHAIN NO RELEASE';
-        $db->setOnQuery(function (\EasySwoole\FastDb\Mysql\QueryResult $result) use ($failure, $connection, $expected, $loggerThrows, &$called): void {
+        $db->setOnQuery(function (\EasySwoole\FastDb\Mysql\QueryResult $result) use ($failure, $observerFailure, $expected, $loggerThrows, &$called): void {
             $called++;
             $this->assertSame($failure, $result->getException());
             $this->assertSame($expected, $result->getRawSql());
             $this->assertNull($result->getAffectedRows());
             $this->assertNull($result->getResult());
-            if ($loggerThrows) { throw new \RuntimeException('logger failed'); }
+            if ($loggerThrows) { throw $observerFailure; }
         });
         try {
             $db->$operation($connection);
             $this->fail('Expected transaction error');
         } catch (\RuntimeException $error) {
-            $this->assertSame($failure, $error);
+            $this->assertSame($loggerThrows ? $observerFailure : $failure, $error);
         }
         $this->assertSame(1, $called);
         $this->assertSame($expected, $db->getQueryStack(-1)->rawQuery);
+        $this->assertSame($failure, $db->getQueryStack(-1)->exception);
         $this->assertSame($operation !== 'begin', $connection->isInTransaction());
     }
 

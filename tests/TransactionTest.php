@@ -13,6 +13,7 @@ use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Config;
 use EasySwoole\FastDb\FastDb;
+use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\FastDb\Tests\Model\ConvertedKey;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -379,8 +380,9 @@ final class TransactionTest extends TestCase
     {
         $this->observer->query("ALTER TABLE `{$this->table}` ADD COLUMN `order` INT NOT NULL DEFAULT 10");
         $this->observer->query("INSERT INTO `{$this->table}` VALUES (2,2,20),(3,3,30),(4,4,40),(5,5,50)");
-        $pages = [];
-        $this->db->setOnQuery(static function (QueryResult $result) use (&$pages): void {
+        $pages = $totals = [];
+        $this->db->setOnQuery(static function (QueryResult $result) use (&$pages, &$totals): void {
+            if ($result->getRawSql() === 'SELECT FOUND_ROWS() as count') { $totals[] = $result->getResultOne()['count']; }
             $sql = $result->getLastPrepareQuery();
             if ($result->getRawSql() === null && $sql !== null && str_starts_with($sql, 'SELECT')) { $pages[] = $result; }
         });
@@ -388,7 +390,7 @@ final class TransactionTest extends TestCase
         $this->db->transaction(function () use ($withTotal, &$seen, &$entityEvents): void {
             $entity = new CursorMysqlEntity();
             $entity->setOnQuery(static function (QueryResult $result) use (&$entityEvents): void {
-                $entityEvents[] = $result->getTotalResult()?->getRawSql();
+                $entityEvents[] = $result->getRawSql();
             });
             $entity->queryLimit()->where('value',0)->orWhere('id',4,'>=')->orderBy('id','DESC')
                 ->page(99, $withTotal, 1)->selectForUpdate()->returnAsArray()->hideFields('order');
@@ -400,14 +402,13 @@ final class TransactionTest extends TestCase
         });
         $this->assertSame([1,4,5], $seen);
         $this->assertCount(2, $pages);
-        $this->assertSame($withTotal ? ['SELECT FOUND_ROWS() as count', 'SELECT FOUND_ROWS() as count'] : [null, null], $entityEvents);
+        $this->assertSame([null, null], $entityEvents);
         foreach ($pages as $page) {
             $sql = $page->getLastPrepareQuery();
             $this->assertStringContainsString('ORDER BY `order` ASC', $sql);
             $this->assertStringContainsString('FOR UPDATE', $sql);
-            $this->assertSame($withTotal, $page->getTotalResult() !== null);
         }
-        if ($withTotal) { $this->assertSame([3,1], array_map(static fn(QueryResult $page) => $page->getTotalCount(), $pages)); }
+        $this->assertSame($withTotal ? [3, 1] : [], $totals);
     }
 
     public function testMysqlBulkWritesUseDriverValidationAndIndependentBatchColumns(): void
@@ -520,24 +521,6 @@ final class TransactionTest extends TestCase
             $this->assertSame($original, $entity->$method(['amount', 'id'], force: false)['amount']);
             $this->assertSame((float) $original, $entity->$method('amount'));
         }
-    }
-
-    public function testMysqlPaginationKeepsItsTotalWhenObserverReusesTheBuilder(): void
-    {
-        $this->observer->query("INSERT INTO `{$this->table}` VALUES (2,1),(3,2)");
-        $entity = new TransactionEntity();
-        $entity->queryLimit()->limit(1, true);
-        $builder = $entity->queryLimit()->__getQueryBuilder();
-        $entered = false;
-        $this->db->setOnQuery(function (QueryResult $result) use ($builder, &$entered): void {
-            if ($entered) { return; }
-            $entered = true;
-            $this->assertSame(3, $result->getTotalCount());
-            $this->db->query($builder->raw('SELECT 42 AS probe'));
-        });
-        $page = $entity->all();
-        $this->assertSame(3, $page->totalCount());
-        $this->assertCount(1, $page);
     }
 
     public function testZeroPrimaryKeysSupportMysqlEntityAndFastDeletion(): void
@@ -788,22 +771,23 @@ final class TransactionTest extends TestCase
         $this->assertSame(7, $this->value());
     }
 
-    public function testPaginationCountSurvivesLoggingQueries(): void
+    public function testPaginationCountsAnEmptyPageOnTheSameSession(): void
     {
-        $this->observer->query("INSERT INTO `{$this->table}` VALUES(2,0),(3,0)");
-        $once = false;
-        $this->db->setOnQuery(function ($result) use (&$once): void {
-            if (!$once && $result->getTotalResult() !== null) {
-                $once = true; $this->db->rawQuery('SELECT 1');
-            }
+        $this->observer->query("INSERT INTO " . $this->table . " VALUES(2,0),(3,0)");
+        $events = [];
+        $this->db->setOnQuery(function (QueryResult $result) use (&$events): void {
+            $events[] = [$result->getRawSql(), $this->db->currentConnection()];
         });
-        $entity = new TransactionEntity(); $totals = [];
-        $entity->setOnQuery(static function (QueryResult $result) use (&$totals): void { $totals[] = $result->getTotalCount(); });
-        $entity->queryLimit()->page(1, true, 1);
+        $entity = new TransactionEntity();
+        $entity->queryLimit()->page(4, true, 1)->orderBy('id');
         $list = $entity->all();
-        $this->assertCount(1, $list);
+        $this->assertCount(0, $list);
         $this->assertSame(3, $list->totalCount());
-        $this->assertSame([3], $totals);
+        $this->assertCount(2, $events);
+        $this->assertSame(null, $events[0][0]);
+        $this->assertSame('SELECT FOUND_ROWS() as count', $events[1][0]);
+        $this->assertInstanceOf(Connection::class, $events[0][1]);
+        $this->assertSame($events[0][1], $events[1][1]);
     }
 
     public function testRawTransactionIsRolledBackWhenTheSessionIsReturned(): void
@@ -1355,10 +1339,11 @@ final class TransactionTest extends TestCase
             $db = (new FastDb())->addDb(new Config(array_replace(MYSQL_CONFIG,
                 ['host' => '127.0.0.1', 'port' => $port, 'minObjectNum' => 0])));
             $loggedFailure = null;
-            $db->configureQueryStack(true)->setOnQuery(static function (QueryResult $result) use (&$loggedFailure): void {
+            $observerFailure = new \RuntimeException('timeout logger failed');
+            $db->configureQueryStack(true)->setOnQuery(static function (QueryResult $result) use (&$loggedFailure, $observerFailure): void {
                 if ($result->getException() !== null) {
                     $loggedFailure = $result;
-                    throw new \RuntimeException('timeout logger failed');
+                    throw $observerFailure;
                 }
             });
             try {
@@ -1371,12 +1356,15 @@ final class TransactionTest extends TestCase
                 try {
                     $db->$operation(timeout: 0.05);
                     $this->fail('Expected transaction command timeout');
-                } catch (\EasySwoole\FastDb\Exception\TimeoutException $error) {
+                } catch (\RuntimeException $callbackError) {
+                    $this->assertSame($observerFailure, $callbackError);
+                    $error = $loggedFailure->getException();
+                    $this->assertInstanceOf(\EasySwoole\FastDb\Exception\TimeoutException::class, $error);
                     $this->assertGreaterThanOrEqual(0.03, microtime(true) - $started);
                     $this->assertLessThan(0.15, microtime(true) - $started);
                     $this->assertFalse($db->currentConnection()->mysqlClient()->isConnected());
                     $this->assertSame($operation === 'begin' ? 'START TRANSACTION' : strtoupper($operation) . ' AND NO CHAIN NO RELEASE', $error->getRawSql());
-                    $this->assertSame($error, $loggedFailure->getException());
+                    $this->assertSame($error, $db->getQueryStack(-1)->exception);
                     $this->assertSame($error->getRawSql(), $loggedFailure->getRawSql());
                     $this->assertNull($loggedFailure->getResult());
                     $this->assertSame($error->getRawSql(), $db->getQueryStack(-1)->rawQuery);

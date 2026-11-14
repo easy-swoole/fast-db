@@ -131,26 +131,26 @@ final class BulkConnectionTest extends TestCase
     }
 
     #[DataProvider('methods')]
-    public function testThrowingGlobalObserverStopsNotificationsAndKeepsTheSqlException(string $method): void
+    public function testThrowingGlobalObserverStopsNotificationsAndPropagates(string $method): void
     {
         $failure = new \RuntimeException('SQL rejected');
+        $observerFailure = new \RuntimeException('global logger');
         $client = $this->createStub(BulkPinnedConnection::class); $client->connectionName = 'default';
         $client->method('query')->willThrowException($failure);
         $this->clients['default'] = $client; $this->bind($this->clients);
         $rows = (function (): \Generator { $this->db->selectConnection('producer'); yield ['id' => 1]; })();
         $seen = [];
-        $this->db->setOnQuery(function (QueryResult $result) use (&$seen, $failure): void {
+        $this->db->setOnQuery(function (QueryResult $result) use (&$seen, $failure, $observerFailure): void {
             $this->assertSame($failure, $result->getException());
             $seen[] = ['global', $result->getConnectionName(), $this->db->selectConnection()];
-            $this->db->selectConnection('global-selected'); throw new \RuntimeException('global logger');
+            throw $observerFailure;
         });
         try {
             $this->write($method, $rows, 'bulk_pinned',
                 static function (): void { self::fail('Global observer already threw'); });
-            $this->fail('Expected SQL error');
-        } catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
+            $this->fail('Expected observer error');
+        } catch (\RuntimeException $error) { $this->assertSame($observerFailure, $error); }
         $this->assertSame([['global', 'default', 'producer']], $seen);
-        $this->assertSame('global-selected', $this->db->selectConnection());
     }
 
     private function write(string $method, iterable $rows, ?string $table = null, ?callable $onQuery = null, string $model = BulkPinnedRecord::class): int|string

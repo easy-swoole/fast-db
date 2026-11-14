@@ -368,65 +368,18 @@ final class EntityQueryBoundaryTest extends TestCase
         $this->assertSame(3, $entity->count());
     }
 
-    public static function paginationModes(): iterable
+    public function testEntityListGetsTotalOnlyWhenRequested(): void
     {
-        foreach (['global', 'entity'] as $observer) {
-            foreach ([false, true] as $total) {
-                yield "$observer total=$total" => [$observer, $total];
-            }
-        }
-    }
-
-    #[DataProvider('paginationModes')]
-    public function testTotalsFollowTheExecutedQueryWhenCallbacksReuseItsBuilder(string $observer, bool $total): void
-    {
-        $entity = new QueryBoundaryRecord(['id' => 'owner', 'grp' => 1]);
-        $entity->queryLimit()->limit(1, $total)->returnAsArray();
-        $builder = $entity->queryLimit()->__getQueryBuilder();
-        $entered = false;
-        $entityCountEvents = 0;
-        $savedTotal = null;
-        $callback = function (QueryResult $result) use ($builder, $total, &$entered, &$entityCountEvents, &$savedTotal): void {
-            if ($result->getRawSql() === 'SELECT FOUND_ROWS() as count') { $entityCountEvents++; }
-            if ($entered) { return; }
-            $entered = true;
-            $savedTotal = $result->getTotalCount();
-            if ($total) {
-                // 清除原构建器的总数选项，不得丢失外层已保存的总数。
-                $builder->raw('SELECT 42 AS probe');
-            } else {
-                // 内层开启总数统计，不得为未请求总数的外层补查 FOUND_ROWS()。
-                $builder->withTotalCount()->get('query_boundary', 1, ['id']);
-            }
-            $this->db->query($builder);
-        };
-        if ($observer === 'global') { $this->db->setOnQuery($callback); }
-        else { $entity->setOnQuery($callback); }
-        $list = $entity->all();
-        $expectedTotal = $total ? 3 : null;
-        $this->assertSame($expectedTotal, $savedTotal);
-        $this->assertSame($expectedTotal, $list->totalCount());
-        $this->assertCount(1, $list);
-        $this->assertSame(1, $this->client->countQueries);
-        if ($observer === 'entity') { $this->assertSame(0, $entityCountEvents); }
-        $this->assertNull($entity->queryLimit()->getFields());
-    }
-
-    public function testEntityObserverReadsTheTotalFromTheMainResult(): void
-    {
-        $entity = new QueryBoundaryRecord(['id' => 'owner', 'grp' => 1]);
+        $entity = new QueryBoundaryRecord();
         $entity->queryLimit()->limit(1, true);
-        $events = [];
-        $this->db->setOnQuery(static function (QueryResult $result) use (&$events): void {
-            $events[] = $result->getRawSql() === null ? 'global-main' : 'global-total';
-        });
-        $entity->setOnQuery(static function (QueryResult $result) use (&$events): void {
-            $events[] = ['entity-main', $result->getTotalResult()->getRawSql(), $result->getTotalCount()];
-        });
-
         $list = $entity->all();
         $this->assertSame(3, $list->totalCount());
-        $this->assertSame(['global-main', 'global-total', ['entity-main', 'SELECT FOUND_ROWS() as count', 3]], $events);
+        $this->assertCount(1, $list);
+        $this->assertSame(1, $this->client->countQueries);
+
+        $entity->queryLimit()->limit(1);
+        $this->assertNull($entity->all()->totalCount());
+        $this->assertSame(1, $this->client->countQueries);
     }
 }
 
