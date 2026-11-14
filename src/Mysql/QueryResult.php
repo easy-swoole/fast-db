@@ -21,7 +21,6 @@ final class QueryResult
         private readonly int|string|null $insertId = null,
         private readonly ?string $rawSql = null,
         ?QueryBuilder $builder = null,
-        private readonly ?self $totalResult = null,
     ) {
         $this->sql = new SqlSnapshot($rawSql, $builder);
     }
@@ -50,17 +49,6 @@ final class QueryResult
     public function getDuration(): float
     {
         return $this->duration;
-    }
-
-    public function getTotalResult(): ?self
-    {
-        return $this->totalResult;
-    }
-
-    public function getTotalCount(): ?int
-    {
-        $value = $this->totalResult?->getResultOne()['count'] ?? null;
-        return $value === null ? null : (int) $value;
     }
 
     public function getException(): ?\Throwable

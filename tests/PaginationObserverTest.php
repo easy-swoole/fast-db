@@ -31,7 +31,6 @@ final class PaginationObserverTest extends TestCase
 
             $this->assertSame([['id' => 7]], $result->getResult());
             $this->assertSame([$result], $events);
-            $this->assertNull($result->getTotalResult());
             $this->assertCount(1, $db->getQueryStack());
             $this->assertStringContainsString('SQL_CALC_FOUND_ROWS', $this->commands($peer, 3)[0]);
             $this->assertNextQuerySucceeds($db, $peer);
@@ -48,7 +47,6 @@ final class PaginationObserverTest extends TestCase
                 $events[] = $isCount ? 'global-count' : 'global-main';
                 $this->assertCount($isCount ? 2 : 1, $db->getQueryStack());
                 $this->assertSame('reporting', $result->getConnectionName());
-                $this->assertNull($result->getTotalResult());
             });
             $entity = $this->page();
             $entity->setOnQuery(static function () use (&$events): void { $events[] = 'entity-main'; });

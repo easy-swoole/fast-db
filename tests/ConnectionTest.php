@@ -336,7 +336,10 @@ final class ConnectionTest extends TestCase
         $this->assertNull($empty->getLastPrepareQuery());
         $this->assertSame([], $empty->getLastBindParams());
 
-        $builder = (new \EasySwoole\Mysqli\QueryBuilder())->noBackslashEscapes()->raw('SELECT ?', ["a'b"]);
+        $builder = new class extends \EasySwoole\Mysqli\QueryBuilder {
+            private function __clone() {}
+        };
+        $builder->noBackslashEscapes()->raw('SELECT ?', ["a'b"]);
         $sql = $builder->getLastQuery();
         $error = new \EasySwoole\FastDb\Exception\TimeoutException('query timed out', rawSql: 'SELECT ?', builder: $builder);
         $builder->raw('SELECT 2');

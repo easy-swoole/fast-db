@@ -8,8 +8,8 @@ class ConvertDateTime extends \DateTime implements ConvertObjectInterface
     public static function toObject(mixed $data): static
     {
         if($data instanceof \DateTimeInterface){
-            // 复制日期对象以隔离可变状态；MySQL DATETIME 本身不保存时区。
-            return new static($data->format('Y-m-d H:i:s.u'), $data->getTimezone());
+            // 直接复制原时间点，避免夏令时回拨时重新解析到另一个时间点。
+            return static::createFromInterface($data);
         }
         if(is_int($data)){
             $date = new static();

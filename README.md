@@ -4,7 +4,7 @@
 
 FastDb 是面向 Swoole 协程环境的 MySQL 数据访问库，组合连接池、SQL 构建器和基于 PHP Attributes 的实体映射。可以在 EasySwoole 框架内使用，也可以独立使用。
 
-本文面向 `3.x` 分支，使用 `easyswoole/mysqli` ^5.1.2 和 `easyswoole/pool` 3.x，以当前 `src/` 和 `composer.json` 为准。实体 API 位于 `AbstractEntity`，数据库与连接管理位于 `FastDb`，SQL 构建能力由 `easyswoole/mysqli` 提供。
+本文面向 `3.x` 分支，使用 `easyswoole/mysqli` ^5.1 和 `easyswoole/pool` 3.x，以当前 `src/` 和 `composer.json` 为准。实体 API 位于 `AbstractEntity`，数据库与连接管理位于 `FastDb`，SQL 构建能力由 `easyswoole/mysqli` 提供。
 
 ## 内部执行与实体状态
 
@@ -1848,8 +1848,6 @@ $row = $result->getResultOne();
 | `getConnectionName()` | 本次查询的执行连接名快照（string），供慢日志和异常定位使用；执行前必须设置 |
 | `getAffectedRows()` | 本次成功查询的影响行数快照；未取得结果或查询失败时为 null |
 | `getInsertId()` | 本次成功查询的自增 ID 快照；未取得结果或查询失败时为 null |
-| `getTotalCount(): ?int` | 从构造时提供的总数结果读取统计值。FastDb 执行结果返回 null |
-| `getTotalResult(): ?self` | 构造时提供的总数查询结果。FastDb 执行结果返回 null |
 | `getLastQuery(): ?string` | 按需展开绑定参数生成日志 SQL |
 | `getLastPrepareQuery(): ?string` | 保留占位符的 SQL |
 | `getLastBindParams(): array` | 按占位符顺序排列的绑定参数 |
@@ -1874,7 +1872,7 @@ Connection 的 `getLastAffectRows()` / `getLastInsertId()` 始终表示最后一
 
 影响行数和自增 ID 类型为 `int|string|null`，超大无符号值保留为字符串，未查询或查询失败时为 null。影响行数与自增 ID 在查询成功后、日志回调执行前记录为快照，不会被后续 SQL 覆盖。`query()` 和 `rawQuery()` 的可选 `$timeout` 控制本次查询超时。
 
-直接通过 `FastDb::query()` 执行带 `SQL_CALC_FOUND_ROWS` 的查询时，调用方通过 `rawQuery()` 显式读取总数，连接名传入主查询的 `getConnectionName()`。FastDb 返回的 `QueryResult` 对应单条 SQL，因此 `getTotalResult()` 和 `getTotalCount()` 均返回 null。需要分页总数时，实体列表使用 `ListResult::totalCount()`。
+直接通过 `FastDb::query()` 执行带 `SQL_CALC_FOUND_ROWS` 的查询时，调用方通过 `rawQuery()` 显式读取总数，连接名传入主查询的 `getConnectionName()`。实体分页总数通过 `ListResult::totalCount()` 读取。
 
 `getDuration()` 只记录驱动执行阶段，排除 SQL 构建、获取连接、池连接淘汰和查询观察回调。
 
@@ -1989,7 +1987,7 @@ $db->configureQueryStack(false, maxStackSize: 2); // 停止追加，保持相同
 | `exception` | SQL 执行异常，或连接获取事件中实际向外抛出的借用异常；成功时为 null |
 | `startTime` / `endTime` | 记录的起止 Unix 时间戳，用于日志定位；耗时字段使用单调时钟 |
 
-主查询与 `SELECT FOUND_ROWS() as count` 各有一条 trace，各自触发全局 `onQuery`。FastDb 对每条 SQL 先记录 trace，再通知回调。主查询或其回调抛异常时，列表停止执行，总数 SQL 不会发出。总数 SQL 的回调抛异常时，异常直接传播，已记录的 trace 保留。查询事件通过 `getLastQuery()`、`getLastPrepareQuery()` 和 `getLastBindParams()` 读取 SQL 日志信息，查询栈与查询结果共享 SQL 快照。
+主查询与 `SELECT FOUND_ROWS() as count` 各有一条 trace，各自触发全局 `onQuery`。FastDb 对每条 SQL 先记录 trace，再通知回调。主查询或其回调抛异常时，列表停止执行，总数 SQL 不会发出。总数 SQL 的回调抛异常时，异常直接传播，已记录的 trace 保留。查询事件通过 `getLastQuery()`、`getLastPrepareQuery()` 和 `getLastBindParams()` 读取 SQL 日志信息，查询栈与查询结果共享 SQL 快照。构建器查询的快照保存 mysqli 的只读编译结果，读取展开后的日志时才格式化参数。
 
 查询栈在通知回调前记录已执行的 SQL。
 

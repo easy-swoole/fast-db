@@ -45,13 +45,21 @@ final class QueryStackTest extends TestCase
     public function testQueryEventsExposeTheSameReadOnlySqlSnapshotAsTheResult(): void
     {
         $db = $this->database();
-        $builder = (new QueryBuilder())->noBackslashEscapes()->raw('SELECT ?', ["a'b"]);
+        $builder = new class extends QueryBuilder {
+            private function __clone() {}
+        };
+        $builder->noBackslashEscapes()->raw('SELECT ?', ["a'b"]);
         $result = $db->query($builder);
         $entry = $db->getQueryStack(-1);
-        $builder->raw('SELECT 2');
+        $builder->noBackslashEscapes(false)->raw('SELECT ?', ['changed']);
+        $builderReference = \WeakReference::create($builder);
+        unset($builder);
+
+        $this->assertNull($builderReference->get());
 
         $this->assertSame('SELECT ?', $entry->getLastPrepareQuery());
         $this->assertSame(["a'b"], $entry->getLastBindParams());
+        $this->assertSame("SELECT 'a''b'", $result->getLastQuery());
         $this->assertSame($result->getLastQuery(), $entry->getLastQuery());
         $this->assertFalse(property_exists($entry, 'query'));
 
