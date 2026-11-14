@@ -17,7 +17,7 @@ final class RelationPreloader
     private const BATCH_SIZE = 250;
 
     public function load(AbstractEntity $source, array $parents, array $rows, array $relations,
-        bool $asArray, string $connectionName, array $hiddenFields, callable $execute, callable $hydrate): array
+        bool $asArray, string $connectionName, array $hiddenFields, callable $execute, callable $hydrate, callable $prime): array
     {
         if ($parents === []) { return $parents; }
         $db = FastDb::getInstance();
@@ -29,7 +29,8 @@ final class RelationPreloader
                 $this->collectPlans($source, $parents, $rows, $relations, $asArray, $connectionName, $hiddenFields),
                 $asArray,
                 $execute,
-                $hydrate
+                $hydrate,
+                $prime
             );
         } finally {
             $db->selectConnection($connectionToRestore);
@@ -85,11 +86,14 @@ final class RelationPreloader
                 // 先生成不带具体父键的 SQL，配置和参数相同的父记录可共用一条批量查询。
                 $previewQuery = (clone $builder)->get($tableName, null, $columns);
                 $queryOptions = $previewQuery->getLastQueryOptions();
-                $cacheLookup = null;
+                $cacheKey = null;
                 if (!$returnAsArray) {
-                    // 实体 getter 按单个父键匹配缓存，因此要保留该父对象自己的查询。
-                    $cacheLookup = RelationPlan::buildLookup(
-                        clone $builder, $tableName, $relationPlan->relate, $parentKeyValue, $columns
+                    // 用单个父键的查询计算缓存键，批次只保留键。
+                    $cacheKey = RelationLoader::cacheKey(
+                        $relationPlan->relate,
+                        RelationPlan::buildLookup(clone $builder, $tableName, $relationPlan->relate, $parentKeyValue, $columns),
+                        $relationPlan->returnAsArray,
+                        $relationPlan->connectionName
                     );
                 }
                 $groupKey = hash('sha256', serialize([
@@ -105,7 +109,7 @@ final class RelationPreloader
                     'parentPosition' => $parentPosition,
                     'relationMethod' => $relationMethod,
                     'serializedParentKey' => $serializedParentKey,
-                    'cacheLookup' => $cacheLookup,
+                    'cacheKey' => $cacheKey,
                     // 同一组共用 SQL，每个父对象的目标实例各自回填。
                     'target' => $returnAsArray ? null : $relationPlan->target,
                 ];
@@ -118,9 +122,9 @@ final class RelationPreloader
 
     /** 每组只执行批量查询，再按原父记录位置回填独立的关联结果。 */
     private function attachResults(array $parentResults, array $groups, bool $returnAsArray, callable $execute,
-        callable $hydrate): array
+        callable $hydrate, callable $prime): array
     {
-        // 只遍历分组键，避免遍历期间 PHP 保留整份分组数据，便于回填后释放每组的缓存查询和结果行。
+        // 只遍历分组键，避免遍历期间 PHP 保留整份分组数据，便于回填后释放每组的回填数据和结果行。
         foreach (array_keys($groups) as $groupKey) {
             $group = $groups[$groupKey];
             unset($groups[$groupKey]);
@@ -139,9 +143,7 @@ final class RelationPreloader
                 if ($returnAsArray) {
                     $parentResults[$parentPosition][$parentEntry['relationMethod']] = $relationData;
                 } else {
-                    $parentResults[$parentPosition]->__setRelationData(
-                        $batchPlan, $parentEntry['cacheLookup'], $batchPlan->connectionName, $relationData
-                    );
+                    $prime($parentResults[$parentPosition], $parentEntry['cacheKey'], $relationData);
                 }
             }
             unset($group, $parentEntry, $rowsByParentKey, $matchedRows);

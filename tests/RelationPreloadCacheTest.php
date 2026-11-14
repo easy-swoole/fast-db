@@ -45,8 +45,8 @@ final class RelationPreloadCacheTest extends TestCase
         $manyRelation = $this->relation();
         $one = new PreloadCacheChild(['id' => 10, 'parent_id' => 1, 'label' => 'preloaded']);
         $many = new ListResult([$one]);
-        $loader->prime($oneRelation, $this->lookup($parent, $oneRelation), false, 'default', $one);
-        $loader->prime($manyRelation, $this->lookup($parent, $manyRelation), false, 'default', $many);
+        $loader->prime(RelationLoader::cacheKey($oneRelation, $this->lookup($parent, $oneRelation), false, 'default'), $one);
+        $loader->prime(RelationLoader::cacheKey($manyRelation, $this->lookup($parent, $manyRelation), false, 'default'), $many);
         $this->assertSame($one, $this->load($loader, $parent, $oneRelation));
         $this->assertSame($many, $this->load($loader, $parent, $manyRelation));
         $this->assertSame($one, $this->load($loader, $parent, $oneRelation));
@@ -62,8 +62,8 @@ final class RelationPreloadCacheTest extends TestCase
         $parent = $this->parent(); $loader = new RelationLoader(); $empty = new ListResult([]);
         $oneRelation = $this->relation(RelationType::One);
         $manyRelation = $this->relation();
-        $loader->prime($oneRelation, $this->lookup($parent, $oneRelation), false, 'default', null);
-        $loader->prime($manyRelation, $this->lookup($parent, $manyRelation), false, 'default', $empty);
+        $loader->prime(RelationLoader::cacheKey($oneRelation, $this->lookup($parent, $oneRelation), false, 'default'), null);
+        $loader->prime(RelationLoader::cacheKey($manyRelation, $this->lookup($parent, $manyRelation), false, 'default'), $empty);
         $this->assertNull($this->load($loader, $parent, $oneRelation));
         $this->assertSame($empty, $this->load($loader, $parent, $manyRelation));
         $this->assertSame(0, $this->queries);
@@ -81,7 +81,7 @@ final class RelationPreloadCacheTest extends TestCase
         if ($shape === 'type') { $parent->queryLimit()->page(null, false, 2); }
         $lookup = $this->lookup($parent, $relation);
         $loaded = new ListResult([new PreloadCacheChild(['id' => 10, 'parent_id' => 1, 'label' => 'preloaded'])]);
-        $loader->prime($relation, $lookup, false, 'default', $loaded);
+        $loader->prime(RelationLoader::cacheKey($relation, $lookup, false, 'default'), $loaded);
         $table = null;
         switch ($shape) {
             case 'where': $parent->queryLimit()->where('label', 'filtered'); break;
@@ -109,7 +109,7 @@ final class RelationPreloadCacheTest extends TestCase
     public function testChangedParentKeyDoesNotEnableOrdinaryLazyCaching(): void
     {
         $parent = $this->parent(); $relation = $this->relation(); $loader = new RelationLoader(); $loaded = new ListResult([]);
-        $loader->prime($relation, $this->lookup($parent, $relation), false, 'default', $loaded);
+        $loader->prime(RelationLoader::cacheKey($relation, $this->lookup($parent, $relation), false, 'default'), $loaded);
         $parent->id = 2;
         $this->load($loader, $parent, $relation);
         $this->load($loader, $parent, $relation);
@@ -124,7 +124,7 @@ final class RelationPreloadCacheTest extends TestCase
         $parent = $this->parent(); $relation = $this->relation(); $loader = new RelationLoader(); $loaded = new ListResult([]);
         $lookup = $this->lookup($parent, $relation);
         $this->db->selectConnection('other');
-        $loader->prime($relation, $lookup, false, 'default', $loaded);
+        $loader->prime(RelationLoader::cacheKey($relation, $lookup, false, 'default'), $loaded);
         $lookup->raw('SELECT completely_different');
         $this->load($loader, $parent, $relation);
         $this->assertSame(1, $this->queries);
@@ -140,7 +140,7 @@ final class RelationPreloadCacheTest extends TestCase
         $this->assertSame($lazy, $this->load($loader, $parent, $relation));
         $this->assertSame(1, $this->queries);
         $loaded = new PreloadCacheChild(['id' => 11, 'parent_id' => 1, 'label' => 'explicit']);
-        $loader->prime($relation, $this->lookup($parent, $relation), false, 'default', $loaded);
+        $loader->prime(RelationLoader::cacheKey($relation, $this->lookup($parent, $relation), false, 'default'), $loaded);
         $this->assertSame($loaded, $this->load($loader, $parent, $relation));
         $loader->clear();
         $this->assertNotSame($loaded, $this->load($loader, $parent, $relation));
@@ -151,7 +151,7 @@ final class RelationPreloadCacheTest extends TestCase
     {
         $parent = $this->parent(); $relation = $this->relation(RelationType::One); $loader = new RelationLoader();
         $loaded = new PreloadCacheChild(['id' => 11, 'parent_id' => 1, 'label' => 'explicit']);
-        $loader->prime($relation, $this->lookup($parent, $relation), false, 'default', $loaded);
+        $loader->prime(RelationLoader::cacheKey($relation, $this->lookup($parent, $relation), false, 'default'), $loaded);
         $clone = clone $loader;
         $this->assertSame($loaded, $this->load($clone, $parent, $relation));
         $clone->clear();
@@ -165,7 +165,7 @@ final class RelationPreloadCacheTest extends TestCase
         $parent = $this->parent(); $relation = $this->relation(); $loader = new RelationLoader();
         $lookup = $this->lookup($parent, $relation);
         $parentRef = \WeakReference::create($parent); $queryRef = \WeakReference::create($lookup);
-        $loader->prime($relation, $lookup, false, 'default', new ListResult([]));
+        $loader->prime(RelationLoader::cacheKey($relation, $lookup, false, 'default'), new ListResult([]));
         unset($parent, $lookup); gc_collect_cycles();
         $this->assertNull($parentRef->get());
         $this->assertNull($queryRef->get());

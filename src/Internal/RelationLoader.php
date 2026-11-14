@@ -19,9 +19,9 @@ final class RelationLoader
     public function clear(): void { $this->cache = $this->preloaded = []; }
 
     /** 显式预取独立于按需缓存，null 同样是有效结果。 */
-    public function prime(Relate $relate, QueryBuilder $lookup, bool $returnAsArray, string $connectionName, mixed $data): void
+    public function prime(string $cacheKey, mixed $data): void
     {
-        $this->preloaded[$this->fingerprint($relate, $lookup, $returnAsArray, $connectionName)] = $data;
+        $this->preloaded[$cacheKey] = $data;
     }
 
     /** 两种关联共用构建、缓存查找和写回流程，结果组装分别处理。 */
@@ -33,7 +33,7 @@ final class RelationLoader
         RelationPlan::checkPagination($query, $relate->type);
         RelationPlan::buildLookup($query, $plan->tableName, $relate, $plan->selfValue, $plan->columns);
         $key = $relate->cacheResult || $this->preloaded !== []
-            ? $this->fingerprint($relate, $query, $returnAsArray, $plan->connectionName) : null;
+            ? self::cacheKey($relate, $query, $returnAsArray, $plan->connectionName) : null;
         if ($key !== null && array_key_exists($key, $this->preloaded)) {
             return $this->preloaded[$key];
         }
@@ -81,7 +81,7 @@ final class RelationLoader
         return $single ? ($result[0] ?? null) : $result;
     }
 
-    private function fingerprint(Relate $relate, QueryBuilder $query, bool $returnAsArray, string $connectionName): string
+    public static function cacheKey(Relate $relate, QueryBuilder $query, bool $returnAsArray, string $connectionName): string
     {
         return hash('sha256', serialize([
             $connectionName, $relate->type, $relate->targetEntity, $returnAsArray,
