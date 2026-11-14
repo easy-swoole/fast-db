@@ -115,7 +115,7 @@ final class RecycleContextTest extends TestCase
                 $db->selectConnection('failed');
                 if ($borrow) {
                     try { $db->rawQuery('SELECT 1'); }
-                    catch (\EasySwoole\FastDb\Exception\RuntimeError) {}
+                    catch (\RuntimeException) {}
                 }
             });
             $cid = $finished->pop(2);

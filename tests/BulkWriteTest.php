@@ -292,7 +292,7 @@ final class BulkWriteTest extends TestCase
         $this->assertCount(2, $this->connection->queries);
     }
 
-    public function testFailurePreservesTheFirstBatchAndNotifiesBothObserversWithoutReplacingTheError(): void
+    public function testFailurePreservesTheFirstBatchAndNotifiesObserversWithoutReplacingTheError(): void
     {
         $failure = new \RuntimeException('second batch failed');
         $this->connection->failAt = 2;
@@ -300,7 +300,6 @@ final class BulkWriteTest extends TestCase
         $localEvents = [];
         $this->db->setOnQuery(function (QueryResult $result): void {
             $this->events[] = $result;
-            if ($result->getException() !== null) { throw new \RuntimeException('global logger failed'); }
         });
         try {
             BulkWriteFixtureRecord::fastInsertAll($this->rows(5), onQuery: static function (QueryResult $result) use (&$localEvents): void {

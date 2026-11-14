@@ -408,11 +408,11 @@ final class EntityQueryBoundaryTest extends TestCase
         $this->assertSame($expectedTotal, $list->totalCount());
         $this->assertCount(1, $list);
         $this->assertSame(1, $this->client->countQueries);
-        if ($observer === 'entity') { $this->assertSame($total ? 1 : 0, $entityCountEvents); }
+        if ($observer === 'entity') { $this->assertSame(0, $entityCountEvents); }
         $this->assertNull($entity->queryLimit()->getFields());
     }
 
-    public function testOneEntityObserverReceivesBothResultsOfTheCurrentQuery(): void
+    public function testEntityObserverReadsTheTotalFromTheMainResult(): void
     {
         $entity = new QueryBoundaryRecord(['id' => 'owner', 'grp' => 1]);
         $entity->queryLimit()->limit(1, true);
@@ -421,12 +421,12 @@ final class EntityQueryBoundaryTest extends TestCase
             $events[] = $result->getRawSql() === null ? 'global-main' : 'global-total';
         });
         $entity->setOnQuery(static function (QueryResult $result) use (&$events): void {
-            $events[] = $result->getRawSql() === null ? 'entity-main' : 'entity-total';
+            $events[] = ['entity-main', $result->getTotalResult()->getRawSql(), $result->getTotalCount()];
         });
 
         $list = $entity->all();
         $this->assertSame(3, $list->totalCount());
-        $this->assertSame(['global-main', 'global-total', 'entity-main', 'entity-total'], $events);
+        $this->assertSame(['global-main', 'global-total', ['entity-main', 'SELECT FOUND_ROWS() as count', 3]], $events);
     }
 }
 

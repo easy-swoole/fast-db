@@ -14,7 +14,6 @@ use EasySwoole\Mysqli\Config as MysqliConfig;
 use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\Mysqli\Transaction\TransactionCompletionFlags;
 use EasySwoole\Mysqli\Transaction\TransactionStartFlags;
-use EasySwoole\Pool\Exception\PoolEmpty;
 use Swoole\Coroutine;
 use Swoole\Coroutine\Scheduler;
 
@@ -77,24 +76,29 @@ class FastDb
         $config = $this->getConfig($connectionName);
         if ($config === false) { throw new RuntimeError("connection {$connectionName} no register yet"); }
         $client = new Client(new MysqliConfig($config->toArray()));
-        $error = null;
-        $connect = static function () use ($client, &$error): void {
+        $connect = static function () use ($client): bool {
             try {
-                $client->connect();
-            } catch (\Throwable $failure) {
-                $error = $failure;
+                return $client->connect();
             } finally {
                 $client->close();
             }
         };
-        if (Coroutine::getCid() >= 0) { $connect(); }
-        else {
-            $scheduler = new Scheduler();
-            $scheduler->add($connect);
-            $scheduler->start();
-        }
-        if ($error !== null) { throw new RuntimeError($error->getMessage(), (int) $error->getCode(), $error); }
-        return true;
+        if (Coroutine::getCid() >= 0) { return $connect(); }
+
+        // 调度器不会把协程内的异常交回调用方，在协程边界传回原异常。
+        $error = null;
+        $connected = false;
+        $scheduler = new Scheduler();
+        $scheduler->add(static function () use ($connect, &$connected, &$error): void {
+            try {
+                $connected = $connect();
+            } catch (\Throwable $failure) {
+                $error = $failure;
+            }
+        });
+        $scheduler->start();
+        if ($error !== null) { throw $error; }
+        return $connected;
     }
 
     public function selectConnection(?string $name = null): static|string
@@ -135,7 +139,11 @@ class FastDb
             if (!$this->begin($client, $flags, $timeout)) { throw new RuntimeError('Failed to begin transaction'); }
             $value = $callback($this);
         } catch (\Throwable $error) {
-            try { $this->rollback($client, timeout: $timeout); } catch (\Throwable) {}
+            if ($client->isInTransaction()) {
+                try { $this->rollback($client, timeout: $timeout); } catch (\Throwable) {
+                    // 清理失败时保留触发回滚的原异常。
+                }
+            }
             throw $error;
         }
         // 提交失败交给调用者处理，也不把提交后的日志异常当成业务回调失败。
@@ -168,19 +176,19 @@ class FastDb
         TransactionCompletionFlags $flags, ?float $timeout): bool
     {
         $client ??= $this->currentConnection();
-        if ($client === null) { return true; }
-        // 丢失的事务也走执行入口，由驱动报告原异常并记录本次失败。
-        if (!$client->isInTransaction() && !$client->mysqlClient()?->isTransactionLost()) { return true; }
+        // 丢失的事务也走执行入口，由驱动报告原异常。
+        if ($client === null || (!$client->isInTransaction() && !$client->mysqlClient()?->isTransactionLost())) {
+            return true;
+        }
         $sql = ($rollback ? 'ROLLBACK' : 'COMMIT') . $flags->toSqlSuffix();
-        $onComplete = $flags->releasesConnection() ? function (QueryResult $result, Connection $client): void {
-            // 显式 RELEASE 已关闭会话，立即淘汰本次借用。
-            if ($result->getResult() === true && isset($client->connectionName)) {
+        return $this->execute($client, function () use ($client, $rollback, $flags, $timeout): bool {
+            $success = $rollback ? $client->rollbackTransaction($flags, $timeout) : $client->commitTransaction($flags, $timeout);
+            if ($success && $flags->releasesConnection() && isset($client->connectionName)) {
+                // RELEASE 关闭会话后立即解除池内借用。
                 $this->recycleConnection(Coroutine::getCid(), $client->connectionName, $client, discard: true);
             }
-        } : null;
-        return $this->execute($client, static fn () => $rollback
-            ? $client->rollbackTransaction($flags, $timeout) : $client->commitTransaction($flags, $timeout),
-            null, $sql, onComplete: $onComplete)->getResult() === true;
+            return $success;
+        }, null, $sql)->getResult() === true;
     }
 
     public function isInTransaction(?Connection $connection = null): bool
@@ -188,48 +196,37 @@ class FastDb
         return ($connection ?? $this->currentConnection())?->isInTransaction() ?? false;
     }
 
-    /** 完成回调直接属于本次执行；总数回调在主查询回调成功结束后通知。 */
     public function query(QueryBuilder|callable $queryBuilder, ?float $timeout = null,
-        ?callable $onComplete = null, ?string $connection = null, ?callable $onQuery = null,
-        ?callable $onTotalQuery = null): QueryResult
+        ?string $connection = null, ?callable $onQuery = null): QueryResult
     {
-        if ($onQuery === null) {
-            $client = $this->getOrBorrowConnection($connection);
+        // 先固定本次连接名，再构建 SQL；构建失败时无需借用连接。
+        $connection ??= $this->selectConnection();
+        if ($queryBuilder instanceof QueryBuilder) {
+            $builder = $queryBuilder;
         } else {
-            // 有本次查询回调时，借用失败也要提供发起时的连接和计时。
-            $startTick = hrtime(true);
-            $startTime = microtime(true);
-            $connectionName = $connection ?? $this->selectConnection();
-            try {
-                $client = $this->getOrBorrowConnection($connection);
-            } catch (\Throwable $error) {
-                $result = new QueryResult($startTime, microtime(true), (hrtime(true) - $startTick) / 1_000_000_000,
-                    $connectionName, exception: $error, builder: $queryBuilder instanceof QueryBuilder ? $queryBuilder : null);
-                return $this->finishQuery($result, $error, $onQuery);
-            }
+            $builder = new QueryBuilder();
+            $queryBuilder($builder);
         }
-        $build = $queryBuilder instanceof QueryBuilder ? null : $queryBuilder;
-        $builder = $build === null ? $queryBuilder : new QueryBuilder();
-        return $this->execute($client, static function () use ($client, $builder, $build, $timeout) {
-            if ($build !== null) { $build($builder); }
-            return $client->query($builder, $timeout);
-        }, $builder, onComplete: $onComplete, totalQueryTimeout: $timeout, onQuery: $onQuery, onTotalQuery: $onTotalQuery);
+        if ($builder->getLastPrepareQuery() === null) {
+            throw new \InvalidArgumentException('QueryBuilder has no SQL to execute');
+        }
+
+        $client = $this->getOrBorrowConnection($connection);
+        return $this->execute($client, static fn () => $client->query($builder, $timeout), $builder,
+            totalQueryTimeout: $timeout, onQuery: $onQuery);
     }
 
-    public function rawQuery(string $sql, ?float $timeout = null, ?callable $onComplete = null,
-        ?string $connection = null): QueryResult
+    public function rawQuery(string $sql, ?float $timeout = null, ?string $connection = null): QueryResult
     {
         $client = $this->getOrBorrowConnection($connection);
-        return $this->execute($client, static fn () => $client->rawQuery($sql, $timeout), null, $sql, $onComplete);
+        return $this->execute($client, static fn () => $client->rawQuery($sql, $timeout), null, $sql);
     }
 
     /**
      * 执行主 SQL 和所需的总数 SQL，先记查询栈，再按顺序通知。
-     * 依次执行完成回调、全局观察回调、本次主查询回调和本次总数回调。
      */
     private function execute(Connection $client, callable $operation, ?QueryBuilder $builder = null,
-        ?string $sql = null, ?callable $onComplete = null, ?float $totalQueryTimeout = null,
-        ?callable $onQuery = null, ?callable $onTotalQuery = null): QueryResult
+        ?string $sql = null, ?float $totalQueryTimeout = null, ?callable $onQuery = null): QueryResult
     {
         $totalQueryResult = null;
         $queryResult = $this->executeResult($client, $operation, $builder, $sql, $totalQueryTimeout, $totalQueryResult);
@@ -240,41 +237,12 @@ class FastDb
             $this->diagnostics?->record($totalQueryResult);
         }
 
-        // 内部完成回调先接收执行结果，例如接受写入基准。
-        if ($onComplete !== null) {
-            try {
-                $onComplete($queryResult, $client);
-            } catch (\Throwable $callbackError) {
-                $firstError ??= $callbackError;
-            }
-        }
         try {
             $this->diagnostics?->notify($queryResult, $totalQueryResult);
-        } catch (\Throwable $callbackError) {
-            $firstError ??= $callbackError;
-        }
-        return $this->finishQuery($queryResult, $firstError, $onQuery, $onTotalQuery);
-    }
-
-    /** 主查询回调也接收失败结果，之前的异常优先向外抛出。 */
-    private function finishQuery(QueryResult $queryResult, ?\Throwable $firstError, ?callable $onQuery,
-        ?callable $onTotalQuery = null): QueryResult
-    {
-        if ($onQuery !== null) {
-            try {
-                $onQuery($queryResult);
-            } catch (\Throwable $callbackError) {
-                $firstError ??= $callbackError;
-            }
-        }
-        if ($firstError !== null) {
-            throw $firstError;
-        }
-        if ($onTotalQuery !== null) {
-            $totalQueryResult = $queryResult->getTotalResult();
-            if ($totalQueryResult !== null) {
-                $onTotalQuery($totalQueryResult);
-            }
+            if ($onQuery !== null) { $onQuery($queryResult); }
+        } finally {
+            // 观察回调失败时，仍保留先发生的 SQL 异常。
+            if ($firstError !== null) { throw $firstError; }
         }
         return $queryResult;
     }
@@ -384,18 +352,16 @@ class FastDb
         $startTick = $trace ? hrtime(true) : 0;
         $error = null;
         try {
-            $client = $pool->getObj();
-            if ($client === null) { $error = new RuntimeError("connection {$name} error case pool empty"); }
-        } catch (\Throwable $cause) {
-            $message = $cause instanceof PoolEmpty ? 'pool empty' : $cause->getMessage();
-            $error = new RuntimeError("connection {$name} error case " . $message, (int) $cause->getCode(), $cause);
+            $client = $pool->getObj() ?? throw new RuntimeError("connection {$name} returned no usable client");
+        } catch (\Throwable $failure) {
+            $error = $failure;
+            throw $failure;
+        } finally {
+            if ($trace) {
+                $duration = (hrtime(true) - $startTick) / 1_000_000_000;
+                $this->diagnostics->recordAcquire($name, $startTime, microtime(true), $duration, $error);
+            }
         }
-        // 借用错误只捕获一次，完成诊断记录后统一抛出。
-        if ($trace) {
-            $duration = (hrtime(true) - $startTick) / 1_000_000_000;
-            $this->diagnostics?->recordAcquire($name, $startTime, microtime(true), $duration, $error);
-        }
-        if ($error !== null) { throw $error; }
         $client->connectionName = $name;
         $client->poolBorrowNumber++;
         $this->currentConnection[$cid][$name] = $client;

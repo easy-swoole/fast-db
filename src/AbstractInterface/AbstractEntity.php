@@ -18,7 +18,6 @@ use EasySwoole\FastDb\Internal\FieldSelection;
 use EasySwoole\FastDb\Internal\RelationLoader;
 use EasySwoole\FastDb\Internal\RelationPlan;
 use EasySwoole\FastDb\Internal\RelationPreloader;
-use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\FastDb\Utility\ReflectionCache;
 use EasySwoole\Mysqli\QueryBuilder;
@@ -30,9 +29,6 @@ abstract class AbstractEntity implements \JsonSerializable
     // 字段的比较基准；转换对象保存 toValue() 的结果，普通字段保存赋值后的值。
     // update() 据此识别变化，也能识别对象内部属性被修改的情况。
     private EntityState $entityState;
-    private bool $missingLoadedPrimaryKey = false;
-    // 部分投影未赋值的映射字段，不能直接用默认值查询关联。
-    private array $unloadedFields = [];
 
     // 当前实体积累的查询条件和字段限制，执行后通常由 reset() 清理。
     private ?Query $queryBuilder = null;
@@ -97,14 +93,13 @@ abstract class AbstractEntity implements \JsonSerializable
             /** @var Property $property */
             $property = $allProperties[$key];
             $this->{$key} = FieldCodec::assign($property, $val);
-            unset($this->unloadedFields[$key]);
             if ($mergeCompare) {
                 $this->entityState->baseline[$key] = FieldCodec::compare($this->{$key});
+                $this->entityState->providedFields[$key] = $val !== null;
+            } else {
+                // 普通赋值可以补关联键，原主键的写入基准仍由 mergeCompare 明确建立。
+                $this->entityState->providedFields[$key] ??= false;
             }
-        }
-        if ($mergeCompare && $this->missingLoadedPrimaryKey) {
-            $key = $entityRef->getPrimaryKey();
-            if ($key !== null && isset($data[$key])) { $this->missingLoadedPrimaryKey = false; }
         }
         return $this;
     }
@@ -117,10 +112,13 @@ abstract class AbstractEntity implements \JsonSerializable
         } else {
             $entity->setData($row, true);
         }
-        $mapping = ReflectionCache::getInstance()->parseEntity($class);
-        $entity->unloadedFields = array_fill_keys(array_keys(array_diff_key($mapping->allProperties(), $row)), true);
-        $key = $mapping->getPrimaryKey();
-        $entity->missingLoadedPrimaryKey = $key !== null && (!array_key_exists($key, $row) || $row[$key] === null);
+        // 查询行决定已加载的字段，初始化默认值不能补齐投影中省略的键。
+        $properties = ReflectionCache::getInstance()->parseEntity($class)->allProperties();
+        $entity->entityState->hydrated = true;
+        $entity->entityState->providedFields = array_map(
+            static fn (mixed $value): bool => $value !== null,
+            array_intersect_key($row, $properties)
+        );
         return $entity;
     }
 
@@ -302,7 +300,7 @@ abstract class AbstractEntity implements \JsonSerializable
             $tableName = $this->tableName();
             $this->requirePrimaryKey($query, $entityRef, 'delete');
             $query->delete($tableName);
-            return self::callQuery($query, $this->onQuery)->getAffectedRows() >= 1;
+            return FastDb::getInstance()->query($query, onQuery: $this->onQuery)->getAffectedRows() >= 1;
         } finally {
             // 成功、失败或提前返回均消费本次查询配置，实体数据及比较基准不受影响。
             $this->resetQueryOptions();
@@ -322,7 +320,7 @@ abstract class AbstractEntity implements \JsonSerializable
         }
         $query = self::fastWriteQuery($deleteLimit, 'delete record');
         $query->delete($tableName);
-        return self::callQuery($query, $onQuery)->getAffectedRows();
+        return FastDb::getInstance()->query($query, onQuery: $onQuery)->getAffectedRows();
     }
 
     function update()
@@ -343,10 +341,10 @@ abstract class AbstractEntity implements \JsonSerializable
             $this->requirePrimaryKey($query, $entityRef, 'update');
             if ($data === []) { return true; }
             $query->update($tableName, $data);
-            // SQL 成功即接受比较基准，后续执行检查抛异常也不会改变写入事实。
-            return self::callQuery($query, $this->onQuery, function (QueryResult $result) use ($data): void {
-                if ($result->getAffectedRows() > 0) { $this->entityState->accept($data); }
-            })->getAffectedRows() > 0;
+            $result = FastDb::getInstance()->query($query, onQuery: $this->onQuery);
+            if ($result->getAffectedRows() <= 0) { return false; }
+            $this->entityState->accept($data);
+            return true;
         } finally {
             $this->resetQueryOptions();
         }
@@ -365,7 +363,7 @@ abstract class AbstractEntity implements \JsonSerializable
         }
         $query = self::fastWriteQuery($updateLimit, 'update record');
         $query->update($tableName,$data);
-        return self::callQuery($query, $onQuery)->getAffectedRows();
+        return FastDb::getInstance()->query($query, onQuery: $onQuery)->getAffectedRows();
     }
 
     /** 直接分批新增，返回数据库报告的影响行数汇总。 */
@@ -385,10 +383,12 @@ abstract class AbstractEntity implements \JsonSerializable
     function insert(array|null $updateDuplicateCols = null)
     {
         try {
-            if ($this->missingLoadedPrimaryKey) {
+            $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
+            $primaryKey = $entityRef->getPrimaryKey();
+            if ($primaryKey !== null && $this->entityState->hydrated
+                && empty($this->entityState->providedFields[$primaryKey])) {
                 throw new RuntimeError('can not insert entity without primary key value');
             }
-            $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
             if($entityRef->getOnInsert()){
                 $ret = $this->callHook($entityRef->getOnInsert());
                 if($ret === false){
@@ -399,6 +399,9 @@ abstract class AbstractEntity implements \JsonSerializable
             $selection = $this->queryLimit();
             $query = $selection->__getQueryBuilder();
             $tableName = $this->tableName();
+            if (in_array('IGNORE', $query->getQueryOptions(), true)) {
+                throw new \InvalidArgumentException('Entity insert() does not support IGNORE; use QueryBuilder directly');
+            }
             if ($updateDuplicateCols !== null) {
                 if ($query instanceof EntityQueryBuilder && $query->getDuplicateColumns() !== null) {
                     throw new \InvalidArgumentException('Configure duplicate updates through insert() or onDuplicate()');
@@ -427,20 +430,21 @@ abstract class AbstractEntity implements \JsonSerializable
                 // 显式写入自增字段时保留调用方给出的值。
                 $autoIncrement = null;
             }
-            $result = self::callQuery($query, $this->onQuery,
-                function (QueryResult $result) use ($compareValues, $autoIncrement): void {
-                    if ($result->getResult() !== true) { return; }
-                    $insertId = $result->getInsertId();
-                    if ($autoIncrement !== null && $insertId >= 1) {
-                        // 先按字段定义转换并建立基准，公开回调可直接使用生成的值。
-                        $field = $autoIncrement->name;
-                        $this->{$field} = FieldCodec::assign($autoIncrement, $insertId);
-                        $compareValues[$field] = FieldCodec::compare($this->{$field});
-                    }
-                    // 只更新本次已确认写入字段的比较基准。
-                    $this->entityState->accept($compareValues);
-                });
-            return $result->getResult() === true;
+            $result = FastDb::getInstance()->query($query, onQuery: $this->onQuery);
+            if ($result->getResult() !== true || (!$duplicateColumns && $result->getAffectedRows() === 0)) {
+                return false;
+            }
+            $insertId = $result->getInsertId();
+            if ($autoIncrement !== null && $insertId >= 1) {
+                $field = $autoIncrement->name;
+                $this->{$field} = FieldCodec::assign($autoIncrement, $insertId);
+                $compareValues[$field] = FieldCodec::compare($this->{$field});
+            }
+            $this->entityState->accept($compareValues);
+            foreach ($compareValues as $field => $value) {
+                $this->entityState->providedFields[$field] = $value !== null;
+            }
+            return true;
         } finally {
             // 插入结束后只保留本次显式隐藏配置。
             $this->resetInsertQueryOptions();
@@ -470,7 +474,7 @@ abstract class AbstractEntity implements \JsonSerializable
             $query->selectForUpdate();
         }
         $query->get($tableName);
-        $result = static::callQuery($query, $onQuery);
+        $result = FastDb::getInstance()->query($query, onQuery: $onQuery);
         return self::hydrateRows($result->getResult(), $result->getConnectionName())[0] ?? null;
     }
 
@@ -492,7 +496,7 @@ abstract class AbstractEntity implements \JsonSerializable
         }
 
         $query->get($tableName);
-        $result = self::callQuery($query, $onQuery);
+        $result = FastDb::getInstance()->query($query, onQuery: $onQuery);
         return $returnAsArray ? $result->getResult()
             : self::hydrateRows($result->getResult(), $result->getConnectionName());
     }
@@ -522,18 +526,7 @@ abstract class AbstractEntity implements \JsonSerializable
         } finally {
             $this->queryBuilder = $originalQuery;
         }
-        $this->configureRelation($relate, $query);
-        $target = new $relate->targetEntity();
-        $tableName = $target->tableName();
-        $connectionName = FastDb::getInstance()->selectConnection();
-        $selfValue = FieldCodec::compare($this->{$relate->selfProperty});
-        $builder = $query->__getQueryBuilder();
-        $fields = $query->getFields();
-        $returnAsArray = $fields['returnAsArray'] ?? false;
-        // 一对一回填复用用于取得表名的实例，与按需加载的构造顺序一致。
-        return new RelationPlan($relate, $tableName, $builder, $fields['fields'] ?? null,
-            $returnAsArray, $connectionName, $selfValue,
-            $relate->type === RelationType::One && !$returnAsArray ? $target : null);
+        return $this->prepareRelation($relate, $query);
     }
 
     protected function relateOne(Relate|null $relate = null,string|null $tableName = null):null|array|AbstractEntity
@@ -586,8 +579,7 @@ abstract class AbstractEntity implements \JsonSerializable
         $relations = $selection->getRelations();
         $hideFields = $selection->getHideFields() ?? [];
         $persistFieldLimit = !$returnAsArray && $selection->isPersistFieldLimit();
-        $observer = $this->onQuery;
-        $result = static::callQuery($query, $observer, connection: $page['connection'] ?? null, onTotalQuery: $observer);
+        $result = FastDb::getInstance()->query($query, onQuery: $this->onQuery, connection: $page['connection'] ?? null);
         $total = $result->getTotalCount();
         $rows = $result->getResult();
         $parentQueryConnection = $result->getConnectionName();
@@ -607,7 +599,7 @@ abstract class AbstractEntity implements \JsonSerializable
         $list = self::hydrateRows($rows, $parentQueryConnection, $returnAsArray, $hideFields, $inheritedOutput);
         if ($relations !== []) {
             $list = (new RelationPreloader())->load($this, $list, $rows, $relations, $returnAsArray,
-                $parentQueryConnection, $hideFields, fn (QueryBuilder $builder) => static::callQuery($builder, $this->onQuery),
+                $parentQueryConnection, $hideFields, fn (QueryBuilder $builder) => FastDb::getInstance()->query($builder, onQuery: $this->onQuery),
                 self::hydrateEntity(...));
         }
         return new ListResult($list, $total);
@@ -695,7 +687,7 @@ abstract class AbstractEntity implements \JsonSerializable
             $query->groupBy($group);
         }
         $query->get($this->tableName(), 1, $fields);
-        return static::callQuery($query, $this->onQuery)->getResult()[0] ?? [];
+        return FastDb::getInstance()->query($query, onQuery: $this->onQuery)->getResult()[0] ?? [];
     }
 
     private static function fastWriteQuery(array|callable|string|int $limit, string $operation): QueryBuilder
@@ -753,7 +745,7 @@ abstract class AbstractEntity implements \JsonSerializable
                     return [$table, $db->selectConnection()];
                 } finally { $db->selectConnection($visible); }
             },
-            static fn (QueryBuilder $query, string $connection) => self::callQuery($query, $onQuery, connection: $connection)->getAffectedRows());
+            static fn (QueryBuilder $query, string $connection) => FastDb::getInstance()->query($query, onQuery: $onQuery, connection: $connection)->getAffectedRows());
     }
 
     private function resetQueryOptions():void
@@ -774,7 +766,8 @@ abstract class AbstractEntity implements \JsonSerializable
         $key = $entityRef->getPrimaryKey()
             ?? throw new RuntimeError("can not {$operation} entity without primary key set");
         // 未赋值、null 和空字符串视为缺失，整数 0 和字符串 '0' 都是有效主键。
-        if ($this->missingLoadedPrimaryKey || !isset($this->{$key}) || $this->{$key} === '') {
+        if (($this->entityState->hydrated && empty($this->entityState->providedFields[$key]))
+            || !isset($this->{$key}) || $this->{$key} === '') {
             throw new RuntimeError("can not {$operation} entity without primary key value");
         }
         $primaryKey = $this->entityState->primaryKey($this, $key);
@@ -782,13 +775,28 @@ abstract class AbstractEntity implements \JsonSerializable
         $query->groupExistingWhere()->where($key, $primaryKey);
     }
 
-    /** 按需加载和预加载共用显式配置；不临时替换实体持有的查询对象。 */
-    private function configureRelation(Relate $relate, Query $query): void
+    /** 按需加载和预加载都在确定目标表和连接后转换父键。 */
+    private function prepareRelation(Relate $relate, Query $query, ?string $tableName = null): RelationPlan
     {
+        $parentField = $relate->selfProperty;
+        if (!array_key_exists($parentField, $this->entityState->providedFields)
+            || (!isset($this->{$parentField}) && !array_key_exists($parentField, get_object_vars($this)))) {
+            throw new RuntimeError('Relation requires a loaded or explicitly assigned parent field: ' . $parentField);
+        }
         if ($relate->returnAsArray) { $query->returnAsArray(); }
         if ($relate->configure !== null) {
             $this->{$relate->configure}($query->__getQueryBuilder());
         }
+        $target = new $relate->targetEntity();
+        $tableName ??= $target->tableName();
+        $connectionName = FastDb::getInstance()->selectConnection();
+        $parentValue = FieldCodec::compare($this->{$parentField});
+        $fields = $query->getFields();
+        $returnAsArray = $fields['returnAsArray'] ?? false;
+        // 一对一实体直接填充已构造的目标实例。
+        return new RelationPlan($relate, $tableName, $query->__getQueryBuilder(), $fields['fields'] ?? null,
+            $returnAsArray, $connectionName, $parentValue,
+            $relate->type === RelationType::One && !$returnAsArray ? $target : null);
     }
 
     private function loadRelation(RelationType $expectedType, Relate $relate, ?string $tableName): mixed
@@ -798,16 +806,10 @@ abstract class AbstractEntity implements \JsonSerializable
             if ($relate->type !== $expectedType) {
                 throw new RuntimeError('Declared relation type does not match its getter');
             }
-            $parentField = $relate->selfProperty;
-            if (isset($this->unloadedFields[$parentField])
-                || (!isset($this->{$parentField}) && !array_key_exists($parentField, get_object_vars($this)))) {
-                throw new RuntimeError('Relation requires a loaded or explicitly assigned parent field: ' . $parentField);
-            }
+            $plan = $this->prepareRelation($relate, $this->queryLimit(), $tableName);
             $this->relationLoader ??= new RelationLoader();
-            $selection = $this->queryLimit();
-            $this->configureRelation($relate, $selection);
-            return $this->relationLoader->load(FieldCodec::compare($this->{$parentField}), $selection, $relate, $tableName,
-                fn ($query) => static::callQuery($query, $this->onQuery),
+            return $this->relationLoader->load($plan,
+                fn ($query) => FastDb::getInstance()->query($query, onQuery: $this->onQuery, connection: $plan->connectionName),
                 fn () => $this->resetQueryOptions(), self::hydrateEntity(...));
         } finally {
             $this->resetQueryOptions();
@@ -823,17 +825,5 @@ abstract class AbstractEntity implements \JsonSerializable
         // 未显式传入定义时，从当前实体的关联方法读取注解。
         $trace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 3);
         return $metadata->parseRelation(static::class, $trace[2]['function']);
-    }
-
-    /** 统一执行模型查询，并在成功或异常时通知本次查询回调。 */
-    private static function callQuery(QueryBuilder $query,?callable $onQuery = null,?callable $onComplete = null,
-        ?string $connection = null, ?callable $onTotalQuery = null):QueryResult
-    {
-        // 实体只在 SQL 成功后接受基准、读取游标等，通知与异常由执行层处理。
-        $complete = $onComplete === null ? null : static function (QueryResult $result, Connection $connection) use ($onComplete): void {
-            if ($result->getException() === null) { $onComplete($result, $connection); }
-        };
-        return FastDb::getInstance()->query($query, onComplete: $complete, connection: $connection,
-            onQuery: $onQuery, onTotalQuery: $onTotalQuery);
     }
 }

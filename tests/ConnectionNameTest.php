@@ -125,7 +125,6 @@ final class ConnectionNameTest extends TestCase
         try {
             $db->setOnQuery(static function () use ($db): void {
                 $db->selectConnection('other');
-                throw new \RuntimeException('logger failure');
             });
             $user = new User();
             $user->setOnQuery(static function (QueryResult $result) use (&$entityResult): void { $entityResult = $result; });

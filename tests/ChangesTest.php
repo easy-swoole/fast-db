@@ -195,7 +195,7 @@ final class ChangesTest extends TestCase
     public static function observerModes(): array { return [['global'],['entity']]; }
 
     #[DataProvider('observerModes')]
-    public function testChangesMadeAfterSuccessfulSqlRemainPending(string $mode): void
+    public function testBaselineUpdatesAfterTheExecutionCheck(string $mode): void
     {
         $record = $this->record();
         $record->name = 'saved';
@@ -203,13 +203,13 @@ final class ChangesTest extends TestCase
         $observer = static function (QueryResult $result) use ($record,&$entered): void {
             if ($entered) { return; }
             $entered = true;
-            self::assertSame([], $record->getChanges());
-            $record->name = 'after-observer';
+            self::assertSame(['name'=>'saved'], $record->getChanges());
         };
         if ($mode === 'global') { $this->db->setOnQuery($observer); }
         else { $record->setOnQuery($observer); }
         $this->assertTrue($record->update());
-        $this->assertSame(['name'=>'after-observer'], $record->getChanges());
+        $this->assertSame([], $record->getChanges());
+        $record->name = 'after-observer';
         $this->assertTrue($record->update());
         $this->assertFalse($record->hasChange());
         $this->assertSame([], $record->getChanges());

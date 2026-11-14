@@ -111,7 +111,7 @@ final class BulkConnectionTest extends TestCase
     }
 
     #[DataProvider('methods')]
-    public function testPoolFailureReportsThePinnedConnectionAndPreservesErrorCallbackSelection(string $method): void
+    public function testPoolFailureOnThePinnedConnectionSkipsQueryCallbacks(string $method): void
     {
         $this->bind([]); $this->db->addDb(new Config());
         $failure = new \RuntimeException('pool unavailable');
@@ -119,24 +119,19 @@ final class BulkConnectionTest extends TestCase
         $pool->expects($this->once())->method('getObj')->willThrowException($failure);
         (new \ReflectionProperty(FastDb::class, 'pools'))->setValue($this->db, ['default' => $pool]);
         $rows = (function (): \Generator { $this->db->selectConnection('other'); yield ['id' => 1]; })();
-        $observed = null;
         try {
-            $this->write($method, $rows, 'bulk_pinned', function (QueryResult $result) use (&$observed): void {
-                $observed = $result; $this->assertSame('other', $this->db->selectConnection());
-                $this->db->selectConnection('after-failure'); throw new \RuntimeException('entity logger');
-            });
+            $this->write($method, $rows, 'bulk_pinned',
+                static function (): void { self::fail('No query was sent'); });
             $this->fail('Expected pool error');
-        } catch (\EasySwoole\FastDb\Exception\RuntimeError $error) {
-            $this->assertSame($failure, $error->getPrevious());
-            $this->assertSame($error, $observed->getException());
+        } catch (\RuntimeException $error) {
+            $this->assertSame($failure, $error);
         }
-        $this->assertSame('default', $observed->getConnectionName());
-        $this->assertSame('after-failure', $this->db->selectConnection());
+        $this->assertSame('other', $this->db->selectConnection());
         $this->assertSame([], $this->writes);
     }
 
     #[DataProvider('methods')]
-    public function testSqlFailureRestoresVisibilityBeforeBothObserversAndKeepsTheOriginalException(string $method): void
+    public function testThrowingGlobalObserverStopsNotificationsAndKeepsTheSqlException(string $method): void
     {
         $failure = new \RuntimeException('SQL rejected');
         $client = $this->createStub(BulkPinnedConnection::class); $client->connectionName = 'default';
@@ -150,15 +145,12 @@ final class BulkConnectionTest extends TestCase
             $this->db->selectConnection('global-selected'); throw new \RuntimeException('global logger');
         });
         try {
-            $this->write($method, $rows, 'bulk_pinned', function (QueryResult $result) use (&$seen, $failure): void {
-                $this->assertSame($failure, $result->getException());
-                $seen[] = ['entity', $result->getConnectionName(), $this->db->selectConnection()];
-                $this->db->selectConnection('entity-selected'); throw new \RuntimeException('entity logger');
-            });
+            $this->write($method, $rows, 'bulk_pinned',
+                static function (): void { self::fail('Global observer already threw'); });
             $this->fail('Expected SQL error');
         } catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
-        $this->assertSame([['global', 'default', 'producer'], ['entity', 'default', 'global-selected']], $seen);
-        $this->assertSame('entity-selected', $this->db->selectConnection());
+        $this->assertSame([['global', 'default', 'producer']], $seen);
+        $this->assertSame('global-selected', $this->db->selectConnection());
     }
 
     private function write(string $method, iterable $rows, ?string $table = null, ?callable $onQuery = null, string $model = BulkPinnedRecord::class): int|string

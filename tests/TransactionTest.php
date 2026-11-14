@@ -206,18 +206,20 @@ final class TransactionTest extends TestCase
         $this->assertSame([1, 2, 3], $seen);
     }
 
-    public function testMysqlConvertedAutoKeyIsAvailableForObserverUpdatesAndDeletion(): void
+    public function testMysqlConvertedAutoKeySupportsUpdatesAndDeletionAfterInsert(): void
     {
         $this->observer->query("ALTER TABLE `{$this->table}` MODIFY id INT NOT NULL AUTO_INCREMENT");
         $entity = new ConvertedKeyMysqlEntity(['value'=>7]);
         $this->db->setOnQuery(function (QueryResult $result) use ($entity): void {
             if (!str_starts_with($result->getLastPrepareQuery() ?? '', 'INSERT')) { return; }
-            $this->assertInstanceOf(ConvertedKey::class, $entity->id);
-            $this->assertSame('2', $entity->id->value);
-            $entity->value = 8;
-            $this->assertTrue($entity->update());
+            $this->assertFalse(isset($entity->id));
+            $this->assertSame(2, $result->getInsertId());
         });
         $this->assertTrue($entity->insert());
+        $this->assertInstanceOf(ConvertedKey::class, $entity->id);
+        $this->assertSame('2', $entity->id->value);
+        $entity->value = 8;
+        $this->assertTrue($entity->update());
         $this->assertSame(8, ConvertedKeyMysqlEntity::findRecord('2')->value);
         $entity->id = new ConvertedKey('2');
         $this->assertTrue($entity->delete());
@@ -243,7 +245,8 @@ final class TransactionTest extends TestCase
             ADD COLUMN seq INT NOT NULL AUTO_INCREMENT UNIQUE");
         $entity = new SecondaryAutoIncrementMysqlEntity(['value' => 7]);
         $entity->setOnQuery(function (QueryResult $result) use ($entity): void {
-            $this->assertSame($result->getInsertId(), $entity->seq);
+            $this->assertGreaterThan(0, $result->getInsertId());
+            $this->assertFalse(isset($entity->seq));
             $this->assertFalse($entity->hasChange('seq'));
             $this->assertFalse(isset($entity->id));
         });
@@ -293,7 +296,7 @@ final class TransactionTest extends TestCase
     }
 
     #[DataProvider('stringPrimaryKeyModes')]
-    public function testMysqlNonAutoStringKeySurvivesInsertObserverUpdatesAndDeletion(string $key, string $mode): void
+    public function testMysqlNonAutoStringKeySurvivesInsertUpdateAndDeletion(string $key, string $mode): void
     {
         $this->observer->query("ALTER TABLE `{$this->table}` MODIFY id VARCHAR(64) NOT NULL");
         $entity = new TextKeyMysqlEntity(['id'=>$key,'value'=>7]);
@@ -307,8 +310,6 @@ final class TransactionTest extends TestCase
             $this->assertSame(0, $result->getInsertId());
             $this->assertSame(1, $result->getAffectedRows());
             $this->assertSame($key, $entity->id);
-            $entity->value = 8;
-            $this->assertTrue($entity->update());
         };
         if ($mode === 'global') { $this->db->setOnQuery($observer); }
         else { $entity->setOnQuery($observer); }
@@ -318,13 +319,12 @@ final class TransactionTest extends TestCase
         $this->assertSame($key, $entity->id);
         $stored = TextKeyMysqlEntity::findRecord($key);
         $this->assertSame($key, $stored->id);
-        $this->assertSame(8, $stored->value);
-        // 插入和回调内更新已接受比较基准，未修改时不应重复发送 UPDATE。
+        $this->assertSame(7, $stored->value);
         $this->assertTrue($entity->update());
-        $this->assertSame(1, $updates);
+        $this->assertSame(0, $updates);
         $entity->value = 9;
         $this->assertTrue($entity->update());
-        $this->assertSame(2, $updates);
+        $this->assertSame(1, $updates);
         $this->assertSame(9, TextKeyMysqlEntity::findRecord($key)->value);
         $this->assertTrue($entity->delete());
         $this->assertNull(TextKeyMysqlEntity::findRecord($key));
@@ -388,7 +388,7 @@ final class TransactionTest extends TestCase
         $this->db->transaction(function () use ($withTotal, &$seen, &$entityEvents): void {
             $entity = new CursorMysqlEntity();
             $entity->setOnQuery(static function (QueryResult $result) use (&$entityEvents): void {
-                $entityEvents[] = $result->getRawSql();
+                $entityEvents[] = $result->getTotalResult()?->getRawSql();
             });
             $entity->queryLimit()->where('value',0)->orWhere('id',4,'>=')->orderBy('id','DESC')
                 ->page(99, $withTotal, 1)->selectForUpdate()->returnAsArray()->hideFields('order');
@@ -400,7 +400,7 @@ final class TransactionTest extends TestCase
         });
         $this->assertSame([1,4,5], $seen);
         $this->assertCount(2, $pages);
-        $this->assertSame($withTotal ? [null,'SELECT FOUND_ROWS() as count',null,'SELECT FOUND_ROWS() as count'] : [null,null], $entityEvents);
+        $this->assertSame($withTotal ? ['SELECT FOUND_ROWS() as count', 'SELECT FOUND_ROWS() as count'] : [null, null], $entityEvents);
         foreach ($pages as $page) {
             $sql = $page->getLastPrepareQuery();
             $this->assertStringContainsString('ORDER BY `order` ASC', $sql);
@@ -666,27 +666,6 @@ final class TransactionTest extends TestCase
         $this->assertSame(2, $this->value());
     }
 
-    public function testInsertObserverCanUpdateTheInsertedEntityWithoutLosingItsBaseline(): void
-    {
-        $this->db->rawQuery("ALTER TABLE `{$this->table}` MODIFY id INT NOT NULL AUTO_INCREMENT");
-        $entity = new TransactionEntity(['value' => 3]);
-        $nested = false;
-        $this->db->setOnQuery(function () use ($entity, &$nested): void {
-            if ($nested) { return; }
-            $nested = true;
-            $this->assertSame(2, $entity->id);
-            $entity->value = 9;
-            $this->assertTrue($entity->update());
-        });
-        $this->assertTrue($entity->insert());
-        $this->assertSame(9, $entity->value);
-        $this->assertSame(9, (int) $this->observer->query("SELECT value FROM `{$this->table}` WHERE id=2")->fetch_assoc()['value']);
-        $queries = 0;
-        $this->db->setOnQuery(static function () use (&$queries): void { $queries++; });
-        $this->assertTrue($entity->update());
-        $this->assertSame(0, $queries);
-    }
-
     public function testInsertIdSnapshotSurvivesSqlInGlobalLogCallback(): void
     {
         $this->db->rawQuery("ALTER TABLE `{$this->table}` MODIFY id INT NOT NULL AUTO_INCREMENT");
@@ -818,13 +797,13 @@ final class TransactionTest extends TestCase
                 $once = true; $this->db->rawQuery('SELECT 1');
             }
         });
-        $entity = new TransactionEntity(); $calls = 0;
-        $entity->setOnQuery(static function () use (&$calls): void { $calls++; });
+        $entity = new TransactionEntity(); $totals = [];
+        $entity->setOnQuery(static function (QueryResult $result) use (&$totals): void { $totals[] = $result->getTotalCount(); });
         $entity->queryLimit()->page(1, true, 1);
         $list = $entity->all();
         $this->assertCount(1, $list);
         $this->assertSame(3, $list->totalCount());
-        $this->assertSame(2, $calls);
+        $this->assertSame([3], $totals);
     }
 
     public function testRawTransactionIsRolledBackWhenTheSessionIsReturned(): void
@@ -1291,8 +1270,7 @@ final class TransactionTest extends TestCase
             try {
                 $db->rawQuery('SELECT 1');
                 $this->fail('Expected exhausted pool');
-            } catch (\EasySwoole\FastDb\Exception\RuntimeError $error) {
-                $this->assertStringContainsString('pool empty', $error->getMessage());
+            } catch (\EasySwoole\Pool\Exception\PoolEmpty) {
                 $this->assertGreaterThanOrEqual(0.03, microtime(true) - $started);
                 $this->assertLessThan(0.5, microtime(true) - $started);
             }

@@ -61,20 +61,20 @@ final class InsertStateTest extends TestCase
     }
 
     #[DataProvider('observerModes')]
-    public function testConvertedAutoKeyIsReadyBeforeObserversAndSupportsUpdateAndDelete(string $mode): void
+    public function testConvertedAutoKeyIsReadyAfterInsertAndSupportsUpdateAndDelete(string $mode): void
     {
         $entity = new ConvertedInsertStateRecord(['name'=>'before']);
         $observer = function (QueryResult $result) use ($entity): void {
             if (!str_starts_with($result->getLastPrepareQuery() ?? '', 'INSERT')) { return; }
-            $this->assertInstanceOf(ConvertedKey::class, $entity->id);
-            $this->assertSame('1', $entity->id->value);
-            $entity->name = 'nested';
-            $this->assertTrue($entity->update());
+            $this->assertFalse(isset($entity->id));
+            $this->assertSame(1, $result->getInsertId());
         };
         if ($mode === 'global') { $this->db->setOnQuery($observer); }
         else { $entity->setOnQuery($observer); }
         $this->assertTrue($entity->insert());
-        $this->assertSame('nested', $this->client->row()['name']);
+        $this->assertInstanceOf(ConvertedKey::class, $entity->id);
+        $this->assertSame('1', $entity->id->value);
+        $entity->name = 'updated';
         $this->assertTrue($entity->update());
         $this->assertCount(2, $this->client->queries);
         $entity->id = new ConvertedKey('1');
@@ -156,25 +156,6 @@ final class InsertStateTest extends TestCase
             #[AutoIncrement]
             public int $unmapped;
         };
-    }
-
-    #[DataProvider('observerModes')]
-    public function testObserverChangesRemainPendingAfterInsert(string $mode): void
-    {
-        $entity = new InsertStateRecord(['name' => 'before']);
-        $this->observe($mode, $entity, function (QueryResult $result) use ($entity): void {
-            if (!str_starts_with($result->getLastPrepareQuery() ?? '', 'INSERT')) { return; }
-            $this->assertSame(1, $entity->id ?? null, 'The generated key must be available before public observers.');
-            $entity->name = 'after';
-        });
-        $this->assertTrue($entity->insert());
-        $this->assertSame('after', $entity->name);
-        $this->assertSame('before', $this->client->row()['name']);
-        $this->assertTrue($entity->update());
-        $this->assertSame('after', $this->client->row()['name']);
-        $this->assertCount(2, $this->client->queries);
-        $this->assertTrue($entity->update());
-        $this->assertCount(2, $this->client->queries);
     }
 
     #[DataProvider('observerModes')]
@@ -515,6 +496,22 @@ final class InsertStateTest extends TestCase
         $this->assertSame(9, $this->client->row()['score']);
     }
 
+    public function testInsertIgnoreIsRejectedBeforeSqlAndLeavesChangesPending(): void
+    {
+        $entity = new InsertStateRecord(['id' => 1, 'name' => 'original']);
+        $entity->name = 'ignored';
+        $entity->queryLimit()->func(static fn (QueryBuilder $query) => $query->setQueryOption('IGNORE'));
+        try {
+            $entity->insert();
+            $this->fail('Expected IGNORE to be rejected');
+        } catch (\InvalidArgumentException $error) {
+            $this->assertStringContainsString('does not support IGNORE', $error->getMessage());
+        }
+        $this->assertSame([], $this->client->queries);
+        $this->assertSame(['name' => 'ignored'], $entity->getChanges());
+        $this->assertTrue($entity->insert());
+    }
+
     public function testDuplicateOptionsCannotBeConfiguredThroughBothEntryPoints(): void
     {
         $entity = new InsertStateRecord(['name' => 'incoming']);
@@ -539,15 +536,14 @@ final class InsertStateTest extends TestCase
         $this->assertSame('database', $this->client->row(20)['name']);
     }
 
-    public function testObserverExceptionDoesNotForgetAnAlreadySuccessfulInsert(): void
+    public function testObserverExceptionLeavesGeneratedKeyForBusinessToReload(): void
     {
         $entity = new InsertStateRecord(['name' => 'before']);
         $failure = new \RuntimeException('observer failed');
         $this->db->setOnQuery(static function () use ($failure): void { throw $failure; });
         try { $entity->insert(); $this->fail('Observer failure must propagate'); }
         catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
-        $this->assertSame(1, $entity->id ?? null);
-        $this->assertTrue($entity->update());
+        $this->assertNull($entity->id ?? null);
         $this->assertCount(1, $this->client->queries);
         $this->assertSame('before', $this->client->row()['name']);
     }

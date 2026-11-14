@@ -159,13 +159,8 @@ final class ConnectionTest extends TestCase
     public function testTestDbPreservesConnectionFailure(): void
     {
         $db = (new FastDb())->addDb(new \EasySwoole\FastDb\Config(['maxConnectTime' => -1.0]));
-        try {
-            $db->testDb();
-            $this->fail('Expected connection failure');
-        } catch (RuntimeError $error) {
-            $this->assertInstanceOf(\InvalidArgumentException::class, $error->getPrevious());
-            $this->assertSame($error->getPrevious()->getMessage(), $error->getMessage());
-        }
+        $this->expectException(\InvalidArgumentException::class);
+        $db->testDb();
     }
 
     public function testTransactionFlagsAndTimeoutReachSpecifiedConnection(): void

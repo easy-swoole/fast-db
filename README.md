@@ -12,7 +12,7 @@ FastDb 是面向 Swoole 协程环境的 MySQL 数据访问库，组合连接池�
 
 | 组件 | 职责 |
 | --- | --- |
-| `FastDb` | 驱动返回后保存本次执行结果，预取分页总数，再通知完成回调及查询观察者 |
+| `FastDb` | 驱动返回后保存本次执行结果，预取分页总数，再通知查询观察者 |
 | `Mysql\Connection` | 驱动调用、协议事务状态、连接健康及超时上下文；不保存门面执行状态 |
 | `Internal\QueryDiagnostics` | 按需保存全局查询回调和每协程有界事件栈；分别记录查询执行与连接获取 |
 | `AbstractInterface\AbstractEntity` | 字段比较基准、变更检测、主键保护和成功写入后的基准更新 |
@@ -33,7 +33,7 @@ FastDb 通过 `FastDb::getInstance()` 获取固定实例并长期复用。需要
 
 本组件直接使用 mysqli 的 `QueryBuilder::groupExistingWhere()`，游标分块由 FastDb 组合 WHERE、ORDER BY 和 LIMIT 实现；连接池最小容量维护和创建失败处理沿用上游 pool 的实现。
 
-`Connection::isInTransaction(): bool` 直接读取底层协议的事务状态；`FastDb::isInTransaction()` 转发到当前或指定连接，不另外保存事务布尔副本。实体 `update()` 在数据库 SQL 成功后、公开查询回调前接受字段比较基准；写入返回值和比较基准使用公开查询回调前的执行结果。后续事务回滚不会恢复模型属性或比较基准，需要由业务重新加载、重建对象或显式修改字段后再保存。
+`Connection::isInTransaction(): bool` 直接读取底层协议的事务状态；`FastDb::isInTransaction()` 转发到当前或指定连接，不另外保存事务布尔副本。实体 `update()` 在查询正常返回且影响行数大于零后接受字段比较基准。后续事务回滚不会恢复模型属性或比较基准，需要由业务重新加载、重建对象或显式修改字段后再保存。
 
 列表查询与两种分块共用字段转换、隐藏字段、预加载及总数通知规则；总数由 FastDb 统一预取，模型层直接读取本次结果中的快照。
 
@@ -335,12 +335,12 @@ $config->setGetObjectTimeout(2.0);
 $config->setIntervalCheckBatchSize(8);
 
 $db = FastDb::getInstance()->addDb($config);
-$db->testDb(); // 成功返回 true；连接失败抛异常。
+$db->testDb(); // 成功返回 true；建连失败抛出原始异常。
 $registered = $db->getConfig('default'); // Config 或 false。
 $db->preConnect(); // 对已注册的连接池预热到最小连接数。
 ```
 
-连接池在首次使用时创建，由池显式调用 `connect()` 建立会话。借用时会淘汰已断开的连接，并可在该次借用中补充新连接。SQL 发出后若断线或超时，FastDb 将异常交给调用方。持有失效会话的协程应先回收上下文，业务需要继续时再发起独立操作。事务丢失后的提交与回滚报告事务丢失，回收后失效会话由池淘汰。连接池创建后，`addDb()` 会拒绝覆盖同名连接的配置。请在首次查询或预热前完成注册。`addDb()` 保存配置副本，`getConfig()` 返回副本。
+连接池在首次使用时创建，由池显式调用 `connect()` 建立会话。借用时由池淘汰已断开的连接并补充新连接。池满、建连等异常保留原类型。池未提供可用连接且返回 null 时，FastDb 抛出 RuntimeError。SQL 发出后若断线或超时，FastDb 将异常交给调用方。持有失效会话的协程应先回收上下文，业务需要继续时再发起独立操作。事务丢失后的提交与回滚报告事务丢失，回收后失效会话由池淘汰。连接池创建后，`addDb()` 会拒绝覆盖同名连接的配置。请在首次查询或预热前完成注册。`addDb()` 保存配置副本，`getConfig()` 返回副本。
 
 ## 实体与属性映射
 
@@ -627,7 +627,7 @@ $ok = $user->insert(); // bool。
 $id = $user->id; // 自增主键由 last insert id 回填。
 ```
 
-插入使用字段转换器生成数据库值，`fields()` 控制写入白名单，`hideFields()` 只控制输出。属性值为 null 时省略该列，数据库可以应用默认值。转换对象仍按其 `toValue()` 的返回值写入。公开查询回调执行前，FastDb 接受本次成功写入字段的比较基准，并按字段的 `convertObject` 定义回填自增 ID。显式写入的自增字段保留原值。实体保留原有字段对象及其时区。后续属性修改可通过 `update()` 保存。其他数据库默认值、触发器结果等需要重新查询才能获得。
+插入使用字段转换器生成数据库值，`fields()` 控制写入白名单，`hideFields()` 只控制输出。属性值为 null 时省略该列，数据库可以应用默认值。转换对象仍按其 `toValue()` 的返回值写入。查询正常返回后，FastDb 接受本次成功写入字段的比较基准，并按字段的 `convertObject` 定义回填自增 ID。显式写入的自增字段保留原值。实体保留原有字段对象及其时区。实体插入要求结果能够用于维护比较基准，使用 `INSERT IGNORE` 时请直接调用 `QueryBuilder`。后续属性修改可通过 `update()` 保存。其他数据库默认值、触发器结果等需要重新查询才能获得。
 
 默认用主键接收自增 ID。自增列与主键分开时，在自增列对应的映射属性上加 `#[AutoIncrement]`。`chunkById()` 省略游标时也使用该字段。
 
@@ -1357,9 +1357,9 @@ $orders = $users[0]->activeOrders(); // 同样的配置可命中预加载缓存�
 
 按需加载和预加载共用配置方法。配置方法通过传入的构建器设置 SQL 条件、排序或字段；关系返回数组的规则使用 `Relate::returnAsArray` 声明。预加载从 `type` 获取关联类型，不执行 getter。
 
-配置会按父实体分别应用，相同连接、目标实体、关联类型、表名、条件参数、排序、字段和返回形式的计划合并查询。目标表由目标实体的 `tableName()` 确定，连接在配置及目标模型初始化后记录。一对一返回实体时，按需加载和预加载都先构造目标实例，查询命中后再用 `setData()` 填充该实例并建立比较基准。自定义构造器在填充数据库字段前执行。关联结果在实际查询连接下转换和填充。一对多预加载在每条子记录回填前选回该连接。即使多个父对象匹配同一行，预加载也会分别填充各自的目标实例。按需加载和预加载都使用调用方的投影，省略投影时沿用 mysqli 的 `*`。预加载只追加内部匹配索引，回填前移除。
+配置会按父实体分别应用，相同连接、目标实体、关联类型、表名、条件参数、排序、字段和返回形式的计划合并查询。目标表由目标实体的 `tableName()` 确定。按需加载和预加载都先应用关联配置，再确定目标表和连接，最后转换父键到数据库值。一对一返回实体时，按需加载和预加载都先构造目标实例，查询命中后再用 `setData()` 填充该实例并建立比较基准。自定义构造器在填充数据库字段前执行。关联结果在实际查询连接下转换和填充。一对多预加载在每条子记录回填前选回该连接。即使多个父对象匹配同一行，预加载也会分别填充各自的目标实例。按需加载和预加载都使用调用方的投影，省略投影时沿用 mysqli 的 `*`。预加载只追加内部匹配索引，回填前移除。
 
-按需加载要求父关联键已赋值。从数据库加载的实体必须以映射字段名选中且保留该键。省略、改成其他别名或用 `hideFields()` 从回填数据中移除时，调用关联方法会在执行关联 SQL 前抛出异常。已知真实键值时，可以通过 `setData(['键名' => $value])` 显式填入，再加载关联。已加载或显式填入的 null 使用 `IS NULL` 匹配。FastDb 用目标表名或别名限定自己生成的关联外键条件。复杂表源可用 QueryBuilder 显式查询。
+按需加载要求父关联键来自查询结果、构造数据或显式的 `setData()`。从数据库读取时，用映射字段名选中该键并保留到回填阶段。部分加载省略、改名或隐藏了该键时，用 `setData(['group_code' => $value])` 补齐。直接给属性赋值不会补记缺失字段。手工构造时也须传入父键，例如 `new ParentModel(['group_code' => null])`。缺键时在关联 SQL 执行前抛出异常，显式传入或查询返回的 `null` 使用 `IS NULL` 匹配。FastDb 用目标表名或别名限定自己生成的关联外键条件。复杂表源可用 QueryBuilder 显式查询。
 
 关联的附加条件通过 `configure` 声明。getter 中自行切库、覆盖表名、临时修改父键等业务行为不会参与预加载；需要这些复杂查询时，由业务显式查询和组装结果。预加载结果按声明及配置生成，getter 的后处理仅在业务实际调用 getter 时执行。
 
@@ -1508,16 +1508,18 @@ try {
         throw new RuntimeException('Commit failed');
     }
 } catch (Throwable $exception) {
-    $db->rollback();
+    if ($db->isInTransaction()) {
+        $db->rollback();
+    }
     throw $exception;
 }
 ```
 
 | 方法 | 行为 |
 | --- | --- |
-| `begin($client = null, $flags = TransactionStartFlags::None, $timeout = null)` | 默认获取当前连接并开始事务；协议 getter 已报告事务活动时直接返回 true |
-| `commit($client = null, $flags = TransactionCompletionFlags::NoChainNoRelease, $timeout = null)` | 默认提交当前连接；没有连接/没有事务时返回 true |
-| `rollback($client = null, $flags = TransactionCompletionFlags::NoChainNoRelease, $timeout = null)` | 默认回滚当前连接；没有连接/没有事务时返回 true |
+| `begin($client = null, $flags = TransactionStartFlags::None, $timeout = null)` | 默认获取当前连接并开始事务；连接已有活动事务时保留当前事务并返回 true |
+| `commit($client = null, $flags = TransactionCompletionFlags::NoChainNoRelease, $timeout = null)` | 默认提交当前连接；没有连接或没有活动事务时直接返回 true |
+| `rollback($client = null, $flags = TransactionCompletionFlags::NoChainNoRelease, $timeout = null)` | 默认回滚当前连接；没有连接或没有活动事务时直接返回 true |
 | `isInTransaction($connection = null)` | 转发到当前或指定 Connection 的协议状态 getter |
 
 上表描述手动事务入口；下面的 `transaction()` 只根据入口连接是否已有事务，决定本层是否负责开始、提交和异常回滚。
@@ -1621,7 +1623,7 @@ $updated = $db->transaction(function (FastDb $db): bool {
 }, flags: TransactionStartFlags::ReadWrite, timeout: 1.0);
 ```
 
-入口连接没有事务时，本层先开始事务，回调正常返回后提交；开始或回调抛异常时，尝试回滚入口的同一个连接，再抛出原异常。开始失败不会执行回调。返回严格的 `false` 也是正常返回，会提交；需要让拥有层回滚时应抛出异常。
+入口连接没有事务时，本层先开始事务，回调正常返回后提交；开始或业务回调抛异常时，入口连接仍有活动事务才尝试回滚，随后抛出原异常。开始失败不会执行回调。返回严格的 `false` 也是正常返回，会提交；需要让拥有层回滚时应抛出异常。
 
 #### 同连接嵌套与已有手动事务
 
@@ -1811,7 +1813,7 @@ $result = FastDb::getInstance()->query(function (QueryBuilder $query): void {
 });
 ```
 
-`query()` 的构建回调需要完成 `get()` / `insert()` / `update()` / `delete()` / `raw()` 等最终构建动作。可以用 `onQuery:` 为本次主查询指定观察回调，接收 `QueryResult`，在全局查询回调之后执行。使用 `onTotalQuery:` 可单独观察成功取得的总数结果，该回调在主查询回调正常返回后执行。实体列表和按需加载的关联列表在组装行对象前通知各自的实体回调。
+`query()` 的构建回调需要完成 `get()` / `insert()` / `update()` / `delete()` / `raw()` 等最终构建动作。FastDb 先确定执行连接名，再运行构建回调。构建失败或构建器没有 SQL 时直接抛异常，此次调用不会借连接或通知查询观察者。可以用 `onQuery:` 为本次主查询指定观察回调，接收 `QueryResult`，在全局查询回调之后执行。单次或实体 `onQuery` 每次分页只收到主查询结果，可通过 `getTotalCount()` 或 `getTotalResult()` 查看总数。实体列表和按需加载的关联列表在组装行对象前通知各自的实体回调。
 
 ### 原始 SQL
 
@@ -1820,7 +1822,7 @@ $result = FastDb::getInstance()->rawQuery('SELECT CURRENT_TIMESTAMP AS now', tim
 $row = $result->getResultOne();
 ```
 
-`rawQuery(string $sql, ?float $timeout = null)` 不支持单独的绑定参数。动态数据使用 `QueryBuilder::raw($sql, $params)`，不要拼接输入数据。
+`rawQuery(string $sql, ?float $timeout = null, ?string $connection = null)` 不支持单独的绑定参数。动态数据使用 `QueryBuilder::raw($sql, $params)`，不要拼接输入数据。
 
 通过 `currentConnection()` 或 `invoke()` 取得的高级连接接口不提供连接级监听，调用 `Connection::onQuery()` 会抛出 `LogicException`。直接使用 Connection 执行 SQL 时，日志由业务代码自行记录；FastDb 的全局 `setOnQuery()` 及实体/单次查询回调继续支持。
 
@@ -1840,7 +1842,7 @@ $row = $result->getResultOne();
 | `getLastPrepareQuery(): ?string` | 保留占位符的 SQL |
 | `getLastBindParams(): array` | 按占位符顺序排列的绑定参数 |
 | `getRawSql()` | 原始 SQL 文本；构建器查询时通常 null |
-| `getDuration(): float` | 查询执行阶段耗时，秒；不含获取连接及日志回调，实体失败替代结果见下文 |
+| `getDuration(): float` | 查询执行阶段耗时，秒；不含获取连接及日志回调 |
 | `getStartTime()` / `getEndTime()` | Unix 时间戳，用于日志定位；查询执行耗时使用 getDuration() |
 
 查询回调接收只读 `QueryResult`。三个日志 getter 也可用于 `QueryStack` 和 `TimeoutException`。原始 SQL 和事务操作的两个 SQL getter 都返回执行文本，绑定参数返回 `[]`。原先用于获取构建器和改写结果的接口已移除。业务需要裁剪或转换数据时，可以配置查询投影，或在读取结果后处理自己的数据。
@@ -1852,9 +1854,9 @@ $affected = $result->getAffectedRows();
 $insertId = $result->getInsertId();
 ```
 
-连接名在执行 SQL 前从实际连接记录，查询失败时也保留。查询栈统一读取该快照，不会因为构建器回调或日志回调切换连接而记错数据库。模型查询失败时的实体回调同样保留发起查询时的连接名。
+连接名在执行 SQL 前从实际连接记录，查询失败时也保留。查询栈统一读取该快照，不会因为构建器回调或日志回调切换连接而记错数据库。
 
-FastDb 在 Connection 返回后立即保存结果行、影响行数、自增 ID、SQL、参数和耗时。需要总数时，在同一连接上先取得 `FOUND_ROWS()`，然后才调用完成回调和查询观察者。显式传入的 `$timeout` 分别应用于主查询和总数查询。查询结果保存的是本次执行的返回值，后续数据库变化不会自动刷新这些 PHP 数据；需要新数据时应再次查询。
+FastDb 在 Connection 返回后立即保存结果行、影响行数、自增 ID、SQL、参数和耗时。需要总数时，在同一连接上先取得 `FOUND_ROWS()`，然后通知查询观察者。显式传入的 `$timeout` 分别应用于主查询和总数查询。查询结果保存的是本次执行的返回值，后续数据库变化不会自动刷新这些 PHP 数据；需要新数据时应再次查询。
 
 Connection 的 `getLastAffectRows()` / `getLastInsertId()` 始终表示最后一条实际执行 SQL 的元数据，包括分页总数查询。通过 FastDb 执行时，使用返回的 `QueryResult` 获取该次操作的影响行数和自增 ID。
 
@@ -1862,7 +1864,7 @@ Connection 的 `getLastAffectRows()` / `getLastInsertId()` 始终表示最后一
 
 分页总数及对应查询结果随主查询的 QueryResult 一起保存，可直接读取 `$result->getTotalCount()` 和 `$result->getTotalResult()`。实体列表从本次查询结果读取总数。
 
-`getDuration()` 从取得连接后开始计时，不把获取连接或日志回调算进去。`query(callable)` 的工厂在该执行阶段内运行，因此也包含工厂构建耗时，不能把它等同于纯服务端 SQL 耗时。
+`getDuration()` 只记录驱动执行阶段，排除 SQL 构建、获取连接和查询观察回调。
 
 连接获取耗时通过查询栈的独立 `connectionAcquire` 事件读取，不分摊给某条 SQL 或 QueryResult。计时覆盖连接池 `getObj()` 阶段，包含排队、按需新建连接、健康检查及重试；它不是纯粹的队列等待时间。业务端到端耗时还包含进入查询执行阶段前的构建和业务代码等阶段，需要另行计时。
 
@@ -1903,7 +1905,7 @@ FastDb 的超时异常继承 `EasySwoole\FastDb\Exception\Exception`。调用方
 
 ## 查询日志与查询栈
 
-`onQuery` 只用于调试、日志和执行后检查。回调读取只读的 `QueryResult`，检查未通过时可以抛异常。请把其他查询、切换连接、修改查询配置和事务操作放在回调外。回调在 SQL 执行之后触发，抛异常无法撤销已自动提交的写入。
+`onQuery` 只用于调试、日志和执行后检查。回调读取只读的 `QueryResult`，检查未通过时可以抛异常。请把其他查询、切换连接、修改查询配置和事务操作放在回调外。回调在 SQL 执行之后触发。异常会向调用方传播，实体写入的自增 ID 和比较基准仅在查询正常返回后更新。已自动提交的写入仍然生效，需要时由业务核对结果并重新加载实体。日志或检查失败若只应留在回调内，请在回调内用 `try/catch` 处理。
 
 ### 全局回调
 
@@ -1919,9 +1921,9 @@ $db->setOnQuery(function (QueryResult $result): void {
 });
 ```
 
-查询执行阶段的开始时间在获得连接之后记录，执行耗时不包含获取连接；获取阶段另记为独立查询栈事件。`query()` / `rawQuery()` 结束时间在执行结束或失败后、调用日志回调之前记录，不包含日志回调耗时；`query(callable)` 的工厂构建包含在查询执行计时内。begin/commit/rollback 实际执行后，无论成功、SQL 错误或超时，都进入日志回调和查询栈；直接返回且未执行 SQL 时不触发。事务 rawSql 与 flags 生成的执行 SQL 一致。全局 `onQuery` 只接收查询执行结果，连接获取成功或失败均不调用它。
+查询执行阶段的开始时间在获得连接之后记录，执行耗时不包含获取连接；获取阶段另记为独立查询栈事件。`query()` / `rawQuery()` 结束时间在执行结束或失败后、调用日志回调之前记录，不包含日志回调耗时。begin/commit/rollback 实际执行后，无论成功、SQL 错误或超时，都进入日志回调和查询栈。事务 rawSql 与 flags 生成的执行 SQL 一致。全局 `onQuery` 只接收查询执行结果，连接获取成功或失败均不调用它。
 
-`query()` / `rawQuery()` 和事务执行抛异常时，回调中的 `getException()` 返回该次执行抛出的同一异常对象，`getResult()` / `getResultOne()` 为 null。成功执行时 getException() 为 null。执行已失败时，日志回调另抛异常不会覆盖原始执行异常；执行成功时，回调异常正常抛出，不能据此认定数据库操作失败。执行异常在回调后继续向调用方抛出。
+`query()` / `rawQuery()` 和事务执行抛异常时，回调中的 `getException()` 返回该次执行抛出的同一异常对象，`getResult()` / `getResultOne()` 为 null。成功执行时 getException() 为 null。回调抛异常会停止后续通知。SQL 执行已失败时向调用方抛出原始执行异常，其余情况下直接抛出回调异常。
 
 底层 `getLastQuery()` 是用于调试的占位符替换文本，可能与实际绑定执行的细节不同；尤其 null 的展示不能代替实际 SQL 判断。优先记录 `getLastPrepareQuery()` 和 `getLastBindParams()`。
 
@@ -1940,11 +1942,9 @@ $user = User::findRecord(1, onQuery: function (QueryResult $result): void {
 });
 ```
 
-`findAll()`、`fastUpdate()`、`fastDelete()` 也有 `$onQuery` 参数。全局回调与实体/单次回调可以同时执行。实体查询在获得结果前失败时会创建替代 `QueryResult`，该结果提供时间、SQL 信息、执行异常及空结果，不保证拥有可用连接。
+`findAll()`、`fastUpdate()`、`fastDelete()` 也有 `$onQuery` 参数。全局回调与实体/单次回调可以同时执行。连接获取失败时直接抛异常，全局和单次查询回调都不触发。启用查询栈时，实际借用失败由独立的 `connectionAcquire` 事件记录。
 
 普通查询、分块和预加载统一在 SQL 实际执行的连接下初始化实体，回填结束后恢复当时选中的连接。
-
-实体借用连接失败时，这份替代结果的 `getDuration()` 可能包含失败调用区间；此时不能把它当作实际 SQL 执行窗口。开启查询栈后的独立 `connectionAcquire` 失败事件能更准确地区分获取耗时和异常。
 
 ### 查询栈
 
@@ -1973,11 +1973,11 @@ $db->configureQueryStack(false, maxStackSize: 2); // 停止追加，保持相同
 | `type` | 普通 SQL 为 `query`，独立连接获取事件为 `connectionAcquire` |
 | `connectionName` | 本次操作的连接名快照，失败时也可定位尝试借用的连接 |
 | `rawQuery` | 原始 SQL 文本，构建器查询和连接获取事件为 null |
-| `duration` | 当前事件耗时，秒；query 为原查询执行阶段（含 query(callable) 工厂），connectionAcquire 为本次 getObj() 的获取总耗时 |
+| `duration` | 当前事件耗时，秒；query 为驱动执行阶段，connectionAcquire 为本次 getObj() 的获取总耗时 |
 | `exception` | SQL 执行异常，或连接获取事件中实际向外抛出的借用异常；成功时为 null |
 | `startTime` / `endTime` | 记录的起止 Unix 时间戳，用于日志定位；耗时字段使用单调时钟 |
 
-主查询与 `SELECT FOUND_ROWS() as count` 都生成独立 trace，并分别触发全局 `onQuery`。FastDb 在完成回调和全局观察回调前记录两条已执行的 SQL。查询事件通过 `getLastQuery()`、`getLastPrepareQuery()` 和 `getLastBindParams()` 读取 SQL 日志信息。查询栈与查询结果共享 SQL 快照。主查询的全局回调抛异常时，总数 SQL 的 trace 仍保留，总数查询的全局回调会跳过。SQL 执行异常优先于观察回调异常向外抛出。
+主查询与 `SELECT FOUND_ROWS() as count` 都生成独立 trace，并分别触发全局 `onQuery`。FastDb 在通知全局观察者前记录两条已执行的 SQL。查询事件通过 `getLastQuery()`、`getLastPrepareQuery()` 和 `getLastBindParams()` 读取 SQL 日志信息。查询栈与查询结果共享 SQL 快照。主查询的全局回调抛异常时，总数 SQL 的 trace 仍保留，总数查询的全局回调会跳过。SQL 执行异常优先于观察回调异常向外抛出。
 
 查询栈在通知回调前记录已执行的 SQL。
 
@@ -2036,7 +2036,7 @@ final class SlowQueryLogger
 }
 ```
 
-耗时使用 `hrtime()` 的单调时钟计算，系统时间调整不会影响耗时测量；`startTime` 仍为 Unix 时间戳，便于定位日志发生时间。示例按查询执行阶段达到 200 毫秒判定慢查询，包含 `query(callable)` 工厂构建，不把获取连接或日志回调算进该阈值。实体借用失败的替代结果按上一节说明处理。若需要发现查询执行很快、连接获取很慢的情况，应读取已开启的查询栈，对 `type === 'connectionAcquire'` 事件的 `duration` 设置独立阈值；获取事件不进入全局 `onQuery`。
+耗时使用 `hrtime()` 的单调时钟计算，系统时间调整不会影响耗时测量；`startTime` 仍为 Unix 时间戳，便于定位日志发生时间。示例按查询执行阶段达到 200 毫秒判定慢查询，排除 SQL 构建、获取连接及日志回调。若需要发现查询执行很快、连接获取很慢的情况，应读取已开启的查询栈，对 `type === 'connectionAcquire'` 事件的 `duration` 设置独立阈值；获取事件不进入全局 `onQuery`。
 
 ### 方法一：FastDb 全局 onQuery
 
@@ -2165,8 +2165,8 @@ $config = ConfigModel::findRecord(
 | `selectConnection(?string $name = null)` | 设置连接名时返回管理器；省略时返回名字 |
 | `withConnection(string $name, callable $callback): mixed` | 临时选库并恢复；回调接收 FastDb，不借还连接或改变事务 |
 | `testDb(string $name = 'default')` | 检查连接，成功 true，失败异常 |
-| `query(QueryBuilder\|callable $query, ?float $timeout = null)` | 构建器查询；QueryResult |
-| `rawQuery(string $sql, ?float $timeout = null)` | 原始 SQL；QueryResult |
+| `query(QueryBuilder\|callable $queryBuilder, ?float $timeout = null, ?string $connection = null, ?callable $onQuery = null)` | 构建器查询，返回 QueryResult |
+| `rawQuery(string $sql, ?float $timeout = null, ?string $connection = null)` | 原始 SQL，返回 QueryResult |
 | `begin(?Connection $client = null, TransactionStartFlags $flags = TransactionStartFlags::None, ?float $timeout = null)` | 开始事务；bool |
 | `commit(?Connection $client = null, TransactionCompletionFlags $flags = TransactionCompletionFlags::NoChainNoRelease, ?float $timeout = null)` | 提交事务；bool |
 | `rollback(?Connection $client = null, TransactionCompletionFlags $flags = TransactionCompletionFlags::NoChainNoRelease, ?float $timeout = null)` | 回滚事务；bool |
@@ -2289,7 +2289,7 @@ SELECT * FROM users WHERE (status = 0) AND id > 4 ORDER BY id ASC LIMIT 2;
 
 ### 事务中能使用 invoke() 吗？
 
-可以。`invoke()` 复用当前连接时不会归还外层连接，嵌套调用也不会提前结束外层事务。手动事务仍由原调用方提交或回滚；使用 `transaction()` 时，只有入口原本没有事务的拥有层负责结束。手动重复 `begin()` 不提供 savepoint，`transaction()` 的同连接嵌套也不建立独立事务。
+可以。`invoke()` 复用当前连接时不会归还外层连接，嵌套调用也不会提前结束外层事务。手动事务仍由原调用方提交或回滚；使用 `transaction()` 时，只有入口原本没有事务的拥有层负责结束。重复 `begin()` 继续使用当前事务，后续 `begin()` 的 flags 不会重设事务。事务结束后再次 `commit()` 或 `rollback()` 直接返回 true。以上重复调用均不发送额外 SQL。同连接嵌套的 `transaction()` 加入当前事务。
 
 ### withConnection 会自动提交或归还连接吗？
 

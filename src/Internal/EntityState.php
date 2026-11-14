@@ -9,6 +9,10 @@ use EasySwoole\FastDb\Exception\RuntimeError;
 final class EntityState
 {
     public array $baseline = [];
+    public bool $hydrated = false;
+
+    // 键存在表示字段有明确来源；true 表示非 null 的值已同步到写入比较基准。
+    public array $providedFields = [];
 
     /** 只比较当前值；单字段直接查基准，全部字段在首次命中时返回。 */
     public function hasChange(AbstractEntity $entity, ?string $field = null): bool

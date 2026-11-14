@@ -6,7 +6,6 @@ use EasySwoole\FastDb\RelationType;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Beans\ListResult;
-use EasySwoole\FastDb\Beans\Query;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\Mysqli\QueryBuilder;
@@ -26,17 +25,15 @@ final class RelationLoader
     }
 
     /** 两种关联共用构建、缓存查找和写回流程，结果组装分别处理。 */
-    public function load(mixed $parentValue, Query $selection, Relate $relate, ?string $tableName,
-        callable $execute, callable $beforeHydration, callable $hydrate): mixed
+    public function load(RelationPlan $plan, callable $execute, callable $beforeHydration, callable $hydrate): mixed
     {
-        $target = new $relate->targetEntity();
-        $query = $selection->__getQueryBuilder();
-        $fields = $selection->getFields();
-        $returnAsArray = $fields['returnAsArray'] ?? false;
+        $relate = $plan->relate;
+        $query = $plan->builder;
+        $returnAsArray = $plan->returnAsArray;
         RelationPlan::checkPagination($query, $relate->type);
-        RelationPlan::buildLookup($query, $tableName ?? $target->tableName(), $relate, $parentValue, $fields['fields'] ?? null);
+        RelationPlan::buildLookup($query, $plan->tableName, $relate, $plan->selfValue, $plan->columns);
         $key = $relate->cacheResult || $this->preloaded !== []
-            ? $this->fingerprint($relate, $query, $returnAsArray, FastDb::getInstance()->selectConnection()) : null;
+            ? $this->fingerprint($relate, $query, $returnAsArray, $plan->connectionName) : null;
         if ($key !== null && array_key_exists($key, $this->preloaded)) {
             return $this->preloaded[$key];
         }
@@ -53,7 +50,7 @@ final class RelationLoader
                 // 子模型初始化或赋值可能重入父模型，回填前结束本次关联的查询配置。
                 $beforeHydration();
             }
-            $data = self::materialize($relate, $rows, $returnAsArray, $result->getConnectionName(), $hydrate, $target);
+            $data = self::materialize($relate, $rows, $returnAsArray, $result->getConnectionName(), $hydrate, $plan->target);
         } finally {
             if ($db !== null) { $db->selectConnection($connectionToRestore); }
         }

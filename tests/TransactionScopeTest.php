@@ -185,6 +185,32 @@ final class TransactionScopeTest extends TestCase
         $this->assertSame('b', $this->db->selectConnection());
     }
 
+    public function testRepeatedManualTransactionCommandsOnlySendSqlWhenNeeded(): void
+    {
+        $db = new FastDb();
+        $db->setOnQuery(static function (): void { self::fail('No transaction SQL should be sent'); });
+        $this->assertTrue($db->commit());
+        $this->assertTrue($db->rollback());
+        $this->assertNull($db->currentConnection());
+
+        $this->assertTrue($this->db->begin());
+        $this->insert(1);
+        $this->assertTrue($this->db->begin());
+        $this->assertTrue($this->db->isInTransaction());
+        $this->assertTrue($this->db->commit());
+        $this->assertTrue($this->db->commit());
+        $this->assertTrue($this->db->rollback());
+        $this->assertSame([1], $this->values());
+
+        $this->assertTrue($this->db->begin());
+        $this->insert(2);
+        $this->assertTrue($this->db->rollback());
+        $this->assertTrue($this->db->rollback());
+        $this->assertTrue($this->db->commit());
+        $this->assertSame([1], $this->values());
+        $this->assertSame(['START', 'COMMIT', 'START', 'ROLLBACK'], $this->commands());
+    }
+
     public static function boundaryFailures(): array { return [['false'], ['throw']]; }
 
     #[DataProvider('boundaryFailures')]

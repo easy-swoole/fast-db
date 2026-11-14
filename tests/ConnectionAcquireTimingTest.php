@@ -53,7 +53,7 @@ final class ConnectionAcquireTimingTest extends TestCase
         $this->assertLessThan($stack[0]->duration, $first->getDuration());
     }
 
-    public function testFactoryReentryRecordsEventsInCompletionOrderWithOriginalConnectionNames(): void
+    public function testFactoryBuildsBeforeBorrowingThePinnedConnection(): void
     {
         [$db, $pools] = $this->database(['default', 'other']);
         $inner = null;
@@ -67,10 +67,10 @@ final class ConnectionAcquireTimingTest extends TestCase
         $this->assertSame('other', $db->selectConnection());
         $db->rawQuery('SELECT reused');
         $stack = $db->getQueryStack();
-        $this->assertSame(['connectionAcquire', 'connectionAcquire', 'query', 'query', 'query'], array_column($stack, 'type'));
-        $this->assertSame(['default', 'other', 'other', 'default', 'other'], array_column($stack, 'connectionName'));
+        $this->assertSame(['connectionAcquire', 'query', 'connectionAcquire', 'query', 'query'], array_column($stack, 'type'));
+        $this->assertSame(['other', 'other', 'default', 'default', 'other'], array_column($stack, 'connectionName'));
         $this->assertGreaterThanOrEqual(0.012, $stack[0]->duration);
-        $this->assertGreaterThanOrEqual(0.012, $stack[1]->duration);
+        $this->assertGreaterThanOrEqual(0.012, $stack[2]->duration);
         $this->assertSame(1, $pools['default']->borrows);
         $this->assertSame(1, $pools['other']->borrows);
     }
@@ -103,9 +103,12 @@ final class ConnectionAcquireTimingTest extends TestCase
         $db->setOnQuery(static function () use (&$notifications): void { $notifications++; });
         $caught = null;
         try { $db->rawQuery('SELECT never_sent'); }
-        catch (RuntimeError $error) { $caught = $error; }
-        $this->assertInstanceOf(RuntimeError::class, $caught);
-        $this->assertSame($failureMode === 'exception' ? $original : null, $caught->getPrevious());
+        catch (\RuntimeException|RuntimeError $error) { $caught = $error; }
+        if ($failureMode === 'exception') {
+            $this->assertSame($original, $caught);
+        } else {
+            $this->assertInstanceOf(RuntimeError::class, $caught);
+        }
         $this->assertSame(0, $notifications);
         $this->assertSame([], $clients['default']->sql);
         $stack = $db->getQueryStack();
@@ -289,7 +292,7 @@ final class ConnectionAcquireTimingTest extends TestCase
         $this->assertSame('SELECT after_enabling', $db->getQueryStack(0)->rawQuery);
     }
 
-    public function testFactoryCanFirstEnableDiagnosticsForItsCurrentQueryWithoutAnAcquireEvent(): void
+    public function testDiagnosticsEnabledDuringSqlConstructionRecordTheSubsequentBorrow(): void
     {
         [$db, $pools] = $this->database(stack: false);
         $observed = [];
@@ -299,8 +302,8 @@ final class ConnectionAcquireTimingTest extends TestCase
             $builder->raw('SELECT enabled_in_factory');
         });
         $this->assertSame([$result], $observed);
-        $this->assertSame(['query'], array_column($db->getQueryStack(), 'type'));
-        $this->assertSame('SELECT enabled_in_factory', $db->getQueryStack(0)->getLastPrepareQuery());
+        $this->assertSame(['connectionAcquire', 'query'], array_column($db->getQueryStack(), 'type'));
+        $this->assertSame('SELECT enabled_in_factory', $db->getQueryStack(-1)->getLastPrepareQuery());
         $this->assertSame(1, $pools['default']->borrows);
     }
 
@@ -363,16 +366,15 @@ final class ConnectionAcquireTimingTest extends TestCase
         }
     }
 
-    public function testRealPoolChannelTimeoutLogsItsWholeWaitAndOriginalCause(): void
+    public function testRealPoolChannelTimeoutLogsItsWholeWaitAndOriginalException(): void
     {
         [$db, $pool] = $this->waitingDatabase(0.015);
         $busy = $pool->getObj();
         $caught = null;
         try {
             try { $db->rawQuery('SELECT never_sent'); }
-            catch (RuntimeError $error) { $caught = $error; }
-            $this->assertInstanceOf(RuntimeError::class, $caught);
-            $this->assertInstanceOf(PoolEmpty::class, $caught->getPrevious());
+            catch (PoolEmpty $error) { $caught = $error; }
+            $this->assertInstanceOf(PoolEmpty::class, $caught);
             $this->assertCount(1, $db->getQueryStack());
             $event = $db->getQueryStack(0);
             $this->assertSame('connectionAcquire', $event->type);

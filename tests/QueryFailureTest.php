@@ -109,23 +109,29 @@ final class QueryFailureTest extends TestCase
         $db->rawQuery('SELECT 1');
     }
 
-    public function testBorrowFailureKeepsTheOriginalQueryAfterBuilderReuse(): void
+    public function testBuilderFailureSkipsConnectionBorrowingAndQueryObservers(): void
+    {
+        $db = (new FastDb())->configureQueryStack(true);
+        $db->setOnQuery(static function (): void { self::fail('No query was sent'); });
+        $failure = new \InvalidArgumentException('builder failed');
+        try {
+            $db->query(static function () use ($failure): void { throw $failure; });
+            $this->fail('Expected builder failure');
+        } catch (\InvalidArgumentException $error) {
+            $this->assertSame($failure, $error);
+        }
+        $this->assertNull($db->getQueryStack());
+    }
+
+    public function testBorrowFailureDoesNotNotifyQueryObservers(): void
     {
         $db = new FastDb();
-        $builder = (new QueryBuilder())->raw('SELECT ? AS original_query', [1]);
-        $failureResult = null;
-        try {
-            $db->query($builder, connection: 'unregistered',
-                onQuery: static function (QueryResult $result) use (&$failureResult): void {
-                    $failureResult = $result;
-                });
-            $this->fail('Expected an unregistered connection error');
-        } catch (\EasySwoole\FastDb\Exception\RuntimeError $error) {
-            $this->assertSame($error, $failureResult->getException());
-        }
-        $builder->raw('SELECT ? AS next_query', [2]);
+        $db->setOnQuery(static function (): void { self::fail('Global observer requires SQL execution'); });
+        $builder = (new QueryBuilder())->raw('SELECT ? AS never_sent', [1]);
 
-        $this->assertSame('SELECT ? AS original_query', $failureResult->getLastPrepareQuery());
-        $this->assertSame([1], $failureResult->getLastBindParams());
+        $this->expectException(\EasySwoole\FastDb\Exception\RuntimeError::class);
+        $this->expectExceptionMessage('connection unregistered not register yet');
+        $db->query($builder, connection: 'unregistered',
+            onQuery: static function (): void { self::fail('Local observer requires SQL execution'); });
     }
 }

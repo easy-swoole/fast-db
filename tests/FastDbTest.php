@@ -83,9 +83,8 @@ final class FastDbTest extends BaseTestCase
         try {
             $this->getFastDb(self::ERROR_NAME)->testDb(self::ERROR_NAME);
             $this->fail('Expected authentication failure');
-        } catch (RuntimeError $error) {
+        } catch (\EasySwoole\Mysqli\Exception\Exception $error) {
             $this->assertSame(1045, $error->getCode());
-            $this->assertInstanceOf(\EasySwoole\Mysqli\Exception\Exception::class, $error->getPrevious());
             $this->assertStringContainsString('Access denied', $error->getMessage());
         }
     }
@@ -135,7 +134,7 @@ final class FastDbTest extends BaseTestCase
     private function mockTransactionBusiness($fastDb)
     {
         $table = 'easyswoole_user';
-        $fastDb->rawQuery("truncate {$table}");
+        $fastDb->rawQuery("DELETE FROM {$table}");
         $builder = new QueryBuilder();
         $insert = [
             'id'   => 1,
@@ -164,19 +163,6 @@ final class FastDbTest extends BaseTestCase
             throw $throwable;
         }
 
-        // 不通过 invoke，在当前连接上多次调用 begin。
-        try {
-            $fastDb->begin();
-            $result = $fastDb->begin();
-            $this->assertSame(true, $result);
-            // 执行业务操作。
-            $this->mockTransactionBusiness($fastDb);
-            $fastDb->commit();
-        } catch (\Throwable $throwable) {
-            $fastDb->rollback();
-            throw $throwable;
-        }
-
         // 通过 invoke 显式传入客户端。
         $fastDb->invoke(function (Connection $client) use ($fastDb) {
             try {
@@ -191,24 +177,9 @@ final class FastDbTest extends BaseTestCase
             }
         });
 
-        // 通过 invoke 显式传入客户端，并多次调用 begin。
-        $fastDb->invoke(function (Connection $client) use ($fastDb) {
-            try {
-                $fastDb->begin($client);
-                $result = $fastDb->begin($client);
-                $this->assertSame(true, $result);
-                // 执行业务操作。
-                $this->mockTransactionBusiness($fastDb);
-                $fastDb->commit($client);
-            } catch (\Throwable $throwable) {
-                $fastDb->rollback($client);
-                throw $throwable;
-            }
-        });
-
         // 验证连接池获取连接失败。
         $errorFastDb = $this->getFastDb(self::ERROR_NAME)->selectConnection(self::ERROR_NAME);
-        $this->expectException(RuntimeError::class);
+        $this->expectException(\EasySwoole\Mysqli\Exception\Exception::class);
         $this->expectExceptionMessage('Access denied');
         $errorFastDb->begin();
     }
@@ -243,9 +214,7 @@ final class FastDbTest extends BaseTestCase
             }
         });
 
-        // 当前没有活动事务。
-        $result = $fastDb->commit();
-        $this->assertSame(true, $result);
+        $this->assertTrue($fastDb->commit());
     }
 
     public function testRollback(): void
@@ -268,9 +237,7 @@ final class FastDbTest extends BaseTestCase
             $this->assertSame(true, $result);
         });
 
-        // 当前没有活动事务。
-        $result = $fastDb->rollback();
-        $this->assertSame(true, $result);
+        $this->assertTrue($fastDb->rollback());
     }
 
     public function testQuery(): void

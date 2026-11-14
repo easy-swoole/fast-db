@@ -53,28 +53,6 @@ final class PaginationObserverTest extends TestCase
         });
     }
 
-    public function testCompletionReentryPreservesResultAndRecordedPageSql(): void
-    {
-        $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
-            $db->configureQueryStack(true);
-            $page = $this->page();
-            $sql = $page->getLastPrepareQuery();
-            $this->queuePage($peer);
-            $this->textRows($peer, 'count', 37);
-            $this->textRows($peer, 'probe', 1);
-
-            $result = $db->query($page, onComplete: static function (QueryResult $result) use ($db, $page): void {
-                $page->raw('SELECT changed_by_completion');
-                $db->rawQuery('SELECT 1 AS probe');
-            });
-
-            $stack = $db->getQueryStack();
-            $this->assertSame([null, 'SELECT FOUND_ROWS() as count', 'SELECT 1 AS probe'], array_column($stack, 'rawQuery'));
-            $this->assertSame($sql, $stack[0]->getLastPrepareQuery());
-            $this->assertSame($sql, $result->getLastPrepareQuery());
-        });
-    }
-
     public function testGlobalObserverCannotChangeRecordingOfTheAlreadyExecutedPage(): void
     {
         $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {

@@ -16,6 +16,7 @@ use EasySwoole\FastDb\Beans\Query;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\QueryResult;
+use EasySwoole\FastDb\Tests\Model\ConvertedKey;
 use EasySwoole\Mysqli\Config;
 use EasySwoole\Mysqli\QueryBuilder;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -470,6 +471,29 @@ final class RelationPreloadTest extends TestCase
 
     public static function parentOutputModes(): array { return [[false], [true]]; }
 
+    public function testLazyAndPreloadedKeysAreConvertedOnTheTargetConnection(): void
+    {
+        $this->connection->database->exec("ALTER TABLE preload_parents ADD COLUMN route_key TEXT DEFAULT 'a'");
+        $other = new PreloadFixtureConnection($this->connection->database);
+        $other->connectionName = 'other';
+        $other->database->exec("INSERT INTO preload_children VALUES (14,3,'b','other group','[14]')");
+        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db,
+            [Coroutine::getCid() => ['default' => $this->connection, 'other' => $other]]);
+
+        $parent = new PreloadFixtureConvertedParent(['route_key' => 'a']);
+        $this->assertSame([14], array_column($parent->routedChildren()->list(), 'id'));
+        $this->assertSame(['b'], $other->queries[0]['parameters']);
+        $this->db->selectConnection('default');
+
+        $owner = new PreloadFixtureConvertedParent();
+        $owner->queryLimit()->where('id', 1)->withRelations('routedChildren');
+        $parent = $owner->all()->first();
+        $this->assertSame(['b', 'b'], $other->queries[1]['parameters']);
+        $this->assertSame([14], array_column($parent->routedChildren()->list(), 'id'));
+        $this->assertCount(2, $other->queries);
+        $this->db->selectConnection('default');
+    }
+
     public function testPreloadingDoesNotExecuteGetterBusinessLogic(): void
     {
         $owner = new PreloadFixtureParent();
@@ -599,6 +623,33 @@ final class RelationPreloadTest extends TestCase
         $this->assertSame([], $this->connection->queries);
     }
 
+    public function testManuallyConstructedRelationRequiresAnExplicitKeyEvenWhenItDefaultsToNull(): void
+    {
+        $this->connection->database->exec("INSERT INTO preload_children VALUES (14,3,NULL,'null child','[14]')");
+        $parent = new PreloadFixtureParent(['id' => 3]);
+        $this->assertNull($parent->group_code);
+        try {
+            $parent->groupChildren();
+            $this->fail('The nullable property default must not be used as a parent key');
+        } catch (RuntimeError $error) {
+            $this->assertSame('Relation requires a loaded or explicitly assigned parent field: group_code', $error->getMessage());
+        }
+        $this->assertSame([], $this->connection->queries);
+
+        $explicitNull = new PreloadFixtureParent(['id' => 3, 'group_code' => null]);
+        $this->assertSame([14], array_column($explicitNull->groupChildren()->list(), 'id'));
+        $this->assertStringContainsString('IS NULL', $this->connection->queries[0]['sql']);
+    }
+
+    public function testGeneratedPrimaryKeyIsAvailableForLazyRelations(): void
+    {
+        $parent = new PreloadFixtureParent(['group_code' => 'new', 'name' => 'new parent']);
+        $this->assertTrue($parent->insert());
+        $this->assertSame(4, $parent->id);
+        $this->assertSame([], $parent->children()->list());
+        $this->assertSame([4], $this->connection->queries[1]['parameters']);
+    }
+
     public static function missingParentKeySelections(): array
     {
         return [
@@ -615,6 +666,7 @@ final class RelationPreloadTest extends TestCase
         $owner->queryLimit()->where('id', 3)->fields($fields)->hideFields($hidden);
         $parent = $owner->all()->first();
         $this->assertSame('a', $parent->group_code);
+        $parent->group_code = 'b';
 
         try {
             $parent->groupChildren();
@@ -946,6 +998,23 @@ class PreloadFixtureInitializingParent extends PreloadFixtureParent
     }
 }
 
+class PreloadFixtureConvertedParent extends PreloadFixtureParent
+{
+    #[Property(convertObject: PreloadFixtureConnectionKey::class)]
+    public ?PreloadFixtureConnectionKey $route_key;
+
+    #[Relate(PreloadFixtureConstructorChild::class, 'group_code', type: RelationType::Many, selfProperty: 'route_key')]
+    public function routedChildren() { return $this->relateMany(); }
+}
+
+class PreloadFixtureConnectionKey extends ConvertedKey
+{
+    public function toValue(): string
+    {
+        return FastDb::getInstance()->selectConnection() === 'other' ? 'b' : $this->value;
+    }
+}
+
 class PreloadFixtureDefaultGroupParent extends PreloadFixtureParent
 {
     #[Property(defaultValue: 'a')]
@@ -1046,7 +1115,8 @@ class PreloadFixtureConnection extends Connection
         $this->queries[] = ['sql' => $sql, 'parameters' => $parameters];
         $statement = $this->database->prepare($sql);
         $statement->execute($parameters);
-        $this->lastAffectRows = $statement->rowCount(); $this->lastInsertId = 0;
+        $this->lastAffectRows = $statement->rowCount();
+        $this->lastInsertId = str_starts_with($sql, 'INSERT') ? (int) $this->database->lastInsertId() : 0;
         return $statement->columnCount() > 0 ? $statement->fetchAll(\PDO::FETCH_ASSOC) : true;
     }
 }
