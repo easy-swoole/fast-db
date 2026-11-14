@@ -4,6 +4,7 @@ namespace EasySwoole\FastDb\Internal;
 
 use EasySwoole\FastDb\RelationType;
 use EasySwoole\FastDb\Attributes\Relate;
+use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\Mysqli\QueryBuilder\TableReference;
 
@@ -30,6 +31,21 @@ final class RelationPlan
             throw new \InvalidArgumentException('Relation requires an identifiable target table');
         }
         return $target . '.' . TableReference::identifier($field);
+    }
+
+    /** 只检查 FastDb 自己负责的分页与一对一基数规则。 */
+    public static function checkPagination(QueryBuilder $query, RelationType $type, bool $preload = false): void
+    {
+        if (in_array('SQL_CALC_FOUND_ROWS', $query->getQueryOptions(), true)) {
+            throw new RuntimeError('Relation does not support withTotalCount()');
+        }
+        if ($query instanceof EntityQueryBuilder && $query->getLimitRowCount() !== null
+            && ($preload || $type === RelationType::One)) {
+            // 一对一要检测重复记录，批量预加载不能按整批截断。
+            throw new RuntimeError($preload
+                ? 'Relation preload does not support limit()'
+                : 'One-to-one relation does not support limit()');
+        }
     }
 
     /** 按需加载及预加载的缓存查询共用关联范围、字段和单条限制规则。 */

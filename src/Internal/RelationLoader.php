@@ -33,6 +33,7 @@ final class RelationLoader
         $query = $selection->__getQueryBuilder();
         $fields = $selection->getFields();
         $returnAsArray = $fields['returnAsArray'] ?? false;
+        RelationPlan::checkPagination($query, $relate->type);
         RelationPlan::buildLookup($query, $tableName ?? $target->tableName(), $relate,
             FieldCodec::compare($entity->{$relate->selfProperty}), $fields['fields'] ?? null);
         $key = $relate->cacheResult || $this->preloaded !== []
@@ -60,7 +61,7 @@ final class RelationLoader
             foreach ($rows as $row) {
                 $items[] = $returnAsArray ? $row : $hydrate($relate->targetEntity, $row);
             }
-            $data = new ListResult($items, $result->getTotalCount());
+            $data = new ListResult($items);
         }
         if ($relate->cacheResult) { $this->cache[$key] = $data; }
         return $data;

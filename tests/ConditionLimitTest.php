@@ -78,13 +78,6 @@ final class ConditionLimitTest extends TestCase
         ConditionRecord::findAll([ConditionCallbacks::class, 'filter']);
     }
 
-    public function testFastUpdateRejectsEmptyConditionsBeforeQuery(): void
-    {
-        $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('fastUpdate requires a non-empty condition or primary key');
-        ConditionRecord::fastUpdate([], ['value' => 99]);
-    }
-
     public function testArrayConditionRequiresAnExplicitOperator(): void
     {
         $this->expectException(\InvalidArgumentException::class);

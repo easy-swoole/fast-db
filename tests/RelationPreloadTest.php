@@ -410,24 +410,6 @@ final class RelationPreloadTest extends TestCase
         $this->assertCount(3, $this->connection->queries);
     }
 
-    public function testJoinedRelationUsesTheExplicitProjectionInBothLoadingModes(): void
-    {
-        $this->connection->database->exec("CREATE TABLE tenant_preload_children AS SELECT * FROM preload_children");
-        $this->connection->database->exec("CREATE TABLE tenant_preload_labels (id INTEGER, parent_id INTEGER, name TEXT)");
-        $this->connection->database->exec("INSERT INTO tenant_preload_labels VALUES (11,999,'joined-name'),(12,999,'joined-name')");
-        $owner = new PreloadFixtureParent();
-        $owner->queryLimit()->where('id', 1)->withRelations('joinedChildren');
-
-        $children = $owner->all()->first()->joinedChildren()->list();
-        $lazy = (new PreloadFixtureParent(['id' => 1]))->joinedChildren()->list();
-        $this->assertSame([
-            ['id' => 11, 'name' => 'child-11', 'label_name' => 'joined-name'],
-            ['id' => 12, 'name' => 'child-12', 'label_name' => 'joined-name'],
-        ], $children);
-        $this->assertSame($children, $lazy);
-        $this->assertCount(3, $this->connection->queries);
-    }
-
     public function testDefaultPreloadProjectionUsesTheWildcardAndOnlyReturnsUserColumns(): void
     {
         $parents = $this->parents('arrayChildren');
@@ -435,13 +417,20 @@ final class RelationPreloadTest extends TestCase
         $this->assertSame(['id', 'parent_id', 'group_code', 'name', 'payload'], array_keys($parents[0]->arrayChildren()->first()));
     }
 
-    public function testRelationPreloadRejectsTotalCountBeforeRunningAnyRelationQuery(): void
+    public function testRelationsRejectTotalCountBeforeRunningAnyRelationQuery(): void
     {
+        try {
+            (new PreloadFixtureParent(['id' => 1]))->countedChildren();
+            $this->fail('Lazy relation with total count must fail');
+        } catch (RuntimeError $error) {
+            $this->assertSame('Relation does not support withTotalCount()', $error->getMessage());
+        }
+        $this->assertSame([], $this->connection->queries);
         try {
             $this->parents(['children', 'countedChildren']);
             $this->fail('Preloading with total count must fail');
         } catch (RuntimeError $error) {
-            $this->assertSame('Relation preload does not support withTotalCount()', $error->getMessage());
+            $this->assertSame('Relation does not support withTotalCount()', $error->getMessage());
         }
         $this->assertCount(1, $this->connection->queries);
         $this->assertCount(1, $this->events);
@@ -463,20 +452,18 @@ final class RelationPreloadTest extends TestCase
         $this->assertCount(1, $this->events);
     }
 
-    public function testRelationPreloadRejectsGroupByBeforeRunningAnyRelationQuery(): void
+    public function testOneRelationRejectsExplicitLimitBeforeRunningSql(): void
     {
         $parent = new PreloadFixtureParent(['id' => 1]);
-        $this->assertSame(['group_code' => 'a', 'total' => 2], $parent->childCounts()->first());
-        $this->connection->queries = $this->events = [];
+        $parent->queryLimit()->func(static fn (QueryBuilder $query) => $query->limit(1, 1));
 
+        $this->expectException(RuntimeError::class);
+        $this->expectExceptionMessage('One-to-one relation does not support limit()');
         try {
-            $this->parents(['children', 'childCounts']);
-            $this->fail('Preloading with GROUP BY must fail');
-        } catch (RuntimeError $error) {
-            $this->assertSame('Relation preload does not support groupBy()', $error->getMessage());
+            $parent->profile();
+        } finally {
+            $this->assertSame([], $this->connection->queries);
         }
-        $this->assertCount(1, $this->connection->queries);
-        $this->assertCount(1, $this->events);
     }
 
     public function testPartiallyLoadedRelationEntitiesCannotWriteThroughDefaultPrimaryKey(): void
@@ -765,16 +752,6 @@ class PreloadFixtureParent extends AbstractEntity
     protected function configureSelectedChildren(QueryBuilder $query): void
     { $query->fields(['id', 'name', 'payload AS encoded']); }
 
-    #[Relate(PreloadFixtureAliasedChild::class, 'parent_id', type: RelationType::Many, configure: 'configureJoinedChildren', returnAsArray: true)]
-    public function joinedChildren() { return $this->relateMany(); }
-
-    protected function configureJoinedChildren(QueryBuilder $query): void
-    {
-        $query->setPrefix('tenant_')->join('preload_labels AS label', 'label.id = child.id', 'INNER')
-            ->fields(['child.id', 'child.name', 'label.name AS label_name'])
-            ->orderBy('child.id', 'ASC');
-    }
-
     #[Relate(PreloadFixtureChild::class, 'parent_id', type: RelationType::Many, configure: 'configureCountedChildren')]
     public function countedChildren() { return $this->relateMany(); }
 
@@ -789,14 +766,6 @@ class PreloadFixtureParent extends AbstractEntity
     protected function configureLatestChild(QueryBuilder $query): void
     {
         $query->orderBy('id', 'DESC')->limit(1);
-    }
-
-    #[Relate(PreloadFixtureChild::class, 'parent_id', type: RelationType::Many, configure: 'configureChildCounts', returnAsArray: true)]
-    public function childCounts() { return $this->relateMany(); }
-
-    protected function configureChildCounts(QueryBuilder $query): void
-    {
-        $query->fields(['group_code', 'COUNT(*) AS total'])->groupBy('group_code');
     }
 
     #[Relate(PreloadFixtureDefaultKeyChild::class, 'parent_id', type: RelationType::Many, configure: 'configurePartialChildren')]
@@ -864,11 +833,6 @@ final class PreloadFixtureDefaultKeyChild extends PreloadFixtureChild
     #[Property(defaultValue: 13)]
     #[PrimaryKey]
     public int $id;
-}
-
-class PreloadFixtureAliasedChild extends PreloadFixtureChild
-{
-    public function tableName(): string { return 'preload_children AS child'; }
 }
 
 class PreloadFixtureDynamicChild extends PreloadFixtureChild

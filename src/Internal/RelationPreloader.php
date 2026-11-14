@@ -72,25 +72,11 @@ final class RelationPreloader
                 $db->selectConnection($relationPlan->connectionName);
                 $tableName = $relationPlan->tableName;
                 $builder = $relationPlan->builder;
-                // 批量 LIMIT 会截断其他父对象的结果，不能写入单父键关联缓存。
-                if (!$builder instanceof EntityQueryBuilder) {
-                    throw new RuntimeError('Relation preload requires the entity query builder');
-                }
-                if ($builder->getLimitRowCount() !== null) {
-                    throw new RuntimeError('Relation preload does not support limit()');
-                }
-                // 批量分组可能把多个父对象的关系行合成一行，失去按父键回填的依据。
-                if ($builder->hasGroupBy()) {
-                    throw new RuntimeError('Relation preload does not support groupBy()');
-                }
+                RelationPlan::checkPagination($builder, $relationPlan->relate->type, preload: true);
                 $columns = $relationPlan->columns;
                 // 先生成不带具体父键的 SQL，配置和参数相同的父记录可共用一条批量查询。
                 $previewQuery = (clone $builder)->get($tableName, null, $columns);
                 $queryOptions = $previewQuery->getLastQueryOptions();
-                if (in_array('SQL_CALC_FOUND_ROWS', $queryOptions, true)) {
-                    // 批量查询的总数无法对应到单个父对象。
-                    throw new RuntimeError('Relation preload does not support withTotalCount()');
-                }
                 $cacheLookup = null;
                 if (!$returnAsArray) {
                     // 实体 getter 按单个父键匹配缓存，因此要保留该父对象自己的查询。

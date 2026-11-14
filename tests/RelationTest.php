@@ -71,9 +71,9 @@ final class RelationTest extends BaseTestCase
     public function testManyPaginationConditionsAndReset(): void
     {
         $student = new StudentModel(['id' => 1]);
-        $student->queryLimit()->where('score', 85, '>')->orderBy('score', 'DESC')->page(1, true, 1);
+        $student->queryLimit()->where('score', 85, '>')->orderBy('score', 'DESC')->page(1, false, 1);
         $scores = $student->score();
-        $this->assertSame(1, $scores->totalCount());
+        $this->assertNull($scores->totalCount());
         $this->assertCount(1, $scores->list());
         $score = $scores->list()[0];
         $this->assertInstanceOf(StudentScoreModel::class, $score);
@@ -165,27 +165,27 @@ final class RelationTest extends BaseTestCase
         $count = 0;
         FastDb::getInstance()->setOnQuery(static function () use (&$count): void { $count++; });
         $student = new CachedRelationStudent(['id' => 1]);
-        $student->queryLimit()->page(1, true, 1)->orderBy('score', 'ASC');
+        $student->queryLimit()->page(1, false, 1)->orderBy('score', 'ASC');
         $first = $student->score();
-        $this->assertSame(2, $first->totalCount());
-        $student->queryLimit()->page(1, true, 1)->orderBy('score', 'ASC');
+        $this->assertNull($first->totalCount());
+        $student->queryLimit()->page(1, false, 1)->orderBy('score', 'ASC');
         $this->assertSame($first, $student->score());
-        $this->assertSame(2, $count); // SELECT 和 FOUND_ROWS 都被缓存。
-        $student->queryLimit()->page(2, true, 1)->orderBy('score', 'ASC');
+        $this->assertSame(1, $count);
+        $student->queryLimit()->page(2, false, 1)->orderBy('score', 'ASC');
         $this->assertSame(90, $student->score()->list()[0]->score);
-        $this->assertSame(4, $count);
+        $this->assertSame(2, $count);
         $student->queryLimit()->where('score', 85, '>');
         $this->assertCount(1, $student->score()->list());
-        $this->assertSame(5, $count);
+        $this->assertSame(3, $count);
         $this->assertCount(2, $student->score()->list()); // 命中前的条件已清理。
-        $this->assertSame(6, $count);
+        $this->assertSame(4, $count);
         $student->queryLimit()->returnAsArray();
         $this->assertIsArray($student->studentInfo());
         $this->assertInstanceOf(StudentInfoModel::class, $student->studentInfo());
-        $this->assertSame(8, $count);
+        $this->assertSame(6, $count);
         $student->queryLimit()->fields(['id', 'note'], true);
         $this->assertSame(['id' => 1, 'note' => 'original'], $student->studentInfo());
-        $this->assertSame(9, $count);
+        $this->assertSame(7, $count);
     }
 
     public function testDisabledCacheAndDuplicateFailuresStillQuery(): void

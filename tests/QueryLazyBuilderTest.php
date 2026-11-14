@@ -140,7 +140,6 @@ final class QueryLazyBuilderTest extends TestCase
             'group' => [static fn(Query $q) => $q->groupBy('id')],
             'order' => [static fn(Query $q) => $q->orderBy('id')],
             'where' => [static fn(Query $q) => $q->where('id', 1)],
-            'required' => [static fn(Query $q) => $q->whereRequired('id', 1)],
             'or' => [static fn(Query $q) => $q->orWhere('id', 1)],
             'join' => [static fn(Query $q) => $q->join('owners o', 'o.id=i.ownerId', 'LEFT')],
             'callback' => [static fn(Query $q) => $q->func(static fn(QueryBuilder $b) => $b->where('id', 1))],

@@ -93,7 +93,11 @@ final class RelationPreloadCacheTest extends TestCase
             case 'connection': $this->db->selectConnection('other'); break;
             case 'parent-key': $parent->id = 2; break;
             case 'target': $relation = $this->relation(target: PreloadCacheAlternateChild::class); break;
-            case 'type': $relation = $this->relation(RelationType::One); break;
+            case 'type':
+                // 预加载缓存的查询有 LIMIT 2，单条关联由框架生成相同的 LIMIT 2。
+                $parent->queryLimit()->__getQueryBuilder()->reset();
+                $relation = $this->relation(RelationType::One);
+                break;
             case 'options': $parent->queryLimit()->func(static fn ($query) => $query->setQueryOption('SQL_BUFFER_RESULT')); break;
         }
         $actual = $this->load($loader, $parent, $relation, $table);

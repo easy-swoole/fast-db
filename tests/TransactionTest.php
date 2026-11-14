@@ -1147,6 +1147,8 @@ final class TransactionTest extends TestCase
 
     public function testChainAndReleaseFlagsAgainstRealServer(): void
     {
+        // 容量为 1 时，旧对象必须退出池登记，回调才能借到新连接。
+        $this->db->addDb(new Config(array_replace(MYSQL_CONFIG, ['maxObjectNum' => 1])));
         $flags = \EasySwoole\Mysqli\Transaction\TransactionCompletionFlags::ChainNoRelease;
         $this->db->begin();
         $this->write(1);
@@ -1163,11 +1165,20 @@ final class TransactionTest extends TestCase
             $this->db->begin();
             $this->write(3);
             $client = $this->db->currentConnection();
+            $oldSession = $this->db->rawQuery('SELECT CONNECTION_ID() AS id')->getResultOne()['id'];
+            $newSession = null;
+            $this->db->setOnQuery(function (QueryResult $result) use (&$newSession): void {
+                if (!str_ends_with($result->getRawSql() ?? '', ' RELEASE')) { return; }
+                $this->assertNull($this->db->currentConnection());
+                $newSession = $this->db->rawQuery('SELECT CONNECTION_ID() AS id')->getResultOne()['id'];
+            });
             $this->assertTrue($this->db->$operation($client, \EasySwoole\Mysqli\Transaction\TransactionCompletionFlags::NoChainRelease, 1.0));
             $this->assertNull($client->mysqlClient());
             $this->assertFalse($client->isInTransaction());
+            $this->assertNotSame($client, $this->db->currentConnection());
+            $this->assertNotNull($newSession);
+            $this->assertNotSame($oldSession, $newSession);
             $this->assertSame(3, $this->value());
-            $this->db->recycleContext();
         }
     }
 

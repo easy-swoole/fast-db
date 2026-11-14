@@ -4,7 +4,7 @@
 
 FastDb 是面向 Swoole 协程环境的 MySQL 数据访问库，组合连接池、SQL 构建器和基于 PHP Attributes 的实体映射。可以在 EasySwoole 框架内使用，也可以独立使用。
 
-本文面向 `3.x` 分支，使用 `easyswoole/mysqli` ^5.1 和 `easyswoole/pool` 3.x，以当前 `src/` 和 `composer.json` 为准。实体 API 位于 `AbstractEntity`，数据库与连接管理位于 `FastDb`，SQL 构建能力由 `easyswoole/mysqli` 提供。
+本文面向 `3.x` 分支，使用 `easyswoole/mysqli` ^5.1.2 和 `easyswoole/pool` 3.x，以当前 `src/` 和 `composer.json` 为准。实体 API 位于 `AbstractEntity`，数据库与连接管理位于 `FastDb`，SQL 构建能力由 `easyswoole/mysqli` 提供。
 
 ## 内部执行与实体状态
 
@@ -573,6 +573,8 @@ $entity->queryLimit()
 $entity->chunkById($processUser, chunkSize: 100, column: 'users.id');
 ```
 
+`chunkById()` 在单个结果集上推进游标。需要对 `UNION` 后的结果分块时，请用 `QueryBuilder` 显式构建外层查询、游标条件和排序。
+
 始终按该列 ASC 排序，从首批开始，再用“游标列 > 上一批最后的游标值”读取下一批；已有排序及页码偏移不决定遍历顺序和起点。每次回调接收一条实体；启用 `returnAsArray()` 时接收一条数组。与 `chunk()` 一样，后续页使用首个查询的表和连接。
 
 回调返回严格的 `false` 时立即停止，返回的计数包含触发停止的这一条；没有返回值或返回其他值时继续。每页通过 FastDb 的统一执行入口查询，沿用 `all()` 的实体转换和输出规则，保留查询条件及查询回调，不自动开启事务或统计总数。方法结束或抛异常后清理本次查询配置。
@@ -743,7 +745,7 @@ $rows = User::findAll($filter->configure(...), returnAsArray: true);
 $rows = User::findAll(Closure::fromCallable('configureUserQuery'), returnAsArray: true);
 ```
 
-`fastUpdate()` 和 `fastDelete()` 的空数组、空字符串条件会报错。需要更新整表时，使用显式的构建器回调或原始查询。
+`fastUpdate()` 和 `fastDelete()` 在构建 SQL 前要求有 `WHERE`。传空条件数组、回调没有添加条件，或回调清除了条件时，会抛出 `InvalidArgumentException`。空字符串作为主键也会报错。条件匹配多少行由调用者决定。需要执行无 `WHERE` 的整表操作，请显式构建 `QueryBuilder` 并通过 `FastDb::query()` 执行，或使用 `rawQuery()`。
 
 ### 删除
 
@@ -759,7 +761,7 @@ $affected = User::fastDelete(function (QueryBuilder $query): void {
 });
 ```
 
-`delete()` 使用对象主键并触发删除钩子，影响至少一行才返回 `true`。`fastDelete($deleteLimit, $tableName = null, $onQuery = null)` 直接删除并返回影响行数，不触发实体钩子。空数组和空字符串直接抛出异常。回调传入的构建器按回调提供的条件执行，空 WHERE 会删除所有记录。
+`delete()` 使用对象主键并触发删除钩子，影响至少一行才返回 `true`。`fastDelete($deleteLimit, $tableName = null, $onQuery = null)` 直接删除并返回影响行数，不触发实体钩子。快捷删除同样要求在构建 SQL 前提供 `WHERE`。
 
 实例 `update()` / `delete()` 仅将未赋值、null 或空字符串视为缺失主键；整数 `0` 和字符串 `'0'` 均可正常更新、删除。`fastDelete(0)` 与 `fastDelete('0')` 都会生成主键等值条件。
 
@@ -1213,6 +1215,8 @@ class AuditedUser extends User
 
 ## 关联查询
 
+关联用于按父键和外键从单个目标表加载明细。支持过滤、排序和选列。联表、派生表、`UNION`、分组聚合和行锁由调用者用 `QueryBuilder` 显式构建并组装结果。
+
 关联默认按需执行独立查询。使用 `queryLimit()->withRelations()` 可以显式批量预加载；未声明预加载时，不会额外查询关联表。
 
 ### 定义一对一和一对多关联
@@ -1255,17 +1259,16 @@ if ($user !== null) {
     $user->queryLimit()
         ->where('status', 1)
         ->orderBy('id', 'DESC')
-        ->page(1, true, 20);
+        ->page(1, false, 20);
     $activeOrders = $user->orders();
     $list = $activeOrders->list(); // 订单实体数组。
-    $total = $activeOrders->totalCount(); // 满足条件的总数，不限于当前页。
 
     $user->queryLimit()->returnAsArray();
     $profileRow = $user->profile(); // 原始数组|null。
 }
 ```
 
-一对一未命中时返回 `null`；一对多未命中时返回包含空列表的 `ListResult`。不启用总数计算时，`totalCount()` 返回 `null`。一对一查询若匹配多条记录会抛出 `RuntimeError`，应让数据满足预期的一对一关系。
+一对一未命中时返回 `null`；一对多未命中时返回包含空列表的 `ListResult`。一对多按需加载支持 `limit()` 和 `page()` 限制明细条数，`totalCount()` 返回 `null`，设置 `withTotalCount()` 会抛出异常。一对一拒绝显式 `LIMIT`，匹配多条时抛出 `RuntimeError`。取最新一条或第 N 条时请使用 `QueryBuilder`。
 
 关联查询正常执行后会清理当前实体的查询配置。下一次关联查询需要重新设置过滤、排序、分页和字段限制。
 
@@ -1350,16 +1353,7 @@ $orders = $users[0]->activeOrders(); // 同样的配置可命中预加载缓存�
 
 按需加载和预加载共用配置方法。配置方法通过传入的构建器设置 SQL 条件、排序或字段；关系返回数组的规则使用 `Relate::returnAsArray` 声明。预加载从 `type` 获取关联类型，不执行 getter。
 
-配置会按父实体分别应用，相同连接、目标实体、关联类型、表名、条件参数、排序、字段和返回形式的计划合并查询。目标表由目标实体的 `tableName()` 确定，连接在配置及目标模型初始化后记录。按需加载和预加载都使用调用方的投影，省略投影时沿用 mysqli 的 `*`。预加载只追加内部匹配索引，回填前移除。JOIN 的同名列可能在结果行里互相覆盖，调用方应显式限定列名并为额外列指定输出别名。
-
-```php
-// 关联目标表使用 child 别名。
-protected function configureChildren(QueryBuilder $query): void
-{
-    $query->join('labels AS label', 'label.child_id = child.id', 'INNER')
-        ->fields(['child.id', 'child.name', 'label.name AS label_name']);
-}
-```
+配置会按父实体分别应用，相同连接、目标实体、关联类型、表名、条件参数、排序、字段和返回形式的计划合并查询。目标表由目标实体的 `tableName()` 确定，连接在配置及目标模型初始化后记录。按需加载和预加载都使用调用方的投影，省略投影时沿用 mysqli 的 `*`。预加载只追加内部匹配索引，回填前移除。
 
 父关联键必须已赋值。显式的 null 值使用 `IS NULL` 匹配。FastDb 用目标表名或别名限定自己生成的关联外键条件。复杂表源可用 QueryBuilder 显式查询。
 
@@ -1367,7 +1361,7 @@ protected function configureChildren(QueryBuilder $query): void
 
 常见固定关系、每种关系不超过 250 个唯一父关联键时，通常是 1 条父查询加每种关系 1 条批查询；例如 100 个父实体同时预加载 profile 和 orders，通常为 3 条 SQL。更大的结果按每组查询计划、每 250 个去重父键分批；相同计划还可合并。若动态条件让每个父对象都产生不同计划，关联查询仍可能达到 N 条，不保证任意关系都固定为一条批 SQL。父分页的额外总数查询、业务方法或钩子自己执行的 SQL 另计；空父列表不执行关联 SQL。
 
-预加载关系配置了 `limit()`、`withTotalCount()` 或 `groupBy()` 时，会在执行任何预加载关联查询前抛出异常。需要限定单个父对象的关联条数时，可以按需加载。需要一批父对象的关联统计时，请显式构造 QueryBuilder，例如按 `user_id` 和 `status` 分组统计订单，再按 `user_id` 组装结果。父列表仍支持分页和总数统计。`all()` 预加载当前列表，`chunk()` / `chunkById()` 只预加载当前批次，在逐条业务回调前完成。
+预加载关系拒绝 `limit()` 和 `withTotalCount()`。父列表仍支持分页和总数统计。`all()` 预加载当前列表，`chunk()` / `chunkById()` 只预加载当前批次，在逐条业务回调前完成。
 
 预加载声明只作用于本次查询，执行后会被消费；查询模板或实体克隆会保留尚未消费的声明，并独立复制查询配置。实体缓存按连接、父键、实际 SQL、参数和返回模式匹配，更改条件、父键、目标表或实体/数组模式不会错误命中旧结果。`clearRelationCache()` 同时清除预加载结果和普通关联缓存，之后 getter 恢复查询；数组附加值已经是普通数组，不受该方法影响。`cacheResult: false` 只关闭按需查询缓存，不会禁用显式预加载的结果。缓存不会自动感知外部写入或事务结果，长生命周期实体应按需清理。
 
@@ -1454,7 +1448,7 @@ if ($user !== null) {
 }
 ```
 
-缓存按当前连接名称、目标实体、关联类型、生成的 SQL、绑定参数及返回形式区分。改变关联字段值、过滤条件、排序、分页、选择列、目标表或实体/数组返回形式时，会使用不同缓存项。分页总数也随列表缓存；需要重复命中分页查询时，每次设置相同的分页和排序条件。
+缓存按当前连接名称、目标实体、关联类型、生成的 SQL、绑定参数及返回形式区分。改变关联字段值、过滤条件、排序、分页、选择列、目标表或实体/数组返回形式时，会使用不同缓存项。需要重复命中分页查询时，每次设置相同的分页和排序条件。
 
 `null` 和空列表同样会缓存；查询异常及一对一匹配多条的异常不会缓存。命中缓存时仍清理本次查询配置，但不会触发查询日志回调。不同父实体实例不共享缓存。
 
@@ -1588,7 +1582,7 @@ flags 不接受整数、枚举的 `value` 或错误的枚举类型；这些输�
 | `ChainNoRelease` | `AND CHAIN NO RELEASE` | 开始新事务并保留连接 |
 | `NoChainNoRelease` | `AND NO CHAIN NO RELEASE` | 不开始新事务，保留连接；FastDb 默认值 |
 
-使用默认 `NoChainNoRelease` 可明确结束事务并保留池内连接。Chain / ChainNoRelease 会开始新事务，Release / NoChainRelease 会关闭连接；实际事务状态由 Connection 直接读取底层协议。需要明确的结束行为时，应显式选择对应 flags。
+使用默认 `NoChainNoRelease` 可明确结束事务并保留池内连接。Chain / ChainNoRelease 会开始新事务，`Release` / `NoChainRelease` 成功时会关闭连接，FastDb 在查询回调前移除并淘汰这次池连接借用。同一协程随后执行独立查询时按需借用新连接。实际事务状态由 Connection 直接读取底层协议。需要明确的结束行为时，应显式选择对应 flags。
 
 FastDb 查询和事务执行超时抛出 `EasySwoole\FastDb\Exception\TimeoutException`，驱动会关闭失步连接。提交超时可能发生在服务端已提交、客户端尚未收到响应时，结果需要结合业务记录核实，不能直接重试提交。事务日志和查询栈中的 SQL 包含 flags 对应的完整语句，例如 `START TRANSACTION READ ONLY`、`COMMIT AND NO CHAIN NO RELEASE`。
 
@@ -1862,7 +1856,7 @@ Connection 的 `getLastAffectRows()` / `getLastInsertId()` 始终表示最后一
 
 影响行数和自增 ID 类型为 `int|string|null`，超大无符号值保留为字符串，未查询或查询失败时为 null。影响行数与自增 ID 在查询成功后、日志回调执行前记录为快照，不会被后续 SQL 覆盖。`query()` 和 `rawQuery()` 的可选 `$timeout` 控制本次查询超时。
 
-分页总数及对应查询结果随主查询的 QueryResult 一起保存，可直接读取 `$result->getTotalCount()` 和 `$result->getTotalResult()`。实体列表与关联列表根据该次结果的查询快照判断是否读取总数；观察回调复用原构建器执行其他查询，不会改变外层是否返回总数。
+分页总数及对应查询结果随主查询的 QueryResult 一起保存，可直接读取 `$result->getTotalCount()` 和 `$result->getTotalResult()`。实体列表从本次查询结果读取总数，观察回调复用原构建器执行其他查询时，外层总数仍取自原查询。
 
 `getDuration()` 从取得连接后开始计时，不把获取连接或日志回调算进去。`query(callable)` 的工厂在该执行阶段内运行，因此也包含工厂构建耗时，不能把它等同于纯服务端 SQL 耗时。
 

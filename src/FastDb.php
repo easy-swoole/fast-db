@@ -173,9 +173,15 @@ class FastDb
         // 丢失的事务也走执行入口，由驱动报告原异常并记录本次失败。
         if (!$client->isInTransaction() && !$client->mysqlClient()?->isTransactionLost()) { return true; }
         $sql = ($rollback ? 'ROLLBACK' : 'COMMIT') . $flags->toSqlSuffix();
+        $onComplete = $flags->releasesConnection() ? function (QueryResult $result, Connection $client): void {
+            // 显式 RELEASE 已关闭会话，先淘汰本次借用，查询回调才能正常借用新连接。
+            if ($result->getResult() === true && isset($client->connectionName)) {
+                $this->recycleConnection(Coroutine::getCid(), $client->connectionName, $client, discard: true);
+            }
+        } : null;
         return $this->execute($client, static fn () => $rollback
             ? $client->rollbackTransaction($flags, $timeout) : $client->commitTransaction($flags, $timeout),
-            null, $sql)->getResult() === true;
+            null, $sql, onComplete: $onComplete)->getResult() === true;
     }
 
     public function isInTransaction(?Connection $connection = null): bool
@@ -332,14 +338,18 @@ class FastDb
         $this->diagnostics?->clear($cid);
     }
 
-    private function recycleConnection(int $cid, string $name, Connection $client): void
+    private function recycleConnection(int $cid, string $name, Connection $client, bool $discard = false): void
     {
         // 回调可能已经归还连接，只有当前登记的连接才由本次流程归还。
         if (($this->currentConnection[$cid][$name] ?? null) !== $client) { return; }
         unset($this->currentConnection[$cid][$name]);
         if ($this->currentConnection[$cid] === []) { unset($this->currentConnection[$cid]); }
         try {
-            $this->pools[$name]->recycleObj($client);
+            if ($discard) {
+                ($this->pools[$name] ?? null)?->unsetObj($client);
+            } else {
+                $this->pools[$name]->recycleObj($client);
+            }
         } catch (\Throwable) {
             // 连接池负责处理归还失败。隔离异常，避免清理覆盖业务结果或中断其他连接归还。
         }

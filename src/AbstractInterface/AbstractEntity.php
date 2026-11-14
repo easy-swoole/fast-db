@@ -303,15 +303,11 @@ abstract class AbstractEntity implements \JsonSerializable
         callable|null $onQuery = null
     ):int|null|string
     {
-        if ($deleteLimit === [] || $deleteLimit === '') {
-            throw new \InvalidArgumentException('fastDelete requires a non-empty condition or primary key');
-        }
 
         if ($tableName === null) {
             $tableName = (new static())->tableName();
         }
-        $query = new QueryBuilder();
-        self::applyQueryLimit($query, $deleteLimit, 'delete record');
+        $query = self::fastWriteQuery($deleteLimit, 'delete record');
         $query->delete($tableName);
         return self::callQuery($query, $onQuery)->getAffectedRows();
     }
@@ -352,14 +348,10 @@ abstract class AbstractEntity implements \JsonSerializable
         callable|null $onQuery = null
     ):bool|int|string
     {
-        if ($updateLimit === [] || $updateLimit === '') {
-            throw new \InvalidArgumentException('fastUpdate requires a non-empty condition or primary key');
-        }
         if ($tableName === null) {
             $tableName = (new static())->tableName();
         }
-        $query = new QueryBuilder();
-        self::applyQueryLimit($query, $updateLimit, 'update record');
+        $query = self::fastWriteQuery($updateLimit, 'update record');
         $query->update($tableName,$data);
         return self::callQuery($query, $onQuery)->getAffectedRows();
     }
@@ -719,6 +711,19 @@ abstract class AbstractEntity implements \JsonSerializable
         return static::callQuery($query, $this->onQuery)->getResult()[0] ?? [];
     }
 
+    private static function fastWriteQuery(array|callable|string|int $limit, string $operation): QueryBuilder
+    {
+        if ($limit === '') {
+            throw new \InvalidArgumentException('Fast writes require a non-empty primary key');
+        }
+        $query = new QueryBuilder();
+        self::applyQueryLimit($query, $limit, $operation);
+        if (!$query->hasWhere()) {
+            throw new \InvalidArgumentException('Fast writes require a WHERE condition');
+        }
+        return $query;
+    }
+
     /** 标量是主键，数组是条件；数组或字符串形式的回调由调用方显式转换。 */
     private static function applyQueryLimit(QueryBuilder $query, array|callable|string|int|null $limit,
         string $operation): void
@@ -803,9 +808,8 @@ abstract class AbstractEntity implements \JsonSerializable
             $this->relationLoader ??= new RelationLoader();
             $selection = $this->queryLimit();
             $this->configureRelation($relate, $selection);
-            $onTotalQuery = $expectedType === RelationType::Many ? $this->notifyTotalQuery(...) : null;
             return $this->relationLoader->load($this, $selection, $relate, $tableName,
-                fn ($query) => static::callQuery($query, $this->onQuery, onTotalQuery: $onTotalQuery),
+                fn ($query) => static::callQuery($query, $this->onQuery),
                 fn () => $this->resetQueryOptions(), self::hydrateEntity(...));
         } finally {
             $this->resetQueryOptions();

@@ -10,7 +10,6 @@ final class EntityQueryBuilder extends QueryBuilder
 {
     private ?array $duplicateColumns = null;
     private ?int $limitRowCount = null;
-    private bool $hasGroupBy = false;
 
     public function limit(int $one, ?int $two = null): QueryBuilder
     {
@@ -21,17 +20,6 @@ final class EntityQueryBuilder extends QueryBuilder
     public function getLimitRowCount(): ?int
     {
         return $this->limitRowCount;
-    }
-
-    public function groupBy(mixed $groupByField): QueryBuilder
-    {
-        $this->hasGroupBy = true;
-        return parent::groupBy($groupByField);
-    }
-
-    public function hasGroupBy(): bool
-    {
-        return $this->hasGroupBy;
     }
 
     public function onDuplicate(mixed $updateColumns): QueryBuilder
@@ -66,7 +54,6 @@ final class EntityQueryBuilder extends QueryBuilder
         // 驱动构建完一条 SQL 就会重置选项，这些标记也只属于当前查询。
         $this->duplicateColumns = null;
         $this->limitRowCount = null;
-        $this->hasGroupBy = false;
         return parent::reset();
     }
 }

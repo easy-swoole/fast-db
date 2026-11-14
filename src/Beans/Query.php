@@ -149,13 +149,6 @@ class Query
         return $this;
     }
 
-    /** @internal 构建 SQL 前调用，使已有条件始终与主键或关联外键约束共同成立。 */
-    function whereRequired(string $col, mixed $whereValue): Query
-    {
-        $this->builder()->groupExistingWhere()->where($col, $whereValue, '=', 'AND');
-        return $this;
-    }
-
     function orWhere(string $col, mixed $whereValue, $operator = '='):Query
     {
         $this->builder()->orWhere($col, $whereValue, $operator);

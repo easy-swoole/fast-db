@@ -134,20 +134,51 @@ final class EntityQueryBoundaryTest extends TestCase
         $this->assertSame(3, (int)$this->client->database->query('SELECT COUNT(*) FROM query_boundary')->fetchColumn());
     }
 
-    #[DataProvider('emptyDeleteConditions')]
-    public function testFastDeleteRejectsEmptyConditionsWithoutExecutingSql(array|string $condition): void
+    public static function missingFastWriteConditions(): iterable
     {
-        try {
-            QueryBoundaryRecord::fastDelete($condition);
-            $this->fail('Expected an empty delete condition to fail');
-        } catch (\InvalidArgumentException $error) {
-            $this->assertStringContainsString('non-empty condition', $error->getMessage());
+        $conditions = [
+            'empty array' => [[], 'WHERE condition'],
+            'empty primary key' => ['', 'non-empty primary key'],
+            'empty callback' => [static function (QueryBuilder $query): void {}, 'WHERE condition'],
+            'only limit' => [static fn (QueryBuilder $query) => $query->limit(1), 'WHERE condition'],
+            'only join' => [static fn (QueryBuilder $query) => $query->join('other', 'other.id = query_boundary.id'), 'WHERE condition'],
+            'cleared conditions' => [static fn (QueryBuilder $query) => $query->where('id', 'trim')->reset(), 'WHERE condition'],
+        ];
+        foreach (['update', 'delete'] as $operation) {
+            foreach ($conditions as $case => [$condition, $message]) {
+                yield "$operation $case" => [$operation, $condition, $message];
+            }
         }
-        $this->assertSame([], $this->client->queries);
-        $this->assertSame(3, (int)$this->client->database->query('SELECT COUNT(*) FROM query_boundary')->fetchColumn());
     }
 
-    public static function emptyDeleteConditions(): array { return [[[]], ['']]; }
+    #[DataProvider('missingFastWriteConditions')]
+    public function testFastWritesRejectMissingConditionsBeforeExecutingSql(string $operation,
+        array|string|callable $condition, string $message): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage($message);
+        try {
+            if ($operation === 'update') {
+                QueryBoundaryRecord::fastUpdate($condition, ['order' => 99]);
+            } else {
+                QueryBoundaryRecord::fastDelete($condition);
+            }
+        } finally {
+            $this->assertSame([], $this->client->queries);
+        }
+    }
+
+    public function testFastWritesUseExplicitRawAndGroupedWhereConditions(): void
+    {
+        $allRows = static fn (QueryBuilder $query) => $query->whereRaw('1 = 1');
+        $this->assertSame(3, QueryBoundaryRecord::fastUpdate($allRows, ['order' => 99]));
+
+        $oneRow = static fn (QueryBuilder $query) => $query->whereGroup(
+            static fn (QueryBuilder $group) => $group->where('id', 'trim')
+        );
+        $this->assertSame(1, QueryBoundaryRecord::fastDelete($oneRow));
+        $this->assertSame(['is_object', 'other'], array_column(QueryBoundaryRecord::findAll(returnAsArray: true), 'id'));
+    }
 
     public static function missingKeys(): iterable
     {
@@ -340,16 +371,14 @@ final class EntityQueryBoundaryTest extends TestCase
     public static function paginationModes(): iterable
     {
         foreach (['global', 'entity'] as $observer) {
-            foreach ([false, true] as $relation) {
-                foreach ([false, true] as $total) {
-                    yield "$observer relation=$relation total=$total" => [$observer, $relation, $total];
-                }
+            foreach ([false, true] as $total) {
+                yield "$observer total=$total" => [$observer, $total];
             }
         }
     }
 
     #[DataProvider('paginationModes')]
-    public function testTotalsFollowTheExecutedQueryWhenCallbacksReuseItsBuilder(string $observer, bool $relation, bool $total): void
+    public function testTotalsFollowTheExecutedQueryWhenCallbacksReuseItsBuilder(string $observer, bool $total): void
     {
         $entity = new QueryBoundaryRecord(['id' => 'owner', 'grp' => 1]);
         $entity->queryLimit()->limit(1, $total)->returnAsArray();
@@ -373,8 +402,8 @@ final class EntityQueryBoundaryTest extends TestCase
         };
         if ($observer === 'global') { $this->db->setOnQuery($callback); }
         else { $entity->setOnQuery($callback); }
-        $list = $relation ? $entity->related() : $entity->all();
-        $expectedTotal = $total ? ($relation ? 2 : 3) : null;
+        $list = $entity->all();
+        $expectedTotal = $total ? 3 : null;
         $this->assertSame($expectedTotal, $savedTotal);
         $this->assertSame($expectedTotal, $list->totalCount());
         $this->assertCount(1, $list);
@@ -383,10 +412,7 @@ final class EntityQueryBoundaryTest extends TestCase
         $this->assertNull($entity->queryLimit()->getFields());
     }
 
-    public static function paginatedLists(): array { return ['entity' => [false], 'relation' => [true]]; }
-
-    #[DataProvider('paginatedLists')]
-    public function testTotalNotificationUsesTheEntityObserverInstalledByTheMainQuery(bool $relation): void
+    public function testTotalNotificationUsesTheEntityObserverInstalledByTheMainQuery(): void
     {
         $entity = new QueryBoundaryRecord(['id' => 'owner', 'grp' => 1]);
         $entity->queryLimit()->limit(1, true);
@@ -403,8 +429,8 @@ final class EntityQueryBoundaryTest extends TestCase
             });
         });
 
-        $list = $relation ? $entity->related() : $entity->all();
-        $this->assertSame($relation ? 2 : 3, $list->totalCount());
+        $list = $entity->all();
+        $this->assertSame(3, $list->totalCount());
         $this->assertSame(['global-main', 'global-total', 'entity-main', 'entity-total'], $events);
     }
 }
@@ -418,8 +444,6 @@ class QueryBoundaryRecord extends AbstractEntity
     #[Property] public int $order;
     #[Property] public int $grp;
     public function tableName(): string { return 'query_boundary'; }
-    #[Relate(self::class, 'grp', selfProperty: 'grp', type: RelationType::Many)]
-    public function related() { return $this->relateMany(); }
 }
 
 /** 执行实际 SQLite SQL，仅模拟 SQLite 不提供的 FOUND_ROWS() 结果。 */
