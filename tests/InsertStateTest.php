@@ -178,17 +178,22 @@ final class InsertStateTest extends TestCase
     }
 
     #[DataProvider('observerModes')]
-    public function testInsertAcceptsItsBaselineBeforeAnObserverReentersUpdate(string $mode): void
+    public function testInsertClearsItsWriteFieldsAndAcceptsItsBaselineBeforeAnObserverReentersUpdate(string $mode): void
     {
         $entity = new InsertStateRecord(['name' => 'before']);
+        $entity->queryLimit()->fields(['name'])->hideFields('payload');
         $this->observe($mode, $entity, function (QueryResult $result) use ($entity): void {
             if (!str_starts_with($result->getLastPrepareQuery() ?? '', 'INSERT')) { return; }
-            $entity->name = 'nested';
+            $this->assertNull($entity->queryLimit()->getFields());
+            $this->assertSame(['payload'], $entity->queryLimit()->getHideFields());
+            $entity->score = 50;
             $this->assertTrue($entity->update());
         });
+        $entity->name = 'inserted';
         $this->assertTrue($entity->insert());
-        $this->assertSame('nested', $entity->name);
-        $this->assertSame('nested', $this->client->row()['name']);
+        $this->assertSame('inserted', $this->client->row()['name']);
+        $this->assertSame(50, $this->client->row()['score']);
+        $this->assertSame([50, 1], $this->client->queries[1]['parameters']);
         $this->assertTrue($entity->update());
         $this->assertCount(2, $this->client->queries);
         $entity->name = 'before';
@@ -290,6 +295,32 @@ final class InsertStateTest extends TestCase
         $this->assertCount(3, $this->client->queries);
         $this->assertTrue($entity->update());
         $this->assertCount(3, $this->client->queries);
+    }
+
+    public function testPersistFieldLimitOnlyRestrictsSerialization(): void
+    {
+        $this->client->database->exec("INSERT INTO insert_state (id, name, score) VALUES (1, 'before', 0)");
+        $owner = new InsertStateRecord();
+        $owner->queryLimit()->where('id', 1)->fields(['id', 'name', 'payload'])
+            ->hideFields('payload')->persistFieldLimit();
+        $entity = $owner->all()->first();
+
+        $this->assertSame(['id' => 1, 'name' => 'before'], $entity->toArray());
+        $this->assertSame(['id' => 1, 'name' => 'before'], json_decode(json_encode($entity, JSON_THROW_ON_ERROR), true));
+        $entity->score = 60;
+        $this->assertTrue($entity->update());
+        $this->assertSame(60, $this->client->row()['score']);
+        $this->assertSame([60, 1], $this->client->queries[1]['parameters']);
+
+        $entity = $owner->queryLimit()->fields(['id', 'name'])->persistFieldLimit()->returnEntity()->all()->first();
+        $entity->name = 'after';
+        $entity->score = 70;
+        $entity->queryLimit()->fields(['name']);
+        $this->assertSame(['name' => 'after'], $entity->toArray());
+        $this->assertTrue($entity->update());
+        $this->assertSame('after', $this->client->row()['name']);
+        $this->assertSame(60, $this->client->row()['score']);
+        $this->assertSame(['score' => 70], $entity->getChanges());
     }
 
     public function testHiddenFieldsStillParticipateInDatabaseWrites(): void

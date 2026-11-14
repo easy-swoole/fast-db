@@ -47,21 +47,34 @@ final class RelationLoader
 
         $result = $execute($query);
         $rows = $result->getResult();
-        if ($relate->type === RelationType::One) {
-            if (empty($rows)) { $data = null; }
-            elseif (count($rows) > 1) { throw new RuntimeError('more than one record hit is no allow in relateOne method'); }
-            elseif ($returnAsArray) { $data = $rows[0]; }
-            else {
-                // 单条实体赋值前结束父查询配置，子类赋值或字段转换时可重入父模型；最终清理由实体入口负责。
-                $beforeOneHydration();
-                $data = $hydrate($relate->targetEntity, $rows[0], $target);
+        $db = !$returnAsArray && $rows !== [] ? FastDb::getInstance() : null;
+        $connectionToRestore = $db?->selectConnection();
+        try {
+            if ($relate->type === RelationType::One) {
+                if (empty($rows)) { $data = null; }
+                elseif (count($rows) > 1) { throw new RuntimeError('more than one record hit is no allow in relateOne method'); }
+                elseif ($returnAsArray) { $data = $rows[0]; }
+                else {
+                    // 单条实体赋值前结束父查询配置，子类赋值或字段转换时可重入父模型；最终清理由实体入口负责。
+                    $beforeOneHydration();
+                    $db->selectConnection($result->getConnectionName());
+                    $data = $hydrate($relate->targetEntity, $rows[0], $target);
+                }
+            } else {
+                $items = [];
+                foreach ($rows as $row) {
+                    if ($returnAsArray) {
+                        $items[] = $row;
+                    } else {
+                        // 上一个模型的初始化可能切库，每次填充都使用本次查询的连接。
+                        $db->selectConnection($result->getConnectionName());
+                        $items[] = $hydrate($relate->targetEntity, $row);
+                    }
+                }
+                $data = new ListResult($items);
             }
-        } else {
-            $items = [];
-            foreach ($rows as $row) {
-                $items[] = $returnAsArray ? $row : $hydrate($relate->targetEntity, $row);
-            }
-            $data = new ListResult($items);
+        } finally {
+            if ($db !== null) { $db->selectConnection($connectionToRestore); }
         }
         if ($relate->cacheResult) { $this->cache[$key] = $data; }
         return $data;

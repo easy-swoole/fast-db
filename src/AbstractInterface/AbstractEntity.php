@@ -410,29 +410,13 @@ abstract class AbstractEntity implements \JsonSerializable
                 }
                 $compareValues = $confirmed;
             }
-            $isSuccess = false;
             $autoIncrement = $entityRef->getAutoIncrementProperty();
             if ($autoIncrement !== null && array_key_exists($autoIncrement->name, $data)) {
                 // 显式写入自增字段时保留调用方给出的值。
                 $autoIncrement = null;
             }
-            static::callQuery($query, $this->onQuery,
-                function (QueryResult $result) use ($compareValues, $autoIncrement, &$isSuccess): void {
-                    $isSuccess = $result->getResult() === true;
-                    if (!$isSuccess) { return; }
-                    $insertId = $result->getInsertId();
-                    if ($autoIncrement !== null && $insertId >= 1) {
-                        // 先按字段定义转换并建立基准，公开回调可直接使用生成的值。
-                        $field = $autoIncrement->name;
-                        $this->{$field} = FieldCodec::assign($autoIncrement, $insertId);
-                        $compareValues[$field] = FieldCodec::compare($this->{$field});
-                    }
-                    // 只接受本次成功写入字段，不重新赋值，也不覆盖稍后公开回调的修改。
-                    $this->entityState->accept($compareValues);
-                });
-            return $isSuccess;
         } finally {
-            // 字段白名单只作用于本次插入，隐藏字段继续用于序列化。
+            // 执行 SQL 前消费本次白名单，公开回调可用新的查询配置。
             $hideFields = $this->queryBuilder?->getHideFields();
             $this->resetQueryOptions();
             if ($hideFields !== null) {
@@ -440,6 +424,23 @@ abstract class AbstractEntity implements \JsonSerializable
                 $this->queryBuilder = (new Query($this))->hideFields($hideFields);
             }
         }
+
+        $isSuccess = false;
+        static::callQuery($query, $this->onQuery,
+            function (QueryResult $result) use ($compareValues, $autoIncrement, &$isSuccess): void {
+                $isSuccess = $result->getResult() === true;
+                if (!$isSuccess) { return; }
+                $insertId = $result->getInsertId();
+                if ($autoIncrement !== null && $insertId >= 1) {
+                    // 先按字段定义转换并建立基准，公开回调可直接使用生成的值。
+                    $field = $autoIncrement->name;
+                    $this->{$field} = FieldCodec::assign($autoIncrement, $insertId);
+                    $compareValues[$field] = FieldCodec::compare($this->{$field});
+                }
+                // 只接受本次成功写入字段，不重新赋值，也不覆盖稍后公开回调的修改。
+                $this->entityState->accept($compareValues);
+            });
+        return $isSuccess;
     }
 
     public static function findRecord(
@@ -649,11 +650,8 @@ abstract class AbstractEntity implements \JsonSerializable
                 }
                 $entity = self::hydrateEntity(static::class, $item);
                 if ($selection->isPersistFieldLimit()) {
-                    $entity->queryLimit()->hideFields($hideFields);
-                    $fields = $selection->getFields();
-                    if (!empty($fields)) {
-                        $entity->queryLimit()->fields(...$fields);
-                    }
+                    $entity->queryLimit()->hideFields($hideFields)
+                        ->inheritOutputFields($selection->getFields()['fields'] ?? null);
                 }
                 $list[] = $entity;
             }

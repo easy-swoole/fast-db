@@ -226,6 +226,28 @@ final class RelationPreloadTest extends TestCase
         $this->assertCount(2, $this->connection->queries);
     }
 
+    public function testOneRelationHydratesOnTheQueryConnectionAndRestoresTheObserverSelection(): void
+    {
+        $this->connection->database->exec("INSERT INTO preload_profiles VALUES (25,1,'a')");
+        $this->db->setOnQuery(function (QueryResult $result): void {
+            if (str_contains($result->getLastPrepareQuery() ?? '', 'preload_profiles')) {
+                $this->db->selectConnection('observer');
+            }
+        });
+
+        $parent = new PreloadFixtureParent(['group_code' => 'a']);
+        $this->assertSame('default', $parent->groupProfile()->hydrationConnection);
+        $this->assertSame('observer', $this->db->selectConnection());
+
+        $this->db->selectConnection('default');
+        $parent = new PreloadFixtureParent();
+        $parent->queryLimit()->where('id', 1)->withRelations('groupProfile');
+        $row = $parent->all()->first();
+        $this->assertSame('default', $this->db->selectConnection());
+        $this->assertSame('default', $row->groupProfile()->hydrationConnection);
+        $this->assertCount(3, $this->connection->queries);
+    }
+
     public function testDuplicateOneRelationStillRaisesTheExistingCardinalityError(): void
     {
         $this->connection->database->exec("INSERT INTO preload_profiles VALUES (24,3,'duplicate')");
@@ -870,11 +892,18 @@ class PreloadFixtureTrackedProfile extends PreloadFixtureProfile
 {
     public static int $constructed = 0;
     public int $constructionOrder;
+    public string $hydrationConnection;
 
     public function __construct(public ?array $constructorData = null)
     {
         parent::__construct($constructorData);
         $this->constructionOrder = ++self::$constructed;
+    }
+
+    public function setData(array $data, bool $mergeCompare = false): static
+    {
+        $this->hydrationConnection = FastDb::getInstance()->selectConnection();
+        return parent::setData($data, $mergeCompare);
     }
 }
 

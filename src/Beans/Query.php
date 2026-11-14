@@ -62,6 +62,7 @@ class Query
     function fields(?array $fields = null,bool $returnAsArray = false):Query
     {
         $this->selection ??= new FieldSelection();
+        $this->selection->inheritedOutputFields = null;
         $this->selection->fields = [
             'fields'=>$fields,
             'returnAsArray'=>$returnAsArray
@@ -97,7 +98,14 @@ class Query
         return $this->selection?->fields;
     }
 
-    /** @internal 输出与写入共用字段白名单，隐藏字段仅作用于输出。 */
+    /** @internal 将父查询选列传给结果实体的序列化。 */
+    public function inheritOutputFields(?array $fields): void
+    {
+        $this->selection ??= new FieldSelection();
+        $this->selection->inheritedOutputFields = $fields;
+    }
+
+    /** @internal 显式选列作用于输出和写入，继承选列只作用于输出。 */
     public function filterProperties(array $properties, bool $forOutput = false, ?QueryBuilder $builder = null): array
     {
         if ($this->selection !== null) {
