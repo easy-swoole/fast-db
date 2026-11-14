@@ -6,6 +6,7 @@ namespace EasySwoole\FastDb\Tests;
 
 use EasySwoole\FastDb\RelationType;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
+use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\FastDb;
@@ -365,7 +366,9 @@ final class EntityQueryBoundaryTest extends TestCase
 
 class QueryBoundaryRecord extends AbstractEntity
 {
-    #[Property(isPrimaryKey: true)] public string $id;
+    #[Property]
+    #[PrimaryKey]
+    public string $id;
     #[Property] public ?float $value;
     #[Property] public int $order;
     #[Property] public int $grp;
@@ -405,21 +408,27 @@ class QueryBoundaryConnection extends Connection
 
 class IntegerPrimaryKeyRecord extends AbstractEntity
 {
-    #[Property(isPrimaryKey: true)] public int $id;
+    #[Property]
+    #[PrimaryKey]
+    public int $id;
     #[Property] public int $order;
     public function tableName(): string { return 'query_boundary'; }
 }
 
 class NullablePrimaryKeyRecord extends AbstractEntity
 {
-    #[Property(isPrimaryKey: true)] public ?string $id;
+    #[Property]
+    #[PrimaryKey]
+    public ?string $id;
     #[Property] public int $order;
     public function tableName(): string { return 'query_boundary'; }
 }
 
 class ConvertedKeyBoundaryRecord extends AbstractEntity
 {
-    #[Property(isPrimaryKey: true, convertObject: ConvertedKey::class)] public ?ConvertedKey $id;
+    #[Property(convertObject: ConvertedKey::class)]
+    #[PrimaryKey]
+    public ?ConvertedKey $id;
     #[Property] public int $order;
     public function tableName(): string { return 'query_boundary'; }
     #[Relate(QueryBoundaryRecord::class, 'id', type: RelationType::One, cacheResult: true)]

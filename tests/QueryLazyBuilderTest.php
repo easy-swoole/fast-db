@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace EasySwoole\FastDb\Tests;
 
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
+use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Beans\Page;
 use EasySwoole\FastDb\Beans\Query;
@@ -212,7 +213,9 @@ class LazyGetterOverrideQuery extends Query
 
 class LazyOutputOwner extends AbstractEntity
 {
-    #[Property(isPrimaryKey: true)] public int $id;
+    #[Property]
+    #[PrimaryKey]
+    public int $id;
     #[Property] public ?string $secret;
     public function tableName(): string { return 'lazy_output'; }
 }

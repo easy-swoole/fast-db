@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace EasySwoole\FastDb\Tests\Model;
 
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
+use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Property;
 
 /**
@@ -18,7 +19,8 @@ use EasySwoole\FastDb\Attributes\Property;
  */
 class User extends AbstractEntity
 {
-    #[Property(isPrimaryKey: true)]
+    #[Property]
+    #[PrimaryKey]
     public int $id;
     #[Property]
     public ?string $name;

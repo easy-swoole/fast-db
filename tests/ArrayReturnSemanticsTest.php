@@ -5,7 +5,8 @@ declare(strict_types=1);
 namespace EasySwoole\FastDb\Tests;
 
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
-use EasySwoole\FastDb\Attributes\Hook\Call;
+use EasySwoole\FastDb\AbstractInterface\ConvertList;
+use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Beans\ListResult;
 use EasySwoole\FastDb\FastDb;
@@ -81,32 +82,28 @@ final class ArrayReturnSemanticsTest extends TestCase
 
     public function testSerializationKeepsConversionsAndNullFilteringWithNoHiddenFields(): void
     {
-        ArrayReturnConvertedRecord::$calls = 0;
-        $entity = new ArrayReturnConvertedRecord();
-        $this->assertSame(['payload' => 'encoded:null', 'name' => null], $entity->toArray());
-        $this->assertSame(1, ArrayReturnConvertedRecord::$calls);
+        $entity = new ArrayReturnConvertedRecord(['payload' => [1]]);
+        $this->assertSame(['payload' => '[1]', 'name' => null], $entity->toArray());
         $entity->queryLimit()->hideFields([]);
-        $this->assertSame(['payload' => 'encoded:null'], $entity->toArray(true));
-        $this->assertSame(2, ArrayReturnConvertedRecord::$calls);
+        $this->assertSame(['payload' => '[1]'], $entity->toArray(true));
         $entity->queryLimit()->hideFields('payload');
         $this->assertSame(['name' => null], $entity->toArray());
-        $this->assertSame(2, ArrayReturnConvertedRecord::$calls);
     }
 }
 
 class ArrayReturnRecord extends AbstractEntity
 {
-    #[Property(isPrimaryKey: true)] public int $id;
+    #[Property]
+    #[PrimaryKey]
+    public int $id;
     #[Property] public ?string $secret;
     public function tableName(): string { return 'array_return_records'; }
 }
 
 class ArrayReturnConvertedRecord extends AbstractEntity
 {
-    public static int $calls = 0;
-    #[Property(toValue: new Call([ArrayReturnConvertedRecord::class, 'encode']))]
-    public ?string $payload;
+    #[Property(convertObject: ConvertList::class)]
+    public ?ConvertList $payload;
     #[Property] public ?string $name;
-    public static function encode(?string $value): string { self::$calls++; return 'encoded:' . ($value ?? 'null'); }
     public function tableName(): string { return 'array_return_converted_records'; }
 }

@@ -6,9 +6,9 @@ namespace EasySwoole\FastDb\Tests;
 
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\AbstractInterface\ConvertList;
-use EasySwoole\FastDb\Attributes\Hook\Call;
 use EasySwoole\FastDb\Attributes\Hook\OnInitialize;
 use EasySwoole\FastDb\Attributes\Hook\OnInsert;
+use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
@@ -74,8 +74,6 @@ final class BulkWriteTest extends TestCase
     private function assertNoRowLifecycle(): void
     {
         $this->assertSame(0, BulkWriteFixtureRecord::$insertHooks);
-        $this->assertSame(0, BulkWriteFixtureRecord::$assignCalls);
-        $this->assertSame(0, BulkWriteFixtureRecord::$encodeCalls);
         $this->assertSame(0, BulkWriteFixtureList::$objectCalls);
         $this->assertSame(0, BulkWriteFixtureList::$valueCalls);
     }
@@ -473,11 +471,11 @@ class BulkWriteFixtureRecord extends AbstractEntity
     public static int $constructed = 0;
     public static int $initializeHooks = 0;
     public static int $insertHooks = 0;
-    public static int $assignCalls = 0;
-    public static int $encodeCalls = 0;
     public static int $tableCalls = 0;
-    #[Property(isPrimaryKey: true)] public int $id;
-    #[Property(assignCall: new Call([BulkWriteFixtureRecord::class, 'assignName']), toValue: new Call([BulkWriteFixtureRecord::class, 'encodeName']))]
+    #[Property]
+    #[PrimaryKey]
+    public int $id;
+    #[Property]
     public ?string $name;
     #[Property] public ?int $count;
     #[Property(convertObject: BulkWriteFixtureList::class)] public ?BulkWriteFixtureList $payload;
@@ -485,11 +483,9 @@ class BulkWriteFixtureRecord extends AbstractEntity
     public function tableName(): string { self::$tableCalls++; return 'bulk_write_records'; }
     protected function initialized(): void { self::$initializeHooks++; }
     protected function inserting(): void { self::$insertHooks++; }
-    public static function assignName(mixed $value): string { self::$assignCalls++; return 'assigned:' . $value; }
-    public static function encodeName(mixed $value): string { self::$encodeCalls++; return 'encoded:' . $value; }
     public static function resetCounters(): void
     {
-        self::$constructed = self::$initializeHooks = self::$insertHooks = self::$assignCalls = self::$encodeCalls = self::$tableCalls = 0;
+        self::$constructed = self::$initializeHooks = self::$insertHooks = self::$tableCalls = 0;
         BulkWriteFixtureList::$objectCalls = BulkWriteFixtureList::$valueCalls = 0;
     }
 }

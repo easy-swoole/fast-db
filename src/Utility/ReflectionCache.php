@@ -4,10 +4,12 @@ namespace EasySwoole\FastDb\Utility;
 
 use EasySwoole\Component\Singleton;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
+use EasySwoole\FastDb\Attributes\AutoIncrement;
 use EasySwoole\FastDb\Attributes\Hook\OnDelete;
 use EasySwoole\FastDb\Attributes\Hook\OnInitialize;
 use EasySwoole\FastDb\Attributes\Hook\OnInsert;
 use EasySwoole\FastDb\Attributes\Hook\OnUpdate;
+use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Beans\EntityReflection;
@@ -43,9 +45,18 @@ class ReflectionCache
         $entity->setOnUpdate($this->parseClassTag(OnUpdate::class, $reflection));
 
         foreach ($reflection->getProperties() as $propertyRef) {
-            if ($propertyRef->isStatic() || !$propertyRef->isPublic()) { continue; }
             $attributes = $propertyRef->getAttributes(Property::class);
-            if ($attributes === []) { continue; }
+            $primaryKey = $propertyRef->getAttributes(PrimaryKey::class);
+            $autoIncrement = $propertyRef->getAttributes(AutoIncrement::class);
+            if ($propertyRef->isStatic() || !$propertyRef->isPublic() || $attributes === []) {
+                if ($primaryKey !== []) {
+                    throw new RuntimeError("PrimaryKey requires a public non-static Property field: {$entityClass}::{$propertyRef->name}");
+                }
+                if ($autoIncrement !== []) {
+                    throw new RuntimeError("AutoIncrement requires a public non-static Property field: {$entityClass}::{$propertyRef->name}");
+                }
+                continue;
+            }
 
             $property = new Property(...$attributes[0]->getArguments());
             $property->__setName($propertyRef->name);
@@ -54,6 +65,14 @@ class ReflectionCache
             $default = $propertyRef->getDefaultValue();
             if ($default !== null) { $property->defaultValue = $default; }
             $entity->addProperty($property);
+            if ($primaryKey !== []) {
+                $primaryKey[0]->newInstance();
+                $entity->setPrimaryKey($property->name);
+            }
+            if ($autoIncrement !== []) {
+                $autoIncrement[0]->newInstance();
+                $entity->setAutoIncrementProperty($property);
+            }
         }
         return $this->entityData[$entityClass] = $entity;
     }

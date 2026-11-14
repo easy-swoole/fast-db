@@ -7,6 +7,8 @@ namespace EasySwoole\FastDb\Tests;
 use EasySwoole\FastDb\RelationType;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\AbstractInterface\ConvertList;
+use EasySwoole\FastDb\Attributes\AutoIncrement;
+use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Config;
@@ -61,6 +63,22 @@ final class TransactionTest extends TestCase
         return (int) $this->observer->query("SELECT value FROM `{$this->table}` WHERE id = 1")->fetch_assoc()['value'];
     }
 
+    public function testChunkByIdUsesExplicitQualifiedCursorAcrossJoinedPages(): void
+    {
+        $this->observer->query("INSERT INTO `{$this->table}` VALUES (2, 10), (3, 20)");
+        $entity = new TransactionEntity();
+        $entity->queryLimit()->join("{$this->table} AS joined", "joined.id = {$this->table}.id", 'INNER')
+            ->fields(["{$this->table}.id", "{$this->table}.value"]);
+        $seen = [];
+
+        $delivered = $entity->chunkById(static function (TransactionEntity $row) use (&$seen): void {
+            $seen[] = $row->id;
+        }, chunkSize: 1, column: "{$this->table}.id");
+
+        $this->assertSame(3, $delivered);
+        $this->assertSame([1, 2, 3], $seen);
+    }
+
     public function testMysqlConvertedAutoKeyIsAvailableForObserverUpdatesAndDeletion(): void
     {
         $this->observer->query("ALTER TABLE `{$this->table}` MODIFY id INT NOT NULL AUTO_INCREMENT");
@@ -90,6 +108,52 @@ final class TransactionTest extends TestCase
         $entity->value = 8;
         $this->assertTrue($entity->update());
         $this->assertSame(8, TextKeyMysqlEntity::findRecord('order-a')->value);
+    }
+
+    public function testMysqlExplicitAutoIncrementBackfillsOnlyTheDeclaredField(): void
+    {
+        $this->observer->query("ALTER TABLE `{$this->table}` MODIFY id VARCHAR(64) NOT NULL DEFAULT 'db-key',
+            ADD COLUMN seq INT NOT NULL AUTO_INCREMENT UNIQUE");
+        $entity = new SecondaryAutoIncrementMysqlEntity(['value' => 7]);
+        $entity->setOnQuery(function (QueryResult $result) use ($entity): void {
+            $this->assertSame($result->getInsertId(), $entity->seq);
+            $this->assertFalse($entity->hasChange('seq'));
+            $this->assertFalse(isset($entity->id));
+        });
+
+        $this->assertTrue($entity->insert());
+        $stored = SecondaryAutoIncrementMysqlEntity::findRecord('db-key');
+        $this->assertSame($stored->seq, $entity->seq);
+        $this->assertSame('db-key', $stored->id);
+
+        $explicit = new SecondaryAutoIncrementMysqlEntity(['id' => 'explicit', 'seq' => 20, 'value' => 9]);
+        $this->assertTrue($explicit->insert());
+        $this->assertSame('explicit', $explicit->id);
+        $this->assertSame(20, $explicit->seq);
+        $this->assertSame(20, SecondaryAutoIncrementMysqlEntity::findRecord('explicit')->seq);
+        $this->assertFalse($explicit->hasChange());
+        $explicit->value = 10;
+        $this->assertTrue($explicit->update());
+        $this->assertSame(10, SecondaryAutoIncrementMysqlEntity::findRecord('explicit')->value);
+        $this->assertTrue($explicit->delete());
+        $this->assertNull(SecondaryAutoIncrementMysqlEntity::findRecord('explicit'));
+    }
+
+    public function testChunkByIdDefaultsToAutoIncrementAndHonorsExplicitPrimaryKey(): void
+    {
+        $this->observer->query("ALTER TABLE `{$this->table}` MODIFY id VARCHAR(64) NOT NULL,
+            ADD COLUMN seq INT NOT NULL AUTO_INCREMENT UNIQUE");
+        $this->observer->query("UPDATE `{$this->table}` SET id = 'z-first'");
+        $this->observer->query("INSERT INTO `{$this->table}` (id, value) VALUES ('a-second', 1)");
+        $owner = new SecondaryAutoIncrementMysqlEntity();
+        $seen = [];
+        $visit = static function (SecondaryAutoIncrementMysqlEntity $row) use (&$seen): void { $seen[] = $row->id; };
+
+        $this->assertSame(2, $owner->chunkById($visit, 1));
+        $this->assertSame(['z-first', 'a-second'], $seen);
+        $seen = [];
+        $this->assertSame(2, $owner->chunkById($visit, 1, 'id'));
+        $this->assertSame(['a-second', 'z-first'], $seen);
     }
 
     public static function stringPrimaryKeyModes(): array
@@ -287,7 +351,7 @@ final class TransactionTest extends TestCase
         $filter = new class {
             public function onlyOriginal(\EasySwoole\Mysqli\QueryBuilder $query): void { $query->where('id', '1'); }
         };
-        $this->assertSame(1, TextKeyMysqlEntity::fastUpdate([$filter, 'onlyOriginal'], ['value' => 7]));
+        $this->assertSame(1, TextKeyMysqlEntity::fastUpdate($filter->onlyOriginal(...), ['value' => 7]));
         $this->assertSame(7, TextKeyMysqlEntity::findRecord('1')->value);
         $this->assertSame(30, TextKeyMysqlEntity::findRecord('is_object')->value);
         $this->assertSame(1, TextKeyMysqlEntity::fastDelete('is_object'));
@@ -1197,7 +1261,8 @@ final class TransactionTest extends TestCase
 final class TransactionEntity extends AbstractEntity
 {
     public static string $table;
-    #[Property(isPrimaryKey: true)]
+    #[Property]
+    #[PrimaryKey]
     public int $id;
     #[Property]
     public int $value;
@@ -1211,7 +1276,9 @@ final class TransactionEntity extends AbstractEntity
 class DeclaredMysqlEntity extends AbstractEntity
 {
     public static int $getterCalls = 0;
-    #[Property(isPrimaryKey:true)] public int $id;
+    #[Property]
+    #[PrimaryKey]
+    public int $id;
     #[Property] public int $value;
     public function tableName(): string { return TransactionEntity::$table; }
     #[\EasySwoole\FastDb\Attributes\Relate(self::class,'value',type:RelationType::Many,configure:'configureChildren')]
@@ -1228,14 +1295,34 @@ class DeclaredMysqlEntity extends AbstractEntity
 
 class TextKeyMysqlEntity extends AbstractEntity
 {
-    #[Property(isPrimaryKey: true)] public string $id;
+    #[Property]
+    #[PrimaryKey]
+    public string $id;
     #[Property] public int $value;
+    public function tableName(): string { return TransactionEntity::$table; }
+}
+
+final class SecondaryAutoIncrementMysqlEntity extends AbstractEntity
+{
+    #[Property]
+    #[PrimaryKey]
+    public string $id;
+
+    #[Property]
+    #[AutoIncrement]
+    public int $seq;
+
+    #[Property]
+    public int $value;
+
     public function tableName(): string { return TransactionEntity::$table; }
 }
 
 class ConvertedKeyMysqlEntity extends AbstractEntity
 {
-    #[Property(isPrimaryKey: true, convertObject: ConvertedKey::class)] public ?ConvertedKey $id;
+    #[Property(convertObject: ConvertedKey::class)]
+    #[PrimaryKey]
+    public ?ConvertedKey $id;
     #[Property] public int $value;
     public function tableName(): string { return TransactionEntity::$table; }
     #[Relate(TextKeyMysqlEntity::class, 'id', type: RelationType::One, cacheResult: true)]
@@ -1246,7 +1333,9 @@ class ConvertedKeyMysqlEntity extends AbstractEntity
 
 class EncodingMysqlEntity extends AbstractEntity
 {
-    #[Property(isPrimaryKey: true)] public int $id;
+    #[Property]
+    #[PrimaryKey]
+    public int $id;
     #[Property(convertObject: EncodingMysqlList::class)] public ?EncodingMysqlList $items;
     public function tableName(): string { return TransactionEntity::$table; }
 }
@@ -1265,7 +1354,9 @@ class CursorMysqlEntity extends DeclaredMysqlEntity
 class ScopedMysqlEntity extends AbstractEntity
 {
     private ?\WeakReference $scopedQuery = null;
-    #[Property(isPrimaryKey:true)] public int $id;
+    #[Property]
+    #[PrimaryKey]
+    public int $id;
     #[Property] public int $value;
     public function tableName(): string { return TransactionEntity::$table; }
     public function queryLimit(): \EasySwoole\FastDb\Beans\Query

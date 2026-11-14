@@ -20,20 +20,23 @@ final class RelationPlan
         public readonly mixed $selfValue,
     ) {}
 
-    public static function tableTarget(QueryBuilder $builder, string $tableName): ?string
+    /** 限定 FastDb 自己添加的外键条件，调用方投影和附加条件保持原样。 */
+    public static function foreignKey(QueryBuilder $builder, string $tableName, string $field): string
     {
-        return $builder instanceof EntityQueryBuilder
+        $target = $builder instanceof EntityQueryBuilder
             ? $builder->relationTableTarget($tableName)
             : TableReference::resolve($tableName, '')['target'];
+        if ($target === null) {
+            throw new \InvalidArgumentException('Relation requires an identifiable target table');
+        }
+        return $target . '.' . TableReference::identifier($field);
     }
 
     /** 按需加载及预加载的缓存查询共用关联范围、字段和单条限制规则。 */
     public static function buildLookup(QueryBuilder $query, string $tableName, Relate $relate,
         mixed $selfValue, ?array $fields): QueryBuilder
     {
-        $target = self::tableTarget($query, $tableName);
-        $foreignKey = $target === null ? TableReference::identifier($relate->targetProperty)
-            : $target . '.' . TableReference::identifier($relate->targetProperty);
+        $foreignKey = self::foreignKey($query, $tableName, $relate->targetProperty);
         $query->groupExistingWhere();
         if ($selfValue === null) {
             $query->whereNull($foreignKey);

@@ -3,7 +3,6 @@
 namespace EasySwoole\FastDb\Internal;
 
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
-use EasySwoole\FastDb\AbstractInterface\ConvertObjectInterface;
 use EasySwoole\FastDb\Exception\RuntimeError;
 
 /** 实体内部状态，与查询条件及输出格式无关。 */
@@ -24,7 +23,7 @@ final class EntityState
         return false;
     }
 
-    /** 返回变化字段的当前属性值，转换对象保持原实例，不执行写入编码。 */
+    /** 返回变化字段的当前属性值，转换对象保持原实例。 */
     public function getChanges(AbstractEntity $entity): array
     {
         $data = [];
@@ -35,18 +34,16 @@ final class EntityState
         return $data;
     }
 
-    /** 生成数据库写入值，同时收集本次写入字段的比较基准。 */
-    public function changes(AbstractEntity $entity, array $properties, array &$compared): array
+    /** 数据库写入值与比较基准使用同一份转换结果。 */
+    public function changes(AbstractEntity $entity, array $properties): array
     {
         $data = [];
-        foreach ($properties as $key => $property) {
+        foreach ($properties as $property) {
+            $key = $property->name;
             $old = $this->baseline[$key];
-            $value = $entity->{$key} ?? null;
-            $current = FieldCodec::compare($value);
+            $current = FieldCodec::compare($entity->{$key} ?? null);
             if ($current !== $old) {
-                $compared[$key] = $current;
-                // 转换对象的比较值就是数据库写入值，直接复用，避免重复序列化。
-                $data[$key] = $value instanceof ConvertObjectInterface ? $current : FieldCodec::encode($entity, $property, $value);
+                $data[$key] = $current;
             }
         }
         return $data;

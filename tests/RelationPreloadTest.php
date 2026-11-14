@@ -7,8 +7,8 @@ namespace EasySwoole\FastDb\Tests;
 use EasySwoole\FastDb\RelationType;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\AbstractInterface\ConvertList;
+use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Property;
-use EasySwoole\FastDb\Attributes\Hook\Call;
 use EasySwoole\FastDb\Attributes\Hook\OnInitialize;
 use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Exception\RuntimeError;
@@ -114,7 +114,7 @@ final class RelationPreloadTest extends TestCase
         $this->assertCount(3, $this->events);
     }
 
-    public function testOneRelationClearsItsConditionsBeforeFieldConversionReentersTheParent(): void
+    public function testOneRelationClearsItsConditionsBeforeHydrationReentersTheParent(): void
     {
         $parent = new ReentrantProfileParent(['id'=>1]);
         $parent->queryLimit()->where('name','profile-1');
@@ -410,7 +410,7 @@ final class RelationPreloadTest extends TestCase
         $this->assertCount(3, $this->connection->queries);
     }
 
-    public function testDefaultProjectionUsesTheAliasedTargetAndItsPrefix(): void
+    public function testJoinedRelationUsesTheExplicitProjectionInBothLoadingModes(): void
     {
         $this->connection->database->exec("CREATE TABLE tenant_preload_children AS SELECT * FROM preload_children");
         $this->connection->database->exec("CREATE TABLE tenant_preload_labels (id INTEGER, parent_id INTEGER, name TEXT)");
@@ -419,10 +419,45 @@ final class RelationPreloadTest extends TestCase
         $owner->queryLimit()->where('id', 1)->withRelations('joinedChildren');
 
         $children = $owner->all()->first()->joinedChildren()->list();
-        $this->assertSame([11, 12], array_column($children, 'id'));
-        $this->assertSame(['child-11', 'child-12'], array_column($children, 'name'));
-        $this->assertStringContainsString('child.*', $this->connection->queries[1]['sql']);
-        $this->assertCount(2, $this->connection->queries);
+        $lazy = (new PreloadFixtureParent(['id' => 1]))->joinedChildren()->list();
+        $this->assertSame([
+            ['id' => 11, 'name' => 'child-11', 'label_name' => 'joined-name'],
+            ['id' => 12, 'name' => 'child-12', 'label_name' => 'joined-name'],
+        ], $children);
+        $this->assertSame($children, $lazy);
+        $this->assertCount(3, $this->connection->queries);
+    }
+
+    public function testDefaultPreloadProjectionUsesTheWildcardAndOnlyReturnsUserColumns(): void
+    {
+        $parents = $this->parents('arrayChildren');
+        $this->assertMatchesRegularExpression('/^SELECT\s+\*,\s+/', $this->connection->queries[1]['sql']);
+        $this->assertSame(['id', 'parent_id', 'group_code', 'name', 'payload'], array_keys($parents[0]->arrayChildren()->first()));
+    }
+
+    public function testRelationPreloadRejectsTotalCountBeforeRunningAnyRelationQuery(): void
+    {
+        try {
+            $this->parents(['children', 'countedChildren']);
+            $this->fail('Preloading with total count must fail');
+        } catch (RuntimeError $error) {
+            $this->assertSame('Relation preload does not support withTotalCount()', $error->getMessage());
+        }
+        $this->assertCount(1, $this->connection->queries);
+        $this->assertCount(1, $this->events);
+    }
+
+    public function testLazyRelationRequiresAnInitializedParentField(): void
+    {
+        $parent = new PreloadFixtureParent();
+        unset($parent->id);
+        try {
+            $parent->children();
+            $this->fail('An uninitialized parent field must fail');
+        } catch (\Error $error) {
+            $this->assertStringContainsString('must not be accessed before initialization', $error->getMessage());
+        }
+        $this->assertSame([], $this->connection->queries);
     }
 
     public function testExplicitEmptyRelationFieldsFailBeforeBatchQuery(): void
@@ -585,6 +620,7 @@ final class RelationPreloadTest extends TestCase
         if ($hideKey) { $owner->queryLimit()->hideFields('id'); }
         try { $owner->all(); $this->fail('A missing relation field must not silently create empty groups'); }
         catch (RuntimeError|\InvalidArgumentException|\UnexpectedValueException) { $this->addToAssertionCount(1); }
+        catch (\Error $error) { $this->assertStringContainsString('must not be accessed before initialization', $error->getMessage()); }
         $this->assertCount(1, $this->connection->queries);
         $this->assertNull($owner->queryLimit()->getFields());
         $this->assertNull($owner->queryLimit()->getHideFields());
@@ -613,7 +649,9 @@ final class RelationPreloadTest extends TestCase
 class PreloadFixtureParent extends AbstractEntity
 {
     public static int $nonRelationCalls = 0;
-    #[Property(isPrimaryKey: true)] public int $id;
+    #[Property]
+    #[PrimaryKey]
+    public int $id;
     #[Property] public ?string $group_code;
     #[Property] public ?string $name;
     public function tableName(): string { return 'preload_parents'; }
@@ -683,7 +721,16 @@ class PreloadFixtureParent extends AbstractEntity
     protected function configureJoinedChildren(QueryBuilder $query): void
     {
         $query->setPrefix('tenant_')->join('preload_labels AS label', 'label.id = child.id', 'INNER')
+            ->fields(['child.id', 'child.name', 'label.name AS label_name'])
             ->orderBy('child.id', 'ASC');
+    }
+
+    #[Relate(PreloadFixtureChild::class, 'parent_id', type: RelationType::Many, configure: 'configureCountedChildren')]
+    public function countedChildren() { return $this->relateMany(); }
+
+    protected function configureCountedChildren(QueryBuilder $query): void
+    {
+        $query->withTotalCount();
     }
 
     #[Relate(PreloadFixtureChild::class, 'parent_id', type: RelationType::Many, configure: 'configureEmptyProjection')]
@@ -718,7 +765,9 @@ class PreloadFixtureCollisionParent extends PreloadFixtureParent
 
 class PreloadFixtureChild extends AbstractEntity
 {
-    #[Property(isPrimaryKey: true)] public int $id;
+    #[Property]
+    #[PrimaryKey]
+    public int $id;
     #[Property] public ?int $parent_id;
     #[Property] public ?string $group_code;
     #[Property] public ?string $name;
@@ -728,7 +777,9 @@ class PreloadFixtureChild extends AbstractEntity
 
 class PreloadFixtureProfile extends AbstractEntity
 {
-    #[Property(isPrimaryKey: true)] public int $id;
+    #[Property]
+    #[PrimaryKey]
+    public int $id;
     #[Property] public ?int $parent_id;
     #[Property] public ?string $name;
     public function tableName(): string { return 'preload_profiles'; }
@@ -801,13 +852,15 @@ class ReentrantProfile extends AbstractEntity
 {
     public static ?PreloadFixtureParent $parent = null;
     public static ?int $parentCount = null;
-    #[Property(isPrimaryKey:true)] public int $id;
+    #[Property]
+    #[PrimaryKey]
+    public int $id;
     #[Property] public int $parent_id;
-    #[Property(assignCall:new Call([self::class,'decodeName']))] public ?string $name;
-    public static function decodeName(?string $value): ?string
+    #[Property] public ?string $name;
+    public function setData(?array $data, bool $mergeCompare = false): static
     {
         self::$parentCount = count(self::$parent->all());
-        return $value;
+        return parent::setData($data, $mergeCompare);
     }
     public function tableName(): string { return 'preload_profiles'; }
 }

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace EasySwoole\FastDb\Tests;
 
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
+use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
@@ -25,8 +26,8 @@ final class ConditionLimitTest extends TestCase
             foreach (['is_object', 'trim', ConditionCallbacks::class . '::filter'] as $key) {
                 yield "$operation string key $key" => [$operation, $key, [$key], '`id` = ?'];
             }
-            yield "$operation static callback" => [$operation, [ConditionCallbacks::class, 'filter'], [10], '`value` >= ?'];
-            yield "$operation instance callback" => [$operation, [new ConditionCallbacks(), 'filterInstance'], [10], '`value` >= ?'];
+            yield "$operation static callback" => [$operation, ConditionCallbacks::filter(...), [10], '`value` >= ?'];
+            yield "$operation instance callback" => [$operation, (new ConditionCallbacks())->filterInstance(...), [10], '`value` >= ?'];
             yield "$operation invokable" => [$operation, new ConditionCallbacks(), [10], '`value` >= ?'];
             yield "$operation converted string callback" => [$operation, \Closure::fromCallable(ConditionCallbacks::class . '::filter'), [10], '`value` >= ?'];
             yield "$operation equality" => [$operation, ['value' => 10], [10], '`value` = ?'];
@@ -69,11 +70,34 @@ final class ConditionLimitTest extends TestCase
             $singleton->setValue(null, $original);
         }
     }
+
+    public function testArrayWithCallableShapeIsRejectedAsAnInvalidCondition(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Query conditions require column names as array keys');
+        ConditionRecord::findAll([ConditionCallbacks::class, 'filter']);
+    }
+
+    public function testFastUpdateRejectsEmptyConditionsBeforeQuery(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('fastUpdate requires a non-empty condition or primary key');
+        ConditionRecord::fastUpdate([], ['value' => 99]);
+    }
+
+    public function testArrayConditionRequiresAnExplicitOperator(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Array conditions require');
+        ConditionRecord::findAll(['value' => []]);
+    }
 }
 
 class ConditionRecord extends AbstractEntity
 {
-    #[Property(isPrimaryKey: true)] public string $id;
+    #[Property]
+    #[PrimaryKey]
+    public string $id;
     #[Property] public int $value;
     public function tableName(): string { return 'condition_records'; }
 }

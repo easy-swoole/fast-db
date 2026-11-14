@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace EasySwoole\FastDb\Tests;
 
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
+use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Config;
 use EasySwoole\FastDb\FastDb;
@@ -172,7 +173,9 @@ final class BulkConnectionTest extends TestCase
 class BulkPinnedRecord extends AbstractEntity
 {
     public static int $constructions = 0;
-    #[Property(isPrimaryKey: true)] public int $id;
+    #[Property]
+    #[PrimaryKey]
+    public int $id;
     public function __construct(?array $data = null) { self::$constructions++; parent::__construct($data); }
     public function tableName(): string { return 'bulk_pinned'; }
 }

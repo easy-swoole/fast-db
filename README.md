@@ -69,7 +69,7 @@ FastDb 通过 `FastDb::getInstance()` 获取固定实例并长期复用。需要
 - 每个数据库配置维护独立连接池，同一协程、同一连接名复用当前连接。
 - 协程结束后自动归还连接，也可通过 `invoke()` 或 `recycleContext()` 提前归还。
 - 连接归还时回滚未提交的数据库事务；回滚失败的连接由连接池丢弃。
-- `#[Property]` 映射属性，支持单主键、默认值、nullable 属性和自定义转换。
+- `#[Property]` 映射属性，支持默认值、nullable 属性和自定义转换。使用 `#[PrimaryKey]` 声明主键，使用 `#[AutoIncrement]` 指定独立自增列。
 - 查询结果可返回实体、原始数组或支持遍历/计数/数组访问的 `ListResult`。
 - 条件、排序、连接、分组、分页、分块、聚合与 `FOR UPDATE`。
 - 实体只更新已变化的字段；成功写入后更新比较基准，支持同一对象连续修改和还原。
@@ -132,11 +132,13 @@ CREATE TABLE users (
 namespace App\Model;
 
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
+use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Property;
 
 class User extends AbstractEntity
 {
-    #[Property(isPrimaryKey: true)]
+    #[Property]
+    #[PrimaryKey]
     public int $id;
 
     #[Property]
@@ -348,14 +350,15 @@ $db->preConnect(); // 对已注册的连接池预热到最小连接数。
 
 | 参数 | 含义 |
 | --- | --- |
-| `isPrimaryKey: true` | 将该属性声明为主键；每个实体最多一个 |
 | `defaultValue` | 实体初始化默认值 |
 | `convertObject` | 实现 `ConvertObjectInterface` 的类或枚举 |
-| `assignCall` | 输入赋值时执行的 `Call` 回调 |
-| `toValue` | 转数组、插入、更新时执行的输出转换回调 |
 
 ```php
-#[Property(isPrimaryKey: true)]
+use EasySwoole\FastDb\Attributes\PrimaryKey;
+use EasySwoole\FastDb\Attributes\Property;
+
+#[Property]
+#[PrimaryKey]
 public int $id;
 
 #[Property(defaultValue: 1)]
@@ -366,6 +369,8 @@ public ?string $note;
 ```
 
 PHP 属性上非 null 的默认值会优先作为初始化值；nullable 属性没有默认值时初始化为 `null`。没有默认值的非 nullable 属性可能保持未初始化，读取前应先赋值或从数据库加载。
+
+`#[PrimaryKey]` 标记带 `#[Property]` 的 public 非 static 属性。每个实体最多声明一个主键字段。`Property` 的 `isPrimaryKey` 参数已移除。将 `#[Property(isPrimaryKey: true)]` 改为在同一属性上分别声明 `#[Property]` 和 `#[PrimaryKey]`。原先传给 `Property` 第一个位置的主键布尔值也应移除，默认值和转换类建议使用 `defaultValue:` 和 `convertObject:` 命名参数。
 
 对象类型的默认值（枚举除外）会在每个实体初始化时通过 `clone` 复制，复制深度遵循该类型自身的 `__clone()`；PHP 默认只做浅复制。需要隔离嵌套可变对象时，应由对应类型实现克隆逻辑。例如，包含 Bean 实例的自定义 `ItemList`，应在 `ItemList::__clone()` 中复制需要独立的元素；Bean 内更深层的对象也由其自身负责。数组赋值同样不会自动复制其中的对象元素。
 
@@ -543,7 +548,18 @@ $processed = $entity->chunkById(function (User $user): void {
 echo $processed; // 已交付给回调的记录数。
 ```
 
-`chunkById(callable $func, int $chunkSize = 10, ?string $column = null): int` 默认使用实体主键，也可通过第三个参数指定稳定、唯一、非 NULL 的整数或字符串列。`$column` 必须是实体已声明为 `Property` 的原始列名，不能填写 SQL 表达式或别名。无主键实体需要显式指定符合条件的列。分页由 FastDb 使用常规 QueryBuilder 接口构建，不依赖 mysqli 的游标分页辅助方法。
+`chunkById(callable $func, int $chunkSize = 10, ?string $column = null): int` 和 `insert()` 自增回填使用同一字段配置，优先使用 `#[AutoIncrement]`，省略该注解时使用 `#[PrimaryKey]`。也可以显式传入 `$column` 覆盖游标列。游标必须是稳定、唯一、非 NULL 的整数或字符串，列名必须对应实体映射属性。
+
+JOIN 中有同名列时，调用方在 `column` 和投影里显式写出表名或别名。SQL 使用完整列引用，结果中的游标仍使用原列名 `id`。
+
+```php
+// 此处 User::tableName() 返回 users。
+$entity = new User();
+$entity->queryLimit()
+    ->join('profiles AS profile', 'profile.user_id = users.id', 'INNER')
+    ->fields(['users.id', 'users.name', 'profile.name AS profile_name'], returnAsArray: true);
+$entity->chunkById($processUser, chunkSize: 100, column: 'users.id');
+```
 
 始终按该列 ASC 排序，从首批开始，再用“游标列 > 上一批最后的游标值”读取下一批；已有排序及页码偏移不决定遍历顺序和起点。每次回调接收一条实体；启用 `returnAsArray()` 时接收一条数组，与 `chunk()` 一致。
 
@@ -597,7 +613,26 @@ $ok = $user->insert(); // bool。
 $id = $user->id; // 自增主键由 last insert id 回填。
 ```
 
-插入使用字段转换器生成数据库值，`fields()` 控制写入白名单，`hideFields()` 只控制输出。普通 null 属性会被过滤，数据库默认值可生效；转换字段是否生成 null 由转换逻辑决定。SQL 成功后，在公开查询回调前接受本次写入字段的比较基准并回填自增 ID，保留模型当前属性值。实体未写入主键列时，可用驱动返回的自增 ID 回填，遵循该字段的 `convertObject` / `assignCall` 定义。显式写入的主键保持原值。字段对象、时区以及回调中继续修改的属性均保留；这些修改可通过后续 `update()` 保存。未从数据库读取的默认值、触发器结果等需要重新查询才能获得。
+插入使用字段转换器生成数据库值，`fields()` 控制写入白名单，`hideFields()` 只控制输出。属性值为 null 时省略该列，数据库可以应用默认值。转换对象仍按其 `toValue()` 的返回值写入。公开查询回调执行前，FastDb 接受本次成功写入字段的比较基准，并按字段的 `convertObject` 定义回填自增 ID。显式写入的自增字段保留原值。字段对象、时区以及回调中继续修改的属性均保留，这些修改可通过后续 `update()` 保存。其他数据库默认值、触发器结果等需要重新查询才能获得。
+
+默认用主键接收自增 ID。自增列与主键分开时，在自增列对应的映射属性上加 `#[AutoIncrement]`。`chunkById()` 省略游标时也使用该字段。
+
+```php
+use EasySwoole\FastDb\Attributes\AutoIncrement;
+use EasySwoole\FastDb\Attributes\PrimaryKey;
+use EasySwoole\FastDb\Attributes\Property;
+
+// dataKey 对应 PRIMARY KEY，dataIndex 对应 AUTO_INCREMENT。
+#[Property]
+#[PrimaryKey]
+public string $dataKey;
+
+#[Property]
+#[AutoIncrement]
+public int $dataIndex;
+```
+
+每个实体最多标记一个字段，必须是带 `#[Property]` 的 public 非 static 属性。要让 MySQL 生成自增 ID，请省略该字段。`insert()` 成功且驱动返回正数 `insertId` 时，将其回填到未写入的自增字段。更新、删除和默认关联键仍以实体主键为准。
 
 支持 MySQL duplicate-key 更新：
 
@@ -609,7 +644,7 @@ $user->insert(['name', 'score']);
 
 ### 检查待保存修改
 
-`hasChange(?string $field = null): bool` 检查全部或指定映射字段是否相对比较基准发生变化；未映射或不存在的字段返回 false。`getChanges(): array` 返回全部变化字段的当前属性值，与直接访问属性一致。`ConvertBean`、`ConvertList` 等转换字段返回属性持有的同一个对象，不转成 JSON、不克隆；普通数组仍返回数组，也不执行 `Property::toValue` 编码回调。数据库写入转换由 `insert()` / `update()` 处理。
+`hasChange(?string $field = null): bool` 检查全部或指定映射字段是否相对比较基准发生变化；未映射或不存在的字段返回 false。`getChanges(): array` 返回全部变化字段的当前属性值，与直接访问属性一致。`ConvertBean`、`ConvertList` 等转换字段返回属性持有的同一个对象，不转成 JSON、不克隆；普通数组仍返回数组。变更比较使用转换对象的 `toValue()` 结果。
 
 ```php
 $user = User::findRecord(1); // 假设当前 name 为 Alice，score 为 1。
@@ -630,7 +665,7 @@ if ($user !== null) {
 }
 ```
 
-这两个入口按调用计算，复用现有比较基准，不额外维护历史记录；它们不主动执行 SQL、接受新基准或清理查询配置，也不触发生命周期钩子。`fields()` / `hideFields()` 不影响检查范围。`hasChange()` 在首次发现变化时返回；两个方法均不执行 `Property::toValue`。`convertObject` 字段仍调用 `toValue()` 比较内容，因此能够识别对象内部修改，但 `getChanges()` 返回的值仍是对象本身。通过返回对象修改内容，与直接修改实体属性相同。
+这两个入口按调用计算，复用现有比较基准，不额外维护历史记录；它们不主动执行 SQL、接受新基准或清理查询配置，也不触发生命周期钩子。`fields()` / `hideFields()` 不影响检查范围。`hasChange()` 在首次发现变化时返回。比较转换对象的 `toValue()` 可以识别对象内部修改，`getChanges()` 返回对象本身。通过返回对象修改内容，与直接修改实体属性相同。
 
 修改后还原为原值，变化会消失；成功写入并接受基准的字段不再返回，SQL 失败时修改继续待保存。显式 `setData($data, true)` 只接受对应字段的基准。事务回滚不改变这套规则，重载和重试仍由业务决定。构造数据也会被接受为初始基准，因此检查结果不表示实体是否已插入数据库。
 
@@ -649,7 +684,7 @@ if ($user !== null) {
 `update()`：
 
 - 以对象的比较基准识别已变化字段。
-- 对 `ConvertObjectInterface` 属性调用 `toValue()`；对配置了 `Property::toValue` 的普通属性调用对应回调。
+- 对 `ConvertObjectInterface` 属性调用 `toValue()`。
 - 使用实体主键与当前主键值构造 WHERE 条件，也会使用之前设置的额外查询条件。
 - 有实际变更且影响行数大于 0 时返回 `true`，影响行数为 0 时返回 `false`；没有待写入变更时返回 `true` 并跳过 SQL。
 - 成功后仅同步本次写入字段的比较基准，未被字段筛选选中的变更仍待保存；失败不接受新的基准。
@@ -662,7 +697,7 @@ $user->update(); // 只更新 name。
 $user->update(); // 保存尚未写入的 score。
 ```
 
-`toArray()` 在转换前应用 `fields()` 和 `hideFields()`；`insert()` / `update()` 在转换及变更比较前只应用 `fields()`。字段配置为 `null` 时没有白名单，空数组不选任何写入列，显式 `['*']` 也不会扩展成全部写入列。被排除的字段不会执行 `toValue` 回调或转换对象的 `toValue()`，不会因其转换失败阻止本次操作。部分更新只接受实际写入字段的比较基准，其他修改仍可在后续放开白名单后保存。
+`toArray()` 在转换前应用 `fields()` 和 `hideFields()`；`insert()` / `update()` 在转换及变更比较前只应用 `fields()`。字段配置为 `null` 时没有白名单，空数组不选任何写入列，显式 `['*']` 也不会扩展成全部写入列。被排除的字段不会调用转换对象的 `toValue()`，不会因其转换失败阻止本次操作。部分更新只接受实际写入字段的比较基准，其他修改仍可在后续放开白名单后保存。
 
 通过 `func()` 配置底层构建器的字段白名单时，`insert()` 和 `update()` 会在字段转换前应用该白名单，只接受实际提交的字段基准。若筛选后没有变化字段可写，`update()` 直接返回 `true`。
 
@@ -683,22 +718,22 @@ $affected = User::fastUpdate(function (QueryBuilder $query): void {
 
 `findRecord()`、`findAll()`、`fastUpdate()` 和 `fastDelete()` 直接使用显式传入的表名。省略表名时，才构造实体调用 `tableName()` 推导表名。返回实体的查询仍会按返回行构造实体。
 
-`findRecord()`、`findAll()`、`fastUpdate()`、`fastDelete()` 共用条件解析规则：条件数组中的普通值表示等值条件（字符串和布尔值作为参数绑定），数组值展开为 `[值, 运算符]`；回调接收原始 QueryBuilder。NULL 判断通过条件回调显式调用 `whereNull()` 或 `whereNotNull()`。字符串主键完整绑定为单个值。查询多个主键时在条件数组里明确写 `IN`。
+`findRecord()`、`findAll()`、`fastUpdate()`、`fastDelete()` 共用条件解析规则：条件数组中的普通值表示等值条件（字符串和布尔值作为参数绑定），数组值使用 `[值, 运算符]` 或 `[值, 运算符, AND/OR]`；回调接收原始 QueryBuilder。NULL 判断通过条件回调显式调用 `whereNull()` 或 `whereNotNull()`。字符串主键完整绑定为单个值。查询多个主键时在条件数组里明确写 `IN`。
 
 ```php
 $affected = User::fastUpdate(['score' => [60, '>=']], ['status' => 1]);
 $affected = User::fastUpdate(['id' => [['uuid-a', 'uuid-b'], 'IN']], ['status' => 1]);
 ```
 
-字符串参数始终表示主键，即使它恰好是 PHP 函数名，例如 `'is_object'`、`'trim'`，也不会作为回调调用。条件回调支持闭包、数组形式的静态/实例方法和可调用对象；需要使用字符串形式的函数名或静态方法名时，先通过 `Closure::fromCallable()` 转成闭包：
+字符串参数表示主键，数组参数表示以列名为键的条件映射。条件回调使用闭包或可调用对象。函数名、静态方法或实例方法可以显式转成闭包。
 
 ```php
 $affected = User::fastUpdate('is_object', ['status' => 1]); // WHERE id = 'is_object'。
-$rows = User::findAll([$filter, 'configure'], returnAsArray: true);
+$rows = User::findAll($filter->configure(...), returnAsArray: true);
 $rows = User::findAll(Closure::fromCallable('configureUserQuery'), returnAsArray: true);
 ```
 
-空条件数组会生成无 WHERE 的更新，调用前应明确业务意图。
+`fastUpdate()` 和 `fastDelete()` 的空数组、空字符串条件会报错。需要更新整表时，使用显式的构建器回调或原始查询。
 
 ### 删除
 
@@ -729,7 +764,7 @@ $affected = User::fastInsertAll([
 ], batchSize: 500);
 ```
 
-输入可以是数组、Generator 或其他 iterable。每行必须是非空的数据库字段关联数组，同一批内必须使用相同的字段集合，由 mysqli 构建 SQL 时校验；只重排键顺序可以，不会自动补 null。各批独立执行，允许不同批次使用不同字段集合。每行按迭代读取时的标量值进入缓冲，后续修改行内标量引用不会改写已读取的行。JSON 等属性应先转成数据库可写的值；不会对每行应用实体转换器、`Property::assignCall` / `toValue` 回调或插入钩子，也不回填自增 ID 或实体比较基准。
+输入可以是数组、Generator 或其他 iterable。每行必须是非空的数据库字段关联数组，同一批内必须使用相同的字段集合，由 mysqli 构建 SQL 时校验；只重排键顺序可以，不会自动补 null。各批独立执行，允许不同批次使用不同字段集合。每行按迭代读取时的标量值进入缓冲，后续修改行内标量引用不会改写已读取的行。JSON 等属性应先转成数据库可写的值；不会对每行应用实体转换器或插入钩子，也不回填自增 ID 或实体比较基准。
 
 #### 使用生成器控制批次内存
 
@@ -876,7 +911,7 @@ unset($result[1]); // 保留其他元素的键。
 
 ## 属性转换
 
-可以选择转换对象，或配对输入/输出回调。`convertObject` 与 `assignCall` / `toValue` 不能同时配置在一个属性上。
+使用 `#[Property(convertObject: ...)]` 配置字段双向转换。转换类的 `toObject()` 将输入转成属性对象，`toValue()` 提供写入数据库、输出数组及比较变更时使用的值。
 
 ### ConvertList
 
@@ -1124,48 +1159,6 @@ public UserState $status;
 
 非 nullable 转换属性在初始化时也调用转换器，转换器需要能处理默认值或 null。传入已经是目标类型的对象时，`setData()` 直接接受该对象。
 
-### assignCall 与 toValue
-
-JSON 字段直接映射为数组：
-
-```php
-use EasySwoole\FastDb\Attributes\Hook\Call;
-
-#[Property(
-    assignCall: new Call([JsonUser::class, 'decodeMeta']),
-    toValue: new Call([JsonUser::class, 'encodeMeta'])
-)]
-public ?array $meta;
-
-public static function decodeMeta(string|array|null $value): ?array
-{
-    if ($value === null || is_array($value)) {
-        return $value;
-    }
-    return json_decode($value, true, 512, JSON_THROW_ON_ERROR);
-}
-
-public static function encodeMeta(?array $value): ?string
-{
-    return $value === null ? null : json_encode($value, JSON_THROW_ON_ERROR);
-}
-```
-
-以上属性和方法放在自己的 `JsonUser extends AbstractEntity` 中，并实现 `tableName()`。
-
-`assignCall` 在构造数据和 `setData()` 时执行；直接赋值 `$entity->meta = [...]` 不会执行输入回调。`toValue` 在 `toArray()`、插入和更新需要该值时执行。更新比较基准保留赋值后的属性表示，实际写入使用转换后的值，因此没有变化时不会反复更新，保存后也能改回原值。
-
-回调可使用显式运行时参数：
-
-```php
-new Call(
-    [JsonUser::class, 'encodeWithContext'],
-    [Call::PARAM_PROPERTY_VALUE, Call::PARAM_CURRENT_ENTITY, 'custom-option']
-);
-```
-
-`PARAM_PROPERTY_VALUE` 替换为当前值，`PARAM_CURRENT_ENTITY` 替换为当前实体，其余参数按字面传入。未指定参数时，属性回调收到当前值。
-
 ## 实体生命周期钩子
 
 钩子是类级 Attribute：`OnInitialize`、`OnInsert`、`OnUpdate`、`OnDelete`。可以使用实例方法名或 callable。
@@ -1206,7 +1199,7 @@ class AuditedUser extends User
 
 插入、更新、删除钩子返回严格的 `false` 会中止操作；其他返回值继续执行。初始化钩子没有以返回 false 中止构造的机制。
 
-传入 callable 时，默认收到当前实体；显式参数支持 `Call::PARAM_CURRENT_ENTITY`。钩子可从父类继承，最近一级的声明优先。当前没有 after-insert / after-update / after-delete 钩子，`fastUpdate()`、`fastDelete()` 和原始 SQL 不触发这些生命周期钩子。
+字符串钩子参数表示当前实体的方法名。可调用对象、闭包和数组回调默认收到当前实体，显式参数支持 `Call::PARAM_CURRENT_ENTITY`。使用全局函数时，先用 `Closure::fromCallable()` 转成闭包。钩子可从父类继承，最近一级的声明优先。当前没有 after-insert / after-update / after-delete 钩子，`fastUpdate()`、`fastDelete()` 和原始 SQL 不触发这些生命周期钩子。
 
 ## 关联查询
 
@@ -1347,13 +1340,24 @@ $orders = $users[0]->activeOrders(); // 同样的配置可命中预加载缓存�
 
 按需加载和预加载共用配置方法。配置方法通过传入的构建器设置 SQL 条件、排序或字段；关系返回数组的规则使用 `Relate::returnAsArray` 声明。预加载从 `type` 获取关联类型，不执行 getter。
 
-配置会按父实体分别应用，相同连接、目标实体、关联类型、表名、条件参数、排序、字段和返回形式的计划合并查询。目标表由目标实体的 `tableName()` 确定，连接在配置及目标模型初始化后记录。未指定字段时，批量查询按目标表名或别名选列，再追加内部匹配索引。显式投影按原样使用，空数组由驱动按空投影报错。父关联值为 null 时使用 `IS NULL` 匹配。
+配置会按父实体分别应用，相同连接、目标实体、关联类型、表名、条件参数、排序、字段和返回形式的计划合并查询。目标表由目标实体的 `tableName()` 确定，连接在配置及目标模型初始化后记录。按需加载和预加载都使用调用方的投影，省略投影时沿用 mysqli 的 `*`。预加载只追加内部匹配索引，回填前移除。JOIN 的同名列可能在结果行里互相覆盖，调用方应显式限定列名并为额外列指定输出别名。
+
+```php
+// 关联目标表使用 child 别名。
+protected function configureChildren(QueryBuilder $query): void
+{
+    $query->join('labels AS label', 'label.child_id = child.id', 'INNER')
+        ->fields(['child.id', 'child.name', 'label.name AS label_name']);
+}
+```
+
+父关联键必须已赋值。显式的 null 值使用 `IS NULL` 匹配。FastDb 用目标表名或别名限定自己生成的关联外键条件。复杂表源可用 QueryBuilder 显式查询。
 
 关联的附加条件通过 `configure` 声明。getter 中自行切库、覆盖表名、临时修改父键等业务行为不会参与预加载；需要这些复杂查询时，由业务显式查询和组装结果。预加载结果按声明及配置生成，getter 的后处理仅在业务实际调用 getter 时执行。
 
 常见固定关系、每种关系不超过 250 个唯一父关联键时，通常是 1 条父查询加每种关系 1 条批查询；例如 100 个父实体同时预加载 profile 和 orders，通常为 3 条 SQL。更大的结果按每组查询计划、每 250 个去重父键分批；相同计划还可合并。若动态条件让每个父对象都产生不同计划，关联查询仍可能达到 N 条，不保证任意关系都固定为一条批 SQL。父分页的额外总数查询、业务方法或钩子自己执行的 SQL 另计；空父列表不执行关联 SQL。
 
-预加载按声明和配置构建批量查询。配置中的 LIMIT 作用于整条批量查询，不会自动转换为每个父对象的限制；复杂分页、分组或关联查询由业务显式构造 QueryBuilder 并组装结果。父列表本身可以分页。`all()` 预加载当前列表，`chunk()` / `chunkById()` 只预加载当前批次，在逐条业务回调前完成。
+预加载按声明和配置构建批量查询。配置中的 LIMIT 作用于整条批量查询，不会自动转换为每个父对象的限制；复杂分页、分组或关联查询由业务显式构造 QueryBuilder 并组装结果。预加载关系配置了 `withTotalCount()` 时会在执行任何关联 SQL 前抛出异常。按需加载的关联和父列表仍支持分页总数。`all()` 预加载当前列表，`chunk()` / `chunkById()` 只预加载当前批次，在逐条业务回调前完成。
 
 预加载声明只作用于本次查询，执行后会被消费；查询模板或实体克隆会保留尚未消费的声明，并独立复制查询配置。实体缓存按连接、父键、实际 SQL、参数和返回模式匹配，更改条件、父键、目标表或实体/数组模式不会错误命中旧结果。`clearRelationCache()` 同时清除预加载结果和普通关联缓存，之后 getter 恢复查询；数组附加值已经是普通数组，不受该方法影响。`cacheResult: false` 只关闭按需查询缓存，不会禁用显式预加载的结果。缓存不会自动感知外部写入或事务结果，长生命周期实体应按需清理。
 
@@ -2037,6 +2041,7 @@ FastDb::getInstance()->setOnQuery([SlowQueryLogger::class, 'record']);
 
 ```php
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
+use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Property;
 
 abstract class SlowQueryModel extends AbstractEntity
@@ -2050,7 +2055,8 @@ abstract class SlowQueryModel extends AbstractEntity
 
 class ConfigModel extends SlowQueryModel
 {
-    #[Property(isPrimaryKey: true)]
+    #[Property]
+    #[PrimaryKey]
     public int $configId;
 
     #[Property]

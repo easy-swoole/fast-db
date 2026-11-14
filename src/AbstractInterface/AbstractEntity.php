@@ -88,7 +88,7 @@ abstract class AbstractEntity implements \JsonSerializable
             }
             /** @var Property $property */
             $property = $allProperties[$key];
-            $this->{$key} = FieldCodec::assign($this, $property, $val);
+            $this->{$key} = FieldCodec::assign($property, $val);
             if ($mergeCompare) {
                 $this->entityState->baseline[$key] = FieldCodec::compare($this->{$key});
             }
@@ -96,7 +96,7 @@ abstract class AbstractEntity implements \JsonSerializable
         return $this;
     }
 
-    /** 判断全部或指定映射字段是否相对比较基准发生变化，不调用 Property::toValue 或执行 SQL。 */
+    /** 判断全部或指定映射字段是否相对比较基准发生变化。 */
     public function hasChange(?string $field = null): bool
     {
         return $this->entityState->hasChange($this, $field);
@@ -147,7 +147,7 @@ abstract class AbstractEntity implements \JsonSerializable
     }
 
     /**
-     * 按稳定唯一字段 ASC 分块，默认使用主键；每条回调返回 false 时停止。
+     * 按稳定唯一字段 ASC 分块，默认使用自增字段；每条回调返回 false 时停止。
      * 返回已交付回调的记录数，包含返回 false 的那条记录。
      */
     public function chunkById(callable $func, int $chunkSize = 10, ?string $column = null): int
@@ -157,12 +157,18 @@ abstract class AbstractEntity implements \JsonSerializable
                 throw new \InvalidArgumentException('Chunk size must be greater than zero');
             }
             $reflection = ReflectionCache::getInstance()->parseEntity(static::class);
-            $column ??= $reflection->getPrimaryKey();
-            if ($column === null || !isset($reflection->allProperties()[$column])) {
-                throw new RuntimeError('chunkById requires a declared stable unique field or a primary key');
+            $column ??= $reflection->getAutoIncrementProperty()?->name;
+            if ($column === null) {
+                throw new RuntimeError('chunkById requires a cursor column, an AutoIncrement field or a primary key');
+            }
+            $cursorColumn = TableReference::column($column);
+            // SQL 使用完整列引用，结果行使用其中最后一段的原始字段名。
+            preg_match('/(?:^|\.)`((?:[^`]|``)*)`\z/', $cursorColumn, $cursorParts);
+            $cursorField = str_replace('``', '`', $cursorParts[1]);
+            if (!isset($reflection->allProperties()[$cursorField])) {
+                throw new RuntimeError('chunkById cursor column must refer to a mapped field: ' . $column);
             }
             $template = clone $this->queryLimit();
-            $cursorColumn = TableReference::column($column);
             $lastId = null;
             $delivered = 0;
             while (true) {
@@ -176,13 +182,13 @@ abstract class AbstractEntity implements \JsonSerializable
                 $nextId = null;
                 // 翻页依据原始页，公开回调只能改变交付的数据。
                 $list = $this->selectRows($selection, false,
-                    static function (QueryResult $result) use ($column, &$rowCount, &$nextId): void {
+                    static function (QueryResult $result) use ($cursorField, &$rowCount, &$nextId): void {
                         $rows = $result->getResult();
                         $rowCount = count($rows);
                         if ($rowCount === 0) { return; }
-                        $nextId = $rows[array_key_last($rows)][$column] ?? null;
+                        $nextId = $rows[array_key_last($rows)][$cursorField] ?? null;
                         if ($nextId === null) {
-                            throw new RuntimeError('chunkById requires a non-null cursor value for column: ' . $column);
+                            throw new RuntimeError('chunkById requires a non-null cursor value for column: ' . $cursorField);
                         }
                     })->list();
                 if ($rowCount === 0) { return $delivered; }
@@ -320,8 +326,7 @@ abstract class AbstractEntity implements \JsonSerializable
             }
             $selection = $this->queryLimit();
             $properties = $selection->filterProperties($entityRef->allProperties());
-            $compareValues = [];
-            $data = $this->entityState->changes($this, $properties, $compareValues);
+            $data = $this->entityState->changes($this, $properties);
 
             if(empty($data)){
                 return true;
@@ -329,17 +334,14 @@ abstract class AbstractEntity implements \JsonSerializable
             $query = $selection->__getQueryBuilder();
             $tableName = $this->tableName();
             $this->requirePrimaryKey($query, $entityRef, 'update');
-            // 转换回调或表名方法可能收窄底层白名单，比较基准只接受最终写入的列。
+            // 表名方法可能收窄底层白名单，比较基准只接受最终写入的列。
             $data = Query::filterWriteFields($data, $query);
             if ($data === []) { return true; }
-            if (count($compareValues) !== count($data)) {
-                $compareValues = array_intersect_key($compareValues, $data);
-            }
             $query->update($tableName, $data);
             // 按 SQL 成功顺序接受基准，再通知观察回调；重入保存可据此写回原值。
             $ret = static::callQuery($query,$this->onQuery,
-                function (QueryResult $result) use ($compareValues): void {
-                    if ($result->getAffectedRows() > 0) { $this->entityState->accept($compareValues); }
+                function (QueryResult $result) use ($data): void {
+                    if ($result->getAffectedRows() > 0) { $this->entityState->accept($data); }
                 });
             return $ret->getAffectedRows() > 0;
         } finally {
@@ -356,6 +358,9 @@ abstract class AbstractEntity implements \JsonSerializable
         callable|null $onQuery = null
     ):bool|int|string
     {
+        if ($updateLimit === [] || $updateLimit === '') {
+            throw new \InvalidArgumentException('fastUpdate requires a non-empty condition or primary key');
+        }
         if ($tableName === null) {
             $tableName = (new static())->tableName();
         }
@@ -390,11 +395,10 @@ abstract class AbstractEntity implements \JsonSerializable
                     return false;
                 }
             }
-            // 生成写入值和比较基准；普通 null 字段省略，让数据库使用默认值。
-            $compareValues = [];
+            // 省略值为 null 的属性，让数据库使用默认值。
             $selection = $this->queryLimit();
             $properties = $selection->filterProperties($entityRef->allProperties());
-            $data = FieldCodec::values($this, $properties, true, $compareValues);
+            $data = FieldCodec::values($this, $properties, true);
             $query = $selection->__getQueryBuilder();
             $tableName = $this->tableName();
             if ($updateDuplicateCols !== null) {
@@ -404,9 +408,7 @@ abstract class AbstractEntity implements \JsonSerializable
                 $query->onDuplicate($updateDuplicateCols);
             }
             $data = Query::filterWriteFields($data, $query);
-            if (count($compareValues) !== count($data)) {
-                $compareValues = array_intersect_key($compareValues, $data);
-            }
+            $compareValues = $data;
             // 构建 SQL 会清理选项，提前读取包括 func() 设置在内的冲突更新列。
             $duplicateColumns = $query instanceof EntityQueryBuilder ? $query->getDuplicateColumns() : $updateDuplicateCols;
             $query->insert($tableName, $data);
@@ -422,16 +424,21 @@ abstract class AbstractEntity implements \JsonSerializable
                 $compareValues = $confirmed;
             }
             $isSuccess = false;
-            $primaryKey = $entityRef->getPrimaryKey();
-            $fillPrimaryKey = $primaryKey !== null && !array_key_exists($primaryKey, $data);
+            $autoIncrement = $entityRef->getAutoIncrementProperty();
+            if ($autoIncrement !== null && array_key_exists($autoIncrement->name, $data)) {
+                // 显式写入自增字段时保留调用方给出的值。
+                $autoIncrement = null;
+            }
             static::callQuery($query, $this->onQuery,
-                function (QueryResult $result) use ($compareValues, $primaryKey, $fillPrimaryKey, $entityRef, &$isSuccess): void {
+                function (QueryResult $result) use ($compareValues, $autoIncrement, &$isSuccess): void {
                     $isSuccess = $result->getResult() === true;
                     if (!$isSuccess) { return; }
-                    if ($fillPrimaryKey && $result->getInsertId() >= 1) {
-                        // 自增主键按字段定义转换后回填，再建立基准，供公开回调继续更新。
-                        $this->{$primaryKey} = FieldCodec::assign($this, $entityRef->allProperties()[$primaryKey], $result->getInsertId());
-                        $compareValues[$primaryKey] = FieldCodec::compare($this->{$primaryKey});
+                    $insertId = $result->getInsertId();
+                    if ($autoIncrement !== null && $insertId >= 1) {
+                        // 先按字段定义转换并建立基准，公开回调可直接使用生成的值。
+                        $field = $autoIncrement->name;
+                        $this->{$field} = FieldCodec::assign($autoIncrement, $insertId);
+                        $compareValues[$field] = FieldCodec::compare($this->{$field});
                     }
                     // 只接受本次成功写入字段，不重新赋值，也不覆盖稍后公开回调的修改。
                     $this->entityState->accept($compareValues);
@@ -504,11 +511,10 @@ abstract class AbstractEntity implements \JsonSerializable
 
     protected function callHook(Call $callback):mixed
     {
-        if (is_callable($callback->callback)) {
-            return ($callback->callback)(...$callback->buildEntityHookRuntimeParams($this));
+        if (is_string($callback->callback)) {
+            return $this->{$callback->callback}();
         }
-        // 方法名钩子由 PHP 按当前实体作用域调用，调用错误直接传播。
-        return $this->{$callback->callback}();
+        return ($callback->callback)(...$callback->buildEntityHookRuntimeParams($this));
     }
 
     /** @internal 直接读取关联声明并调用配置方法，不执行业务 getter。 */
@@ -527,7 +533,7 @@ abstract class AbstractEntity implements \JsonSerializable
         $target = new $relate->targetEntity();
         $tableName = $target->tableName();
         $connectionName = FastDb::getInstance()->selectConnection();
-        $selfValue = FieldCodec::compare($this->{$relate->selfProperty} ?? null);
+        $selfValue = FieldCodec::compare($this->{$relate->selfProperty});
         $builder = $query->__getQueryBuilder();
         $fields = $query->getFields();
         return new RelationPlan($relate, $tableName, $builder, $fields['fields'] ?? null,
@@ -702,14 +708,14 @@ abstract class AbstractEntity implements \JsonSerializable
 
     private function selectAggregateRow(QueryBuilder $query, array $fields, ?string $group): array
     {
-        if ($group) {
+        if ($group !== null) {
             $query->groupBy($group);
         }
         $query->get($this->tableName(), 1, $fields);
         return static::callQuery($query, $this->onQuery)->getResult()[0] ?? [];
     }
 
-    /** 字符串始终作为主键；其余 callable（包括数组回调）优先于条件数组解析。 */
+    /** 标量是主键，数组是条件；数组或字符串形式的回调由调用方显式转换。 */
     private static function applyQueryLimit(QueryBuilder $query, array|callable|string|int|null $limit,
         string $operation): void
     {
@@ -717,13 +723,22 @@ abstract class AbstractEntity implements \JsonSerializable
             $key = ReflectionCache::getInstance()->parseEntity(static::class)->getPrimaryKey();
             if ($key === null) { throw new RuntimeError('entity can not ' . $operation . ' without primary key define'); }
             $query->where($key, $limit);
-        } elseif (is_callable($limit)) {
-            $limit($query);
         } elseif (is_array($limit)) {
             foreach ($limit as $column => $value) {
-                if (is_array($value)) { $query->where($column, ...$value); }
-                else { $query->where($column, $value); }
+                if (!is_string($column)) {
+                    throw new \InvalidArgumentException('Query conditions require column names as array keys');
+                }
+                if (is_array($value)) {
+                    if (!array_is_list($value) || count($value) < 2 || count($value) > 3) {
+                        throw new \InvalidArgumentException('Array conditions require [value, operator, optional conjunction]');
+                    }
+                    $query->where($column, ...$value);
+                } else {
+                    $query->where($column, $value);
+                }
             }
+        } elseif ($limit !== null) {
+            $limit($query);
         }
     }
 

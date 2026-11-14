@@ -6,8 +6,8 @@ namespace EasySwoole\FastDb\Tests;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\AbstractInterface\ConvertBean;
 use EasySwoole\FastDb\AbstractInterface\ConvertList;
-use EasySwoole\FastDb\Attributes\Hook\Call;
 use EasySwoole\FastDb\Attributes\Hook\OnUpdate;
+use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
@@ -39,7 +39,7 @@ final class ChangesTest extends TestCase
         $this->singleton = new \ReflectionProperty(FastDb::class,'instance');
         $this->previous = $this->singleton->getValue();
         $this->singleton->setValue(null,$this->db);
-        ChangesRecord::$encodes = ChangesRecord::$updates = 0;
+        ChangesRecord::$updates = 0;
     }
 
     protected function tearDown(): void
@@ -112,35 +112,30 @@ final class ChangesTest extends TestCase
         $this->assertSame(['profile'=>null], $record->getChanges());
     }
 
-    public function testChangeChecksReturnPropertyValuesWithoutEncodingSavingOrQuerying(): void
+    public function testChangeChecksReturnPropertyValuesWithoutSavingOrQuerying(): void
     {
         $record = $this->record();
-        $record->payload = [2];
-        $this->assertTrue($record->hasChange('payload'));
+        $record->name = 'new';
+        $this->assertTrue($record->hasChange('name'));
         $this->assertTrue($record->hasChange());
-        $this->assertSame(0, ChangesRecord::$encodes);
-        $this->assertSame(['payload'=>[2]], $record->getChanges());
-        $this->assertSame(0, ChangesRecord::$encodes);
-        $this->assertSame([2], $record->payload);
-        $this->assertTrue($record->hasChange('payload'));
+        $this->assertSame(['name' => 'new'], $record->getChanges());
         $this->assertSame(0, ChangesRecord::$updates);
         $this->assertSame([], $this->connection->queries);
-        $this->assertNull((new \ReflectionProperty(AbstractEntity::class,'queryBuilder'))->getValue($record));
+        $this->assertNull((new \ReflectionProperty(AbstractEntity::class, 'queryBuilder'))->getValue($record));
     }
 
-    public function testSuccessfulWritesAcceptBothConvertedAndCustomEncodedBaselines(): void
+    public function testSuccessfulWritesAcceptConvertedBaselines(): void
     {
         $record = $this->record();
         $record->tags->append(2);
-        $record->payload = [2];
+        $record->setData(['payload' => [2]]);
         $record->profile->city = 'new';
-        $this->assertSame(['tags'=>$record->tags,'payload'=>[2],'profile'=>$record->profile], $record->getChanges());
+        $this->assertSame(['tags'=>$record->tags,'payload'=>$record->payload,'profile'=>$record->profile], $record->getChanges());
         $this->assertTrue($record->update());
         $this->assertFalse($record->hasChange());
         $this->assertSame([], $record->getChanges());
         $stored = $this->connection->database->query("SELECT tags,payload,profile FROM changes_records WHERE id='record-a'")->fetch(\PDO::FETCH_ASSOC);
         $this->assertSame(['tags'=>'[1,2]','payload'=>'[2]','profile'=>'{"city":"new"}'], $stored);
-        $this->assertSame(1, ChangesRecord::$encodes);
     }
 
     public function testChecksIgnoreFieldLimitsAndPreserveTheHeldQueryConfiguration(): void
@@ -235,19 +230,17 @@ final class ChangesTest extends TestCase
 #[OnUpdate('beforeUpdate')]
 class ChangesRecord extends AbstractEntity
 {
-    public static int $encodes = 0;
     public static int $updates = 0;
-    #[Property(isPrimaryKey:true)] public string $id;
+    #[Property]
+    #[PrimaryKey]
+    public string $id;
     #[Property] public ?string $name;
     #[Property] public ?int $score;
     #[Property(convertObject:ConvertList::class)] public ?ConvertList $tags;
-    #[Property(assignCall:new Call([self::class,'decode']),toValue:new Call([self::class,'encode']))]
-    public ?array $payload;
+    #[Property(convertObject: ConvertList::class)] public ?ConvertList $payload;
     #[Property(convertObject:ChangesProfile::class)] public ?ChangesProfile $profile;
     public string $transient = 'initial';
     public function tableName(): string { return 'changes_records'; }
-    public static function decode(?string $value): ?array { return $value === null ? null : json_decode($value,true,512,JSON_THROW_ON_ERROR); }
-    public static function encode(?array $value): ?string { self::$encodes++; return $value === null ? null : json_encode($value,JSON_THROW_ON_ERROR); }
     protected function beforeUpdate(): void { self::$updates++; }
 }
 

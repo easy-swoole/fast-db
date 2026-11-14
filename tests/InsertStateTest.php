@@ -7,8 +7,10 @@ namespace EasySwoole\FastDb\Tests;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\AbstractInterface\ConvertDateTime;
 use EasySwoole\FastDb\AbstractInterface\ConvertList;
-use EasySwoole\FastDb\Attributes\Hook\Call;
+use EasySwoole\FastDb\Attributes\AutoIncrement;
+use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Property;
+use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Tests\Model\ConvertedKey;
 use EasySwoole\FastDb\Mysql\Connection;
@@ -38,9 +40,8 @@ final class InsertStateTest extends TestCase
         $this->singleton = new \ReflectionProperty(FastDb::class, 'instance');
         $this->previous = $this->singleton->getValue();
         $this->singleton->setValue(null, $this->db);
-        InsertStateRecord::$assignCalls = InsertStateRecord::$encodeCalls = InsertStateList::$valueCalls = 0;
-        InsertStateRecord::$changeNameWhenEncoding = false;
-        InsertStateRecord::$failEncoding = InsertStateList::$failEncoding = false;
+        InsertStateList::$valueCalls = 0;
+        InsertStateList::$failEncoding = false;
     }
 
     protected function tearDown(): void
@@ -85,15 +86,76 @@ final class InsertStateTest extends TestCase
         $this->assertCount(4, $this->client->queries);
     }
 
-    public function testGeneratedPrimaryKeyUsesItsAssignmentCallbackOnce(): void
+    public function testGeneratedPrimaryKeyUsesItsObjectConverterOnce(): void
     {
-        AssignedInsertStateRecord::$assigns = 0;
-        $entity = new AssignedInsertStateRecord(['name'=>'assigned']);
+        CountingInsertKey::$conversions = 0;
+        $entity = new CountingKeyInsertStateRecord(['name'=>'assigned']);
         $this->assertTrue($entity->insert());
-        $this->assertSame(1, $entity->id);
-        $this->assertSame(1, AssignedInsertStateRecord::$assigns);
+        $this->assertSame('1', $entity->id->value);
+        $this->assertSame(1, CountingInsertKey::$conversions);
         $this->assertTrue($entity->update());
         $this->assertCount(1, $this->client->queries);
+    }
+
+    public function testAutoIncrementCanBeDeclaredWithoutAPrimaryKey(): void
+    {
+        $entity = new class (['name' => 'generated']) extends AbstractEntity {
+            #[Property]
+            #[AutoIncrement]
+            public int $id;
+            #[Property]
+            public string $name;
+            public function tableName(): string { return 'insert_state'; }
+        };
+
+        $this->assertTrue($entity->insert());
+        $this->assertSame(1, $entity->id);
+        $this->assertFalse($entity->hasChange('id'));
+    }
+
+    public function testEntityCannotDeclareTwoPrimaryKeyFields(): void
+    {
+        $this->expectException(RuntimeError::class);
+        $this->expectExceptionMessage('can not duplicate define primary key');
+        new class extends InsertStateRecord {
+            #[Property]
+            #[PrimaryKey]
+            public int $other;
+        };
+    }
+
+    public function testPrimaryKeyRequiresAMappedProperty(): void
+    {
+        $this->expectException(RuntimeError::class);
+        $this->expectExceptionMessage('PrimaryKey requires a public non-static Property field');
+        new class extends InsertStateRecord {
+            #[PrimaryKey]
+            public int $unmapped;
+        };
+    }
+
+    public function testEntityCannotDeclareTwoAutoIncrementFields(): void
+    {
+        $this->expectException(RuntimeError::class);
+        $this->expectExceptionMessage('Only one AutoIncrement field');
+        new class extends InsertStateRecord {
+            #[Property]
+            #[AutoIncrement]
+            public int $first;
+            #[Property]
+            #[AutoIncrement]
+            public int $second;
+        };
+    }
+
+    public function testAutoIncrementRequiresAMappedProperty(): void
+    {
+        $this->expectException(RuntimeError::class);
+        $this->expectExceptionMessage('AutoIncrement requires a public non-static Property field');
+        new class extends InsertStateRecord {
+            #[AutoIncrement]
+            public int $unmapped;
+        };
     }
 
     #[DataProvider('observerModes')]
@@ -176,17 +238,15 @@ final class InsertStateTest extends TestCase
         $entity->update();
     }
 
-    public function testInsertDoesNotRepeatAssignmentOrObjectEncoding(): void
+    public function testInsertEncodesEachObjectOnceAndPreservesItsIdentity(): void
     {
         $entity = new InsertStateRecord(['name' => 'converted', 'payload' => '[1]', 'items' => '[2]']);
         $items = $entity->items;
-        InsertStateRecord::$assignCalls = InsertStateRecord::$encodeCalls = InsertStateList::$valueCalls = 0;
+        InsertStateList::$valueCalls = 0;
         $this->assertTrue($entity->insert());
-        $this->assertSame(0, InsertStateRecord::$assignCalls);
-        $this->assertSame(1, InsertStateRecord::$encodeCalls);
-        $this->assertSame(1, InsertStateList::$valueCalls);
+        $this->assertSame(2, InsertStateList::$valueCalls);
         $this->assertSame($items, $entity->items);
-        $this->assertSame([1], $entity->payload);
+        $this->assertSame([1], $entity->payload->toArray());
         $this->assertSame('[1]', $this->client->row()['payload']);
         $this->assertTrue($entity->update());
         $this->assertCount(1, $this->client->queries);
@@ -196,9 +256,9 @@ final class InsertStateTest extends TestCase
     public function testExcludedConvertersCannotBlockOutputInsertOrPartialUpdate(bool $builderFields): void
     {
         $entity = new InsertStateRecord(['name' => 'before', 'payload' => '[1]', 'items' => '[2]']);
-        $entity->payload = [3]; $entity->items->append(4);
-        InsertStateRecord::$encodeCalls = InsertStateList::$valueCalls = 0;
-        InsertStateRecord::$failEncoding = InsertStateList::$failEncoding = true;
+        $entity->setData(['payload' => [3]]); $entity->items->append(4);
+        InsertStateList::$valueCalls = 0;
+        InsertStateList::$failEncoding = true;
         $entity->queryLimit()->hideFields(['payload', 'items']);
         $this->assertSame(['id' => null, 'name' => 'before', 'score' => null, 'moment' => null], $entity->toArray());
         $entity->queryLimit()->hideFields([])->fields(['name']);
@@ -209,12 +269,11 @@ final class InsertStateTest extends TestCase
         if ($builderFields) { $entity->queryLimit()->__getQueryBuilder()->fields(['name']); }
         else { $entity->queryLimit()->fields(['name']); }
         $this->assertTrue($entity->update());
-        $this->assertSame(0, InsertStateRecord::$encodeCalls);
         $this->assertSame(0, InsertStateList::$valueCalls);
         $this->assertNull($this->client->row()['payload']);
         $this->assertNull($this->client->row()['items']);
         // 被排除字段仍保留待更新状态，放开白名单后正常保存。
-        InsertStateRecord::$failEncoding = InsertStateList::$failEncoding = false;
+        InsertStateList::$failEncoding = false;
         $this->assertTrue($entity->update());
         $this->assertSame('[3]', $this->client->row()['payload']);
         $this->assertSame('[2,4]', $this->client->row()['items']);
@@ -231,7 +290,7 @@ final class InsertStateTest extends TestCase
         $this->assertTrue($entity->insert());
         $this->assertSame('hidden', $this->client->row()['name']);
         $this->assertSame('[1]', $this->client->row()['payload']);
-        $entity->payload = [2];
+        $entity->setData(['payload' => [2]]);
         $this->assertTrue($entity->update());
         $this->assertSame('[2]', $this->client->row()['payload']);
     }
@@ -239,12 +298,12 @@ final class InsertStateTest extends TestCase
     public function testSelectedConverterErrorsPropagateWithoutExecutingSql(): void
     {
         $entity = new InsertStateRecord(['name' => 'before', 'payload' => '[1]']);
-        InsertStateRecord::$failEncoding = true;
+        InsertStateList::$failEncoding = true;
         foreach (['toArray', 'insert', 'update'] as $operation) {
-            $entity->payload = [2];
+            $entity->setData(['payload' => [2]]);
             $entity->queryLimit()->fields(['payload']);
             try { $entity->$operation(); $this->fail('Selected converter failure must propagate'); }
-            catch (\RuntimeException $error) { $this->assertSame('payload encoding failed', $error->getMessage()); }
+            catch (\RuntimeException $error) { $this->assertSame('items encoding failed', $error->getMessage()); }
         }
         $this->assertCount(0, $this->client->queries);
     }
@@ -300,20 +359,6 @@ final class InsertStateTest extends TestCase
         $this->assertTrue($entity->update());
         $this->assertSame(['after-failure', 20], $this->client->queries[1]['parameters']);
         $this->assertSame('after-failure', $this->client->row(20)['name']);
-    }
-
-    public function testEncodingAnotherFieldCannotHideAChangeToAnAlreadyEncodedField(): void
-    {
-        $entity = new InsertStateRecord(['name' => 'before', 'payload' => '[1]']);
-        InsertStateRecord::$changeNameWhenEncoding = true;
-        $this->assertTrue($entity->insert());
-        $this->assertSame(['before', '[1]'], $this->client->queries[0]['parameters']);
-        $this->assertSame('changed-by-encoder', $entity->name);
-        $this->assertSame('before', $this->client->row()['name']);
-        InsertStateRecord::$changeNameWhenEncoding = false;
-        $this->assertTrue($entity->update());
-        $this->assertSame(['changed-by-encoder', 1], $this->client->queries[1]['parameters']);
-        $this->assertSame('changed-by-encoder', $this->client->row()['name']);
     }
 
     public function testFalseInsertResultIsNotAcceptedJustBecauseDuplicateColumnsWereRequested(): void
@@ -424,26 +469,14 @@ final class InsertStateTest extends TestCase
 
 class InsertStateRecord extends AbstractEntity
 {
-    public static int $assignCalls = 0;
-    public static int $encodeCalls = 0;
-    public static bool $changeNameWhenEncoding = false;
-    public static bool $failEncoding = false;
-    #[Property(isPrimaryKey: true)] public int $id;
+    #[Property]
+    #[PrimaryKey]
+    public int $id;
     #[Property] public ?string $name;
     #[Property] public ?int $score;
-    #[Property(assignCall: new Call([self::class, 'decode']),
-        toValue: new Call([self::class, 'encode'], [Call::PARAM_PROPERTY_VALUE, Call::PARAM_CURRENT_ENTITY]))]
-    public ?array $payload;
+    #[Property(convertObject: InsertStateList::class)] public ?InsertStateList $payload;
     #[Property(convertObject: ConvertDateTime::class)] public ?ConvertDateTime $moment;
     #[Property(convertObject: InsertStateList::class)] public ?InsertStateList $items;
-    public static function decode(?string $value): ?array { self::$assignCalls++; return $value === null ? null : json_decode($value, true, 512, JSON_THROW_ON_ERROR); }
-    public static function encode(?array $value, self $entity): ?string
-    {
-        self::$encodeCalls++;
-        if (self::$failEncoding) { throw new \RuntimeException('payload encoding failed'); }
-        if (self::$changeNameWhenEncoding) { $entity->name = 'changed-by-encoder'; }
-        return $value === null ? null : json_encode($value, JSON_THROW_ON_ERROR);
-    }
     public function tableName(): string { return 'insert_state'; }
 }
 
@@ -498,15 +531,27 @@ class InsertStateConnection extends Connection
 
 class ConvertedInsertStateRecord extends AbstractEntity
 {
-    #[Property(isPrimaryKey:true,convertObject:ConvertedKey::class)] public ?ConvertedKey $id;
+    #[Property(convertObject:ConvertedKey::class)]
+    #[PrimaryKey]
+    public ?ConvertedKey $id;
     #[Property] public ?string $name;
     public function tableName(): string { return 'insert_state'; }
 }
-class AssignedInsertStateRecord extends AbstractEntity
+class CountingKeyInsertStateRecord extends AbstractEntity
 {
-    public static int $assigns = 0;
-    #[Property(isPrimaryKey:true,assignCall:new Call([self::class,'assignId']))] public int $id;
+    #[Property(convertObject: CountingInsertKey::class)]
+    #[PrimaryKey]
+    public ?CountingInsertKey $id;
     #[Property] public ?string $name;
-    public static function assignId(int|string $value): int { self::$assigns++; return (int)$value; }
     public function tableName(): string { return 'insert_state'; }
+}
+
+class CountingInsertKey extends ConvertedKey
+{
+    public static int $conversions = 0;
+    public static function toObject(mixed $data): object
+    {
+        self::$conversions++;
+        return parent::toObject($data);
+    }
 }

@@ -5,6 +5,7 @@ namespace EasySwoole\FastDb\Tests;
 
 use EasySwoole\FastDb\RelationType;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
+use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Exception\RuntimeError;
@@ -113,13 +114,17 @@ final class RelationDeclarationTest extends TestCase
 
 class DeclarationTarget extends AbstractEntity
 {
-    #[Property(isPrimaryKey:true)] public int $id;
+    #[Property]
+    #[PrimaryKey]
+    public int $id;
     #[Property] public int $parent_id;
     public function tableName(): string { return 'children'; }
 }
 class DeclarationParent extends AbstractEntity
 {
-    #[Property(isPrimaryKey:true)] public int $id;
+    #[Property]
+    #[PrimaryKey]
+    public int $id;
     #[Property] public int $tenant;
     public function tableName(): string { return 'parents'; }
     #[Relate(DeclarationTarget::class,'parent_id',type:RelationType::Many)]

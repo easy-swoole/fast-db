@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace EasySwoole\FastDb\Tests;
 
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
+use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Beans\Query;
 use EasySwoole\FastDb\FastDb;
@@ -279,7 +280,8 @@ final class ChunkTest extends TestCase
 
 class ChunkEntity extends AbstractEntity
 {
-    #[Property(isPrimaryKey: true)]
+    #[Property]
+    #[PrimaryKey]
     public int $id;
 
     #[Property]

@@ -13,6 +13,7 @@ namespace EasySwoole\FastDb\Tests\Model;
 
 use EasySwoole\FastDb\RelationType;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
+use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Attributes\Relate;
 
@@ -25,7 +26,8 @@ use EasySwoole\FastDb\Attributes\Relate;
  */
 class StudentModel extends AbstractEntity
 {
-    #[Property(isPrimaryKey: true)]
+    #[Property]
+    #[PrimaryKey]
     public int $id;
 
     #[Property]

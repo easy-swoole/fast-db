@@ -34,7 +34,7 @@ final class RelationLoader
         $fields = $selection->getFields();
         $returnAsArray = $fields['returnAsArray'] ?? false;
         RelationPlan::buildLookup($query, $tableName ?? $target->tableName(), $relate,
-            FieldCodec::compare($entity->{$relate->selfProperty} ?? null), $fields['fields'] ?? null);
+            FieldCodec::compare($entity->{$relate->selfProperty}), $fields['fields'] ?? null);
         $key = $relate->cacheResult || $this->preloaded !== []
             ? $this->fingerprint($relate, $query, $returnAsArray, FastDb::getInstance()->selectConnection()) : null;
         if ($key !== null && array_key_exists($key, $this->preloaded)) {
@@ -51,7 +51,7 @@ final class RelationLoader
             elseif (count($rows) > 1) { throw new RuntimeError('more than one record hit is no allow in relateOne method'); }
             elseif ($returnAsArray) { $data = $rows[0]; }
             else {
-                // 单条实体赋值前结束父查询配置，字段转换可重入父模型；最终清理由实体入口负责。
+                // 单条实体赋值前结束父查询配置，子类赋值或字段转换时可重入父模型；最终清理由实体入口负责。
                 $beforeOneHydration();
                 $target->setData($rows[0], true);
                 $data = $target;

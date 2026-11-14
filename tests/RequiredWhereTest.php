@@ -8,6 +8,7 @@ use EasySwoole\FastDb\RelationType;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Attributes\Hook\OnDelete;
 use EasySwoole\FastDb\Attributes\Hook\OnUpdate;
+use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Beans\ListResult;
@@ -214,7 +215,8 @@ final class RequiredWhereTest extends TestCase
 
 class RequiredWhereRecord extends AbstractEntity
 {
-    #[Property(isPrimaryKey: true)]
+    #[Property]
+    #[PrimaryKey]
     public int $id;
 
     #[Property]
@@ -261,7 +263,8 @@ class RequiredWhereHookRecord extends RequiredWhereRecord
 
 class RequiredWhereParent extends AbstractEntity
 {
-    #[Property(isPrimaryKey: true)]
+    #[Property]
+    #[PrimaryKey]
     public int $id;
 
     public function tableName(): string { return 'required_where_parents'; }

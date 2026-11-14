@@ -5,8 +5,9 @@ declare(strict_types=1);
 namespace EasySwoole\FastDb\Tests;
 
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
+use EasySwoole\FastDb\AbstractInterface\ConvertList;
+use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Property;
-use EasySwoole\FastDb\Attributes\Hook\Call;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\Mysqli\QueryBuilder;
@@ -33,11 +34,11 @@ final class UpdateConversionTest extends TestCase
         try {
             $entity = new UpdateConversionEntity(['id' => 1, 'payload' => '[1]']);
             $this->assertTrue($entity->update()); // 从数据库加载的值没有变化。
-            $entity->payload = [2];
+            $entity->setData(['payload' => [2]]);
             $this->assertTrue($entity->update());
-            $this->assertSame([2], $entity->payload);
+            $this->assertSame([2], $entity->payload->toArray());
             $this->assertTrue($entity->update()); // 更新成功后，将当前值作为新的比较基准。
-            $entity->payload = [1];
+            $entity->setData(['payload' => [1]]);
             $this->assertTrue($entity->update());
             $this->assertSame(['[2]', 1], $queries[0]);
             $this->assertSame(['[1]', 1], $queries[1]);
@@ -46,7 +47,7 @@ final class UpdateConversionTest extends TestCase
         }
     }
 
-    public function testCallbackReceivesCurrentEntityAndNull(): void
+    public function testNullableConvertedFieldWritesSqlNull(): void
     {
         $connection = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()
             ->onlyMethods(['query', 'getLastAffectRows', 'getLastInsertId'])->getMock();
@@ -81,28 +82,12 @@ final class UpdateConversionTest extends TestCase
 
 class UpdateConversionEntity extends AbstractEntity
 {
-    #[Property(isPrimaryKey: true)]
+    #[Property]
+    #[PrimaryKey]
     public int $id;
 
-    #[Property(
-        assignCall: new Call([UpdateConversionEntity::class, 'decode']),
-        toValue: new Call([UpdateConversionEntity::class, 'encode'],
-            [Call::PARAM_PROPERTY_VALUE, Call::PARAM_CURRENT_ENTITY])
-    )]
-    public ?array $payload;
-
-    public static function decode(?string $value): ?array
-    {
-        return $value === null ? null : json_decode($value, true, 512, JSON_THROW_ON_ERROR);
-    }
-
-    public static function encode(?array $value, UpdateConversionEntity $entity): ?string
-    {
-        if ($entity->id !== 1) {
-            throw new \RuntimeException('Unexpected current entity');
-        }
-        return $value === null ? null : json_encode($value, JSON_THROW_ON_ERROR);
-    }
+    #[Property(convertObject: ConvertList::class)]
+    public ?ConvertList $payload;
 
     public function tableName(): string
     {

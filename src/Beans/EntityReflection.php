@@ -20,6 +20,7 @@ class EntityReflection
     private array $properties = [];
 
     private ?string $primaryKey = null;
+    private ?Property $autoIncrementProperty = null;
 
     public function __construct(
         public readonly string $entityClass,
@@ -71,18 +72,31 @@ class EntityReflection
         return $this->primaryKey;
     }
 
+    public function setPrimaryKey(string $field): void
+    {
+        if ($this->primaryKey !== null) {
+            throw new RuntimeError("can not duplicate define primary key in class {$this->entityClass}");
+        }
+        $this->primaryKey = $field;
+    }
+
+    public function getAutoIncrementProperty(): ?Property
+    {
+        return $this->autoIncrementProperty ?? ($this->primaryKey === null ? null : $this->properties[$this->primaryKey]);
+    }
+
+    public function setAutoIncrementProperty(Property $property): void
+    {
+        if ($this->autoIncrementProperty !== null) {
+            throw new RuntimeError("Only one AutoIncrement field can be declared in {$this->entityClass}");
+        }
+        $this->autoIncrementProperty = $property;
+    }
+
 
     function addProperty(Property $property):void
     {
         $this->properties[$property->name] = $property;
-        if($property->isPrimaryKey){
-            if($this->primaryKey){
-                $msg = "can not duplicate define primary key in class {$this->entityClass}";
-                throw new RuntimeError($msg);
-            }else{
-                $this->primaryKey = $property->name;
-            }
-        }
     }
 
     function allProperties():array

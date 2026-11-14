@@ -6,6 +6,7 @@ namespace EasySwoole\FastDb\Tests;
 
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\AbstractInterface\ConvertList;
+use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Beans\Query;
 use EasySwoole\FastDb\Exception\RuntimeError;
@@ -397,10 +398,10 @@ final class ChunkByIdTest extends TestCase
         $this->assertClean($owner);
     }
 
-    public static function invalidColumns(): array { return [[''], ['missing_column'], ['id AS other'], ['keyset_chunk_records.id']]; }
+    public static function invalidColumns(): array { return [[''], ['missing_column'], ['id AS other'], ['keyset_chunk_records.missing_column']]; }
 
     #[DataProvider('invalidColumns')]
-    public function testCursorColumnMustBeADeclaredUnqualifiedProperty(string $column): void
+    public function testCursorColumnMustEndInADeclaredPropertyName(string $column): void
     {
         $owner = new KeysetChunkRecord();
         try { $owner->chunkById(static function (): void {}, 2, $column); $this->fail('Invalid cursor column must fail'); }
@@ -412,7 +413,9 @@ final class ChunkByIdTest extends TestCase
 
 class KeysetChunkRecord extends AbstractEntity
 {
-    #[Property(isPrimaryKey: true)] public int $id;
+    #[Property]
+    #[PrimaryKey]
+    public int $id;
     #[Property] public ?string $stable_key;
     #[Property] public ?string $name;
     #[Property] public ?int $status;

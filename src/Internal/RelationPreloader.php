@@ -74,6 +74,11 @@ final class RelationPreloader
                 $columns = $relationPlan->columns;
                 // 先生成不带具体父键的 SQL，配置和参数相同的父记录可共用一条批量查询。
                 $previewQuery = (clone $builder)->get($tableName, null, $columns);
+                $queryOptions = $previewQuery->getLastQueryOptions();
+                if (in_array('SQL_CALC_FOUND_ROWS', $queryOptions, true)) {
+                    // 批量查询的总数无法对应到单个父对象。
+                    throw new RuntimeError('Relation preload does not support withTotalCount()');
+                }
                 $cacheLookup = null;
                 if (!$returnAsArray) {
                     // 实体 getter 按单个父键匹配缓存，因此要保留该父对象自己的查询。
@@ -84,7 +89,7 @@ final class RelationPreloader
                 $groupKey = hash('sha256', serialize([
                     $relationPlan->connectionName, $relationPlan->relate->type, $relationPlan->relate->targetEntity,
                     $relationPlan->relate->targetProperty, $tableName, $relationPlan->returnAsArray,
-                    $previewQuery->getLastPrepareQuery(), $previewQuery->getLastBindParams(), $previewQuery->getLastQueryOptions(),
+                    $previewQuery->getLastPrepareQuery(), $previewQuery->getLastBindParams(), $queryOptions,
                 ]));
                 // 保留键值的类型，避免 PHP 数组键把字符串 '1' 和整数 1 当作同一个键。
                 $serializedParentKey = serialize($parentKeyValue);
@@ -136,9 +141,7 @@ final class RelationPreloader
     {
         $db = FastDb::getInstance();
         $matches = [];
-        $target = RelationPlan::tableTarget($plan->builder, $plan->tableName)
-            ?? throw new \InvalidArgumentException('Relation preload requires an identifiable target table');
-        $foreign = $target . '.' . TableReference::identifier($plan->relate->targetProperty);
+        $foreign = RelationPlan::foreignKey($plan->builder, $plan->tableName, $plan->relate->targetProperty);
         foreach (array_chunk($values, self::BATCH_SIZE, true) as $batch) {
             // 前一批的查询回调可能已选中其他连接。
             $db->selectConnection($plan->connectionName);
@@ -158,8 +161,8 @@ final class RelationPreloader
             }
             $keys = QueryBuilder::subQuery($alias)->raw(implode(' UNION ALL ', $sql));
             $builder = clone $plan->builder;
-            // 默认只读关联目标表，避免连接表的同名列覆盖实体字段。
-            $columns = $plan->columns ?? $builder->getField() ?? [$target . '.*'];
+            // 保留调用方投影或 mysqli 的默认通配符，只追加内部匹配列。
+            $columns = $plan->columns ?? $builder->getField() ?? ['*'];
             $columns[] = QueryBuilder::rawExpression($parentIndex . ' AS ' . TableReference::identifier($indexName));
             // 派生表只承载数字位置；键仍作为常量参数比较，保留类型及 collation 规则。
             $builder->join($keys, QueryBuilder::rawExpression('(' . implode(' OR ', $conditions) . ')', $parameters), 'INNER');

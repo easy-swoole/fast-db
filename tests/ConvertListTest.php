@@ -86,21 +86,15 @@ final class ConvertListTest extends TestCase
         $state = (new \ReflectionProperty(AbstractEntity::class, 'entityState'))->getValue($entity);
         $properties = \EasySwoole\FastDb\Utility\ReflectionCache::getInstance()
             ->parseEntity(BeanListEntity::class)->allProperties();
-        $baseline = [];
-        $this->assertSame([], $state->changes($entity, $properties, $baseline));
-        $this->assertSame([], $baseline);
+        $this->assertSame([], $state->changes($entity, $properties));
         $entity->users->first()->name = '乙';
-        $data = $state->changes($entity, $properties, $baseline);
+        $data = $state->changes($entity, $properties);
         $this->assertSame([['name' => '乙']], json_decode($data['users'], true));
-        $this->assertSame($data, $baseline);
-        $state->accept($baseline);
-        $baseline = [];
-        $this->assertSame([], $state->changes($entity, $properties, $baseline));
-        $this->assertSame([], $baseline);
+        $state->accept($data);
+        $this->assertSame([], $state->changes($entity, $properties));
         $entity->users->first()->name = '甲';
-        $data = $state->changes($entity, $properties, $baseline);
+        $data = $state->changes($entity, $properties);
         $this->assertSame([['name' => '甲']], json_decode($data['users'], true));
-        $this->assertSame($data, $baseline);
     }
 
     public function testOrdinaryListsRemainUnconverted(): void
