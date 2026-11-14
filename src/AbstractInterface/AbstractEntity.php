@@ -50,14 +50,6 @@ abstract class AbstractEntity implements \JsonSerializable
         return $this;
     }
 
-    /** @internal 将按查询形状匹配的预加载结果注入当前实体，不修改字段比较基准。 */
-    public function __setRelationData(RelationPlan $plan, QueryBuilder $lookup, string $connectionName, mixed $data): static
-    {
-        $cacheKey = RelationLoader::cacheKey($plan->relate, $lookup, $plan->returnAsArray, $connectionName);
-        $this->primeRelation($cacheKey, $data);
-        return $this;
-    }
-
     private function primeRelation(string $cacheKey, mixed $data): void
     {
         ($this->relationLoader ??= new RelationLoader())->prime($cacheKey, $data);

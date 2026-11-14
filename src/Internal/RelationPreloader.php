@@ -48,7 +48,17 @@ final class RelationPreloader
         $metadata = ReflectionCache::getInstance();
         $parentFields = [];
         foreach ($relationMethods as $method) {
-            $parentFields[] = $metadata->parseRelation($parentClass, $method)->selfProperty;
+            $parentField = $metadata->parseRelation($parentClass, $method)->selfProperty;
+            $parentFields[$parentField] = true;
+        }
+        $parentFields = array_keys($parentFields);
+        if (!$returnAsArray) {
+            // 隐藏配置对所有父记录相同，只需检查一次。
+            foreach ($parentFields as $parentField) {
+                if (in_array($parentField, $hiddenFields, true)) {
+                    throw new RuntimeError('An entity relation field cannot be hidden while preloading: ' . $parentField);
+                }
+            }
         }
 
         foreach ($parentRows as $parentRow) {
@@ -56,9 +66,6 @@ final class RelationPreloader
             foreach ($parentFields as $parentField) {
                 if (!array_key_exists($parentField, $parentRow)) {
                     throw new RuntimeError('Preloading requires the parent relation field to be selected under its original name: ' . $parentField);
-                }
-                if (!$returnAsArray && in_array($parentField, $hiddenFields, true)) {
-                    throw new RuntimeError('An entity relation field cannot be hidden while preloading: ' . $parentField);
                 }
             }
             if ($returnAsArray) {

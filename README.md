@@ -12,10 +12,10 @@ FastDb 是面向 Swoole 协程环境的 MySQL 数据访问库，组合连接池�
 
 | 组件 | 职责 |
 | --- | --- |
-| `FastDb` | 驱动返回后保存本次执行结果，预取分页总数，再通知查询观察者 |
+| `FastDb` | 管理协程连接与事务，记录单条 SQL 的执行结果并通知查询回调 |
 | `Mysql\Connection` | 驱动调用、协议事务状态、连接健康及超时上下文；不保存门面执行状态 |
 | `Internal\QueryDiagnostics` | 按需保存全局查询回调和每协程有界事件栈；分别记录查询执行与连接获取 |
-| `AbstractInterface\AbstractEntity` | 字段比较基准、变更检测、主键保护和成功写入后的基准更新 |
+| `AbstractInterface\AbstractEntity` | 实体映射、字段变更、主键约束、列表组装和分页总数 |
 | `Internal\FieldCodec` | 加载赋值转换、写入值转换；与序列化隐藏字段分别处理 |
 | `Internal\FieldSelection` | 保存字段白名单、隐藏字段和输出限制，不混入 SQL 构建状态 |
 | `Internal\RelationLoader` | 关联结果构造、唯一性检查及实体实例范围的关联缓存 |
@@ -35,14 +35,13 @@ FastDb 通过 `FastDb::getInstance()` 获取固定实例并长期复用。需要
 
 `Connection::isInTransaction(): bool` 直接读取底层协议的事务状态；`FastDb::isInTransaction()` 转发到当前或指定连接，不另外保存事务布尔副本。实体 `update()` 在查询正常返回且影响行数大于零后接受字段比较基准。后续事务回滚不会恢复模型属性或比较基准，需要由业务重新加载、重建对象或显式修改字段后再保存。
 
-列表查询与两种分块共用字段转换、隐藏字段、预加载及总数通知规则；总数由 FastDb 统一预取，模型层直接读取本次结果中的快照。
-
-`all()` 在执行 SQL 前确定本次输出配置。查询元数据及分页总数在通知查询观察者前保存，主查询与总数查询按执行顺序通知。`close()` 成功后释放底层连接；事务状态同样由协议 getter 读取。提交超时等结果不明的场景仍需由业务核实数据库最终状态。
+列表查询和两种分块共用结果组装流程。开启总数时，实体在主查询及其回调正常返回后，用同一连接执行 `FOUND_ROWS()`，然后转换实体并预加载关联。每条 SQL 各自记录结果并通知回调。
 
 `insert()` 使用 `fields()` 作为本次写入白名单。插入结束后，只保留用于输出的 `hideFields()`。插入后如需用白名单限制 `toArray()` 或 JSON 输出，请重新设置 `fields()`。
 
 ## 目录
 
+- [内部执行与实体状态](#内部执行与实体状态)
 - [特性与运行要求](#特性与运行要求)
 - [安装与快速开始](#安装与快速开始)
 - [数据库和连接池配置](#数据库和连接池配置)
@@ -58,6 +57,7 @@ FastDb 通过 `FastDb::getInstance()` 获取固定实例并长期复用。需要
 - [多数据库与连接生命周期](#多数据库与连接生命周期)
 - [原始 SQL 与底层构建器](#原始-sql-与底层构建器)
 - [查询日志与查询栈](#查询日志与查询栈)
+- [记录慢查询日志](#记录慢查询日志)
 - [API 速查](#api-速查)
 - [开发与测试](#开发与测试)
 - [使用边界与常见问题](#使用边界与常见问题)
@@ -305,7 +305,7 @@ FastDb 的 TLS getter 返回保存的值，保留枚举或字符串形式。模�
 | 参数 | 默认值 | 单位与作用 |
 | --- | --- | --- |
 | `maxObjectNum` | `16` | 单个连接池的最大连接数 |
-| `minObjectNum` | `8` | 连接池预热/维持的最小连接数，必须小于最大值 |
+| `minObjectNum` | `8` | 连接池预热和维持的最小连接数，可设为 0，最大为 `maxObjectNum` |
 | `getObjectTimeout` | `3.0` | 等待可用连接的秒数 |
 | `intervalCheckTime` | `5000` | 定时检查间隔，毫秒；`0` 关闭该定时检查 |
 | `intervalCheckBatchSize` | `8` | 每轮定时检查的最大连接数 |
@@ -370,7 +370,7 @@ public ?string $note;
 
 PHP 属性上非 null 的默认值会优先作为初始化值；nullable 属性没有默认值时初始化为 `null`。没有默认值的非 nullable 属性可能保持未初始化，读取前应先赋值或从数据库加载。
 
-`#[PrimaryKey]` 标记带 `#[Property]` 的 public 非 static 属性。每个实体最多声明一个主键字段。同一字段重复声明 `#[Property]` 会在解析实体时抛出异常。`Property` 的 `isPrimaryKey` 参数已移除。将 `#[Property(isPrimaryKey: true)]` 改为在同一属性上分别声明 `#[Property]` 和 `#[PrimaryKey]`。原先传给 `Property` 第一个位置的主键布尔值也应移除，默认值和转换类建议使用 `defaultValue:` 和 `convertObject:` 命名参数。
+在映射属性上同时声明 `#[Property]` 和 `#[PrimaryKey]`。每个实体最多声明一个主键字段，属性必须为 public 且非 static。同一属性重复声明 `#[Property]` 会在解析实体时抛出异常。主键使用独立注解，`Property` 的两个参数分别为 `defaultValue` 和 `convertObject`。
 
 框架按实体类缓存字段、主键、自增字段、关联和钩子定义。解析后的定义只读，配置通过对应的 PHP Attribute 声明。实体实例的字段值仍可按原有方式修改。
 
@@ -528,7 +528,7 @@ $page = new Page(3, true, 20);
 $page->toLimitArray(); // [40, 20]。
 ```
 
-显式页码和每页条数必须大于零。仅限制数量时使用 `limit()`，分块大小必须大于零。
+指定页码时，页码和每页条数都必须大于零。`limit(0)` 返回空列表。分块大小必须大于零。
 
 ### 分块处理
 
@@ -583,7 +583,7 @@ $entity->chunkById($processUser, chunkSize: 100, column: 'users.id');
 
 `hideFields()` 可以隐藏游标列，方法从只读查询结果取得末行游标和页大小，再转换实体或隐藏输出字段。隐藏游标或修改分块回调收到的实体都不会改变翻页位置。返回实体后持续隐藏字段仍沿用 `persistFieldLimit()` 的规则。调用者负责选中符合约定的游标列，并保证其稳定、唯一且非 NULL；组件不逐行扫描校验游标。不要在数据库中修改用于本次遍历的游标列。
 
-查询结果必须具有唯一游标；使用 JOIN 时，也要保证连接结果中该列不重复。额外的查询选项沿用调用方配置；显式开启总数统计时，每页的总数查询同样通知全局和实体查询回调。复杂分组、联合或关联查询是否符合游标遍历语义，由调用者保证。需要限制扫描范围时，可预先增加游标上界；方法本身不提供跨页的一致性快照。
+查询结果必须具有唯一游标；使用 JOIN 时，也要保证连接结果中该列不重复。额外的查询选项沿用调用方配置；显式开启总数统计时，每页的主查询通知全局和实体查询回调，总数查询只通知全局查询回调。复杂分组、联合或关联查询是否符合游标遍历语义，由调用者保证。需要限制扫描范围时，可预先增加游标上界；方法本身不提供跨页的一致性快照。
 
 ### 计数和聚合
 
@@ -654,7 +654,9 @@ public int $dataIndex;
 $user->insert(['name', 'score']);
 ```
 
-命中重复键时，按底层 `onDuplicate()` 的规则更新指定列。返回值表示 SQL 是否成功，重复键更新未改变数据时也可以返回 `true`。实体只更新两个分支都能确认写入实体值的字段基准，规则同样适用于通过实体查询构建器配置的 `onDuplicate()`。一次插入使用 `insert($updateDuplicateCols)` 或构建器的 `onDuplicate()` 指定冲突更新，两处同时设置会抛出异常。同一列只指定一次赋值。未列入更新列表或使用显式冲突更新值的字段保留原基准。需要准确的最终记录时重新查询。
+在 `insert($updateDuplicateCols)` 或构建器的 `onDuplicate()` 中选择一处配置冲突更新。列表形式的列名使用实体属性原名，大小写保持一致。每列只指定一次赋值。
+
+重复键更新成功且数据未变化时，`insert()` 仍可返回 `true`。实体只为新增和冲突更新两个分支都能确认写入实体值的字段同步比较基准。未列入更新列表或使用显式冲突更新值的字段保留原基准。要取得数据库中的最终值，请用已知唯一键重新查询。
 
 假设 `users.id` 是主键，`email` 也有唯一索引。数据库中已有 `id=1`、`email='a@example.com'`、`score=10` 的记录。
 
@@ -711,7 +713,7 @@ if ($user !== null) {
 
 - 以对象的比较基准识别已变化字段。
 - 对 `ConvertObjectInterface` 属性调用 `toValue()`。
-- 使用实体主键与当前主键值构造 WHERE 条件，也会使用之前设置的额外查询条件。
+- 使用主键定位记录。查询回填的实体须保留原主键，额外 WHERE 条件会先整体分组，再与主键条件组合。
 - 有实际变更且影响行数大于 0 时返回 `true`，影响行数为 0 时返回 `false`；没有待写入变更时返回 `true` 并跳过 SQL。
 - 成功后仅同步本次写入字段的比较基准，未被字段筛选选中的变更仍待保存；失败不接受新的基准。
 
@@ -1097,9 +1099,11 @@ $user->setData(['createdAt' => null]);
 $user->update(); // nullable 字段清空为 SQL NULL。
 ```
 
-模型需要声明对应属性并增加数据库字段。`toObject()` 接收日期时间字符串、`DateTimeInterface`、整数 Unix 时间戳；直接传 null 表示当前时间。实体 nullable 属性的 null 由实体保留为 null，不调用转换器。已有日期对象会复制，保留其时区和微秒，不共享可变对象。
+`toObject()` 接收日期时间字符串、`DateTimeInterface` 或整数 Unix 时间戳。直接传入 `null` 表示当前时间，可空实体属性则直接保留 `null`。转换器接收日期对象时会复制并保留原时间点、时区和微秒。`setData()` 收到已经是目标转换类型的对象时会直接使用该实例。
 
-`toValue()` 和实体序列化输出 `Y-m-d H:i:s`；微秒非零时输出 `Y-m-d H:i:s.u`，数据库字段应设置相应精度以保留小数秒。MySQL `DATETIME` 不存储时区，转换器保留当前时区下的日期时间，不自动转为 UTC；读取数据库字符串使用 PHP 默认时区，应用应统一时区配置。空字符串、不支持的输入类型和标准 MySQL 格式中的无效日期（含零日期）会被拒绝；其他字符串采用 PHP `DateTime` 的解析规则。
+`toValue()` 和实体序列化输出对象所在时区的本地时间，格式为 `Y-m-d H:i:s`。微秒非零时输出 `Y-m-d H:i:s.u`，可用 `DATETIME(6)` 保留完整精度。`DATETIME` 只保存日期和时间字段。应用应统一写入所用的时区与 PHP 读取普通数据库字符串时的默认时区，并负责提供该时区中有效的本地时间。
+
+转换器拒绝空字符串、不支持的输入类型和标准 MySQL 格式中的无效日期，例如零日期。其他日期字符串及夏令时的本地时间解释沿用 PHP `DateTime` 规则。
 
 ### ConvertBean
 
@@ -1304,7 +1308,7 @@ foreach ($users as $user) {
 }
 ```
 
-`withRelations(string|array $relations)` 接受单个方法名或方法名列表，不接受闭包配置或点分嵌套路径。方法名会去重并规范为声明时的大小写；再次调用会覆盖本次声明，`withRelations([])` 清除声明。关系方法须标注 `#[Relate]`。预加载只读取关联声明，不执行 getter，因此不检查 getter 的可见性、静态声明或参数。关联声明必须显式填写 `type: RelationType::One` 或 `type: RelationType::Many`，按需加载与预加载使用同一类型。
+`withRelations(string|array $relations)` 接受单个方法名或方法名列表，不接受闭包配置或点分嵌套路径。方法名按声明大小写规范化并去重。再次调用会替换本次声明，`withRelations([])` 清除声明。关系方法须标注 `#[Relate]`，并显式声明 `type: RelationType::One` 或 `type: RelationType::Many`。预加载根据声明和 `configure` 构建查询，业务 getter 在应用实际调用时执行。
 
 实体模式会把结果注入各父实体的关联缓存，之后相同查询形状的关系 getter 可直接命中，即使 `Relate::cacheResult` 为 false 也有效。一对一仍返回实体或 null，匹配多条仍抛出 `RuntimeError`；一对多仍返回 `ListResult`。关系声明设置 `returnAsArray: true` 时，按需加载和预加载均返回数组或包含数组的 `ListResult`。父实体的 `toArray()` 不会自动把关系变成字段，需要输出时显式调用 getter。
 
@@ -1324,7 +1328,7 @@ foreach ($rows as $row) {
 
 附加键使用关系方法的声明名；如果父数组已经有同名键，会明确报错，不覆盖原字段。数组模式下父行和关联行保持数据库表示，例如 JSON 字段仍是 JSON 字符串，不会把转换对象放进返回数组。
 
-无论返回实体还是数组，父关联键 `selfProperty` 都必须以原列名被 SELECT 选中。预加载在执行关联配置前检查该列。实体模式不能用 `hideFields()` 隐藏该键，因为后续 getter 需要真实父键；数组模式可以隐藏，库使用隐藏前的原始行完成关联匹配。配置方法读取的其他 `$this` 字段也应由父查询选中。目标关系的 `fields()` 不必选中 `targetProperty`：内部匹配辅助列会被移除，不进入关联输出。当前实体的关联字段可以使用 `convertObject` 值对象或枚举；按需加载与预加载均使用其 `toValue()` 数据库值生成关联条件和匹配缓存。预加载要求转换后的关联值为整数、字符串或 null。
+无论返回实体还是数组，父关联键 `selfProperty` 都必须以原列名被 SELECT 选中。多个关系共享父键时，预加载对每行只检查一次该列。实体模式要求父键保留到回填阶段，隐藏配置会在逐行检查前统一校验。数组模式可以隐藏父键，关联匹配使用原始行。配置方法读取的其他 `$this` 字段也应由父查询选中。目标关系的 `fields()` 不必选中 `targetProperty`：内部匹配辅助列会被移除，不进入关联输出。当前实体的关联字段可以使用 `convertObject` 值对象或枚举；按需加载与预加载均使用其 `toValue()` 数据库值生成关联条件和匹配缓存。预加载要求转换后的关联值为整数、字符串或 null。
 
 数组结果启用预加载时，会为每一条父行临时构造父模型，以便实例配置方法读取 `$this` 字段。实体模式的父模型和数组模式的临时父模型，都在父查询实际使用的连接下初始化、赋值并转换字段。预加载完成后恢复父查询回调选中的连接。未启用预加载的数组查询仍不会逐行构造实体。
 
@@ -1380,8 +1384,6 @@ $orders = $users[0]->activeOrders(); // 同样的配置可命中预加载缓存�
 预加载关系拒绝 `limit()` 和 `withTotalCount()`。父列表仍支持分页和总数统计。`all()` 预加载当前列表，`chunk()` / `chunkById()` 只预加载当前批次，在逐条业务回调前完成。
 
 预加载声明只作用于本次查询，执行后会被消费；查询模板或实体克隆会保留尚未消费的声明，并独立复制查询配置。实体缓存按连接、父键、实际 SQL、参数和返回模式匹配，更改条件、父键、目标表或实体/数组模式不会错误命中旧结果。`clearRelationCache()` 同时清除预加载结果和普通关联缓存，之后 getter 恢复查询；数组附加值已经是普通数组，不受该方法影响。`cacheResult: false` 只关闭按需查询缓存，不会禁用显式预加载的结果。缓存不会自动感知外部写入或事务结果，长生命周期实体应按需清理。
-
-`AbstractEntity::__setRelationData(RelationPlan $plan, QueryBuilder $lookup, string $connectionName, mixed $data): static` 标记为 `@internal`，由预加载器注入与查询形状绑定的结果，不是应用层赋值入口；应用通过 `withRelations()` 使用预加载，无需直接构造这些参数或调用该方法。
 
 ### 字段选择与隐藏字段
 
@@ -1530,8 +1532,8 @@ try {
 | 方法 | 行为 |
 | --- | --- |
 | `begin($client = null, $flags = TransactionStartFlags::None, $timeout = null)` | 默认获取当前连接并开始事务；连接已有活动事务时保留当前事务并返回 true |
-| `commit($client = null, $flags = TransactionCompletionFlags::NoChainNoRelease, $timeout = null)` | 默认提交当前连接；没有连接或没有活动事务时直接返回 true |
-| `rollback($client = null, $flags = TransactionCompletionFlags::NoChainNoRelease, $timeout = null)` | 默认回滚当前连接；没有连接或没有活动事务时直接返回 true |
+| `commit($client = null, $flags = TransactionCompletionFlags::NoChainNoRelease, $timeout = null)` | 默认提交当前连接的事务。没有连接或事务时返回 true，事务已丢失时抛异常 |
+| `rollback($client = null, $flags = TransactionCompletionFlags::NoChainNoRelease, $timeout = null)` | 默认回滚当前连接的事务。没有连接或事务时返回 true，事务已丢失时抛异常 |
 | `isInTransaction($connection = null)` | 转发到当前或指定 Connection 的协议状态 getter |
 
 上表描述手动事务入口；下面的 `transaction()` 只根据入口连接是否已有事务，决定本层是否负责开始、提交和异常回滚。
@@ -1639,7 +1641,7 @@ $updated = $db->transaction(function (FastDb $db): bool {
 
 #### 同连接嵌套与已有手动事务
 
-入口连接已经有事务时，本层只执行回调，不发送 BEGIN、COMMIT 或 ROLLBACK。此时传入的 flags 和 timeout 不会重新配置已有事务，也不会因使用非默认选项而拒绝加入；timeout 仍须满足有限正数的基本参数要求。
+入口连接已经有事务时，本层只执行回调，不发送 BEGIN、COMMIT 或 ROLLBACK。`flags` 和 `timeout` 仅用于本层实际发送的事务 SQL。
 
 同连接的内层异常被外层业务捕获后，外层可以正常提交，包括内层在异常前已经执行的写入。内层异常若继续逃出最外层拥有者，才由该拥有者回滚：
 
@@ -1836,7 +1838,7 @@ $row = $result->getResultOne();
 
 `rawQuery(string $sql, ?float $timeout = null, ?string $connection = null)` 不支持单独的绑定参数。动态数据使用 `QueryBuilder::raw($sql, $params)`，不要拼接输入数据。
 
-通过 `currentConnection()` 或 `invoke()` 取得的高级连接接口不提供连接级监听，调用 `Connection::onQuery()` 会抛出 `LogicException`。直接使用 Connection 执行 SQL 时，日志由业务代码自行记录；FastDb 的全局 `setOnQuery()` 及实体/单次查询回调继续支持。
+通过 `currentConnection()` 或 `invoke()` 取得的高级连接接口不提供连接级监听，调用 `Connection::onQuery()` 会抛出 `LogicException`。直接使用 Connection 执行 SQL 时，日志由业务代码自行记录；通过 FastDb 执行 SQL 时可使用全局、实体或单次查询回调。
 
 ### QueryResult
 
@@ -1845,7 +1847,7 @@ $row = $result->getResultOne();
 | `getResult()` | SELECT 等返回行数组，写入/DDL 通常返回 bool；查询失败回调中为 null |
 | `getResultOne()` | 数组结果的第一行，否则 null |
 | `getException(): ?Throwable` | 执行失败时的异常对象；成功或未设置时为 null |
-| `getConnectionName()` | 本次查询的执行连接名快照（string），供慢日志和异常定位使用；执行前必须设置 |
+| `getConnectionName()` | 本次查询的执行连接名快照（string），供慢日志和异常定位使用 |
 | `getAffectedRows()` | 本次成功查询的影响行数快照；未取得结果或查询失败时为 null |
 | `getInsertId()` | 本次成功查询的自增 ID 快照；未取得结果或查询失败时为 null |
 | `getLastQuery(): ?string` | 按需展开绑定参数生成日志 SQL |
@@ -1855,16 +1857,16 @@ $row = $result->getResultOne();
 | `getDuration(): float` | 查询执行阶段耗时，秒；不含获取连接及日志回调 |
 | `getStartTime()` / `getEndTime()` | Unix 时间戳，用于日志定位；查询执行耗时使用 getDuration() |
 
-查询回调接收只读 `QueryResult`。三个日志 getter 也可用于 `QueryStack` 和 `TimeoutException`。原始 SQL 和事务操作的两个 SQL getter 都返回执行文本，绑定参数返回 `[]`。原先用于获取构建器和改写结果的接口已移除。业务需要裁剪或转换数据时，可以配置查询投影，或在读取结果后处理自己的数据。
+查询回调接收只读 `QueryResult`。`QueryResult`、`QueryStack` 和 `TimeoutException` 使用相同的日志读取方法。原始 SQL 和事务操作的 SQL getter 返回执行文本，绑定参数为 `[]`。构建器查询的日志快照保存 mysqli 的只读编译结果，调用 `getLastQuery()` 时才按编译时的引号规则展开参数。自定义构建器应在构建阶段设置最终 SQL 和绑定参数。
 
-写入结果的影响行数和 insert id 从 QueryResult 快照读取：
+写入结果的影响行数和 insert id 从 `QueryResult` 快照读取。
 
 ```php
 $affected = $result->getAffectedRows();
 $insertId = $result->getInsertId();
 ```
 
-连接名在执行 SQL 前从实际连接记录，查询失败时也保留。查询栈统一读取该快照，不会因为构建器回调或日志回调切换连接而记错数据库。
+查询结果和查询栈记录实际执行连接的名称。SQL 执行失败时也会记录该名称。
 
 FastDb 的 `query()` 和 `rawQuery()` 每次执行一条 SQL。Connection 返回后立即保存结果行、影响行数、自增 ID、SQL、参数和耗时。查询结果只反映本次执行，读取新数据需要再次查询。
 
@@ -1872,7 +1874,7 @@ Connection 的 `getLastAffectRows()` / `getLastInsertId()` 始终表示最后一
 
 影响行数和自增 ID 类型为 `int|string|null`，超大无符号值保留为字符串，未查询或查询失败时为 null。影响行数与自增 ID 在查询成功后、日志回调执行前记录为快照，不会被后续 SQL 覆盖。`query()` 和 `rawQuery()` 的可选 `$timeout` 控制本次查询超时。
 
-直接通过 `FastDb::query()` 执行带 `SQL_CALC_FOUND_ROWS` 的查询时，调用方通过 `rawQuery()` 显式读取总数，连接名传入主查询的 `getConnectionName()`。实体分页总数通过 `ListResult::totalCount()` 读取。
+直接使用 `FastDb::query()` 执行带 `SQL_CALC_FOUND_ROWS` 的查询时，如需总数，应紧接着调用 `rawQuery()` 执行 `SELECT FOUND_ROWS()`，并把主查询的 `getConnectionName()` 传给 `connection:`。实体分页入口会执行这一步，总数通过 `ListResult::totalCount()` 读取。
 
 `getDuration()` 只记录驱动执行阶段，排除 SQL 构建、获取连接、池连接淘汰和查询观察回调。
 
@@ -1907,7 +1909,7 @@ try {
 }
 ```
 
-原始查询及事务超时可直接使用 `getRawSql()` 定位，例如 `COMMIT AND NO CHAIN NO RELEASE`。异常的 `rawSql` 保留为只读字段，原先的构建器字段和 getter 已移除。
+原始查询及事务超时可直接使用 `getRawSql()` 定位，例如 `COMMIT AND NO CHAIN NO RELEASE`。预处理查询使用 `getLastPrepareQuery()` 和 `getLastBindParams()` 获取 SQL 模板及参数。
 
 FastDb 的超时异常继承 `EasySwoole\FastDb\Exception\Exception`。调用方可捕获 `EasySwoole\FastDb\Exception\TimeoutException`，或 FastDb 通用 `Exception`；它不继承 mysqli 异常，原始 mysqli 超时实例保存在 `getPrevious()` 中。
 
@@ -1935,7 +1937,7 @@ $db->setOnQuery(function (QueryResult $result): void {
 
 `query()` / `rawQuery()` 和事务执行抛异常时，回调中的 `getException()` 返回本条 SQL 的驱动执行异常，`getResult()` / `getResultOne()` 为 null。成功执行时 getException() 为 null。回调抛出的异常直接向调用方传播，并中止后续通知。SQL 失败的异常保存在该条 SQL 的查询记录中，观察回调正常返回后向调用方抛出。
 
-底层 `getLastQuery()` 是用于调试的占位符替换文本，可能与实际绑定执行的细节不同；尤其 null 的展示不能代替实际 SQL 判断。优先记录 `getLastPrepareQuery()` 和 `getLastBindParams()`。
+`getLastQuery()` 返回参数展开后的调试文本。排查绑定值和类型时，优先记录 `getLastPrepareQuery()` 和 `getLastBindParams()`。
 
 ### 实体与单次回调
 
@@ -1987,9 +1989,7 @@ $db->configureQueryStack(false, maxStackSize: 2); // 停止追加，保持相同
 | `exception` | SQL 执行异常，或连接获取事件中实际向外抛出的借用异常；成功时为 null |
 | `startTime` / `endTime` | 记录的起止 Unix 时间戳，用于日志定位；耗时字段使用单调时钟 |
 
-主查询与 `SELECT FOUND_ROWS() as count` 各有一条 trace，各自触发全局 `onQuery`。FastDb 对每条 SQL 先记录 trace，再通知回调。主查询或其回调抛异常时，列表停止执行，总数 SQL 不会发出。总数 SQL 的回调抛异常时，异常直接传播，已记录的 trace 保留。查询事件通过 `getLastQuery()`、`getLastPrepareQuery()` 和 `getLastBindParams()` 读取 SQL 日志信息，查询栈与查询结果共享 SQL 快照。构建器查询的快照保存 mysqli 的只读编译结果，读取展开后的日志时才格式化参数。
-
-查询栈在通知回调前记录已执行的 SQL。
+主查询与 `SELECT FOUND_ROWS() as count` 各有一条 trace，各自触发全局 `onQuery`。FastDb 对每条 SQL 先记录 trace，再通知回调。主查询或其回调抛异常时，列表停止执行，总数 SQL 不会发出。总数 SQL 的回调抛异常时，异常直接传播，已记录的 trace 保留。查询栈和查询结果共享同一份 SQL 快照。
 
 普通 SQL 记录的异常来自该 SQL 执行结果，不把 SQL 成功后日志回调再抛出的错误改记为 SQL 失败。获取连接失败时，栈中的 `exception` 则保留实际向调用方抛出的那个异常。
 
@@ -2131,7 +2131,7 @@ $config = ConfigModel::findRecord(
 | `fastInsertAll(iterable $rows, ?string $tableName = null, ?callable $onQuery = null, int $batchSize = 500)` | 分批直接插入；合计影响行数 int\|string |
 | `fastUpsert(iterable $rows, array $updateColumns, ?string $tableName = null, ?callable $onQuery = null, int $batchSize = 500)` | 主键/唯一键冲突时更新；合计影响行数 int\|string |
 | `count($field = '*', $group = null)` | 整数或多列计数数组 |
-| `sum/avg/max/min($cols, $group = null, $force = true)` | 单列 `int|float|string` 或多列聚合数组 |
+| `sum/avg/max/min($cols, $group = null, $force = true)` | 单列 `int\|float\|string` 或多列聚合数组 |
 | `chunk(callable $func, int $chunkSize = 10)` | OFFSET 分页逐条回调；false 停止，不返回累计条数 |
 | `chunkById(callable $func, int $chunkSize = 10, ?string $column = null): int` | 按稳定唯一列 ASC 键集分页；返回已交付条数 |
 | `hasChange(?string $field = null): bool` | 检查全部或指定映射字段的待保存修改 |
@@ -2174,7 +2174,7 @@ $config = ConfigModel::findRecord(
 | `getConfig(string $name = 'default')` | Config 或 false |
 | `selectConnection(?string $name = null)` | 设置连接名时返回管理器；省略时返回名字 |
 | `withConnection(string $name, callable $callback): mixed` | 临时选库并恢复；回调接收 FastDb，不借还连接或改变事务 |
-| `testDb(string $name = 'default')` | 检查连接，成功 true，失败异常 |
+| `testDb(string $connectionName = 'default')` | 检查连接，成功 true，失败异常 |
 | `query(QueryBuilder\|callable $queryBuilder, ?float $timeout = null, ?string $connection = null, ?callable $onQuery = null)` | 构建器查询，返回 QueryResult |
 | `rawQuery(string $sql, ?float $timeout = null, ?string $connection = null)` | 原始 SQL，返回 QueryResult |
 | `begin(?Connection $client = null, TransactionStartFlags $flags = TransactionStartFlags::None, ?float $timeout = null)` | 开始事务；bool |
@@ -2182,7 +2182,7 @@ $config = ConfigModel::findRecord(
 | `rollback(?Connection $client = null, TransactionCompletionFlags $flags = TransactionCompletionFlags::NoChainNoRelease, ?float $timeout = null)` | 回滚事务；bool |
 | `transaction(callable $callback, TransactionStartFlags $flags = TransactionStartFlags::None, ?float $timeout = null): mixed` | 回调事务；已有事务只执行回调，拥有层负责结束；返回回调值 |
 | `isInTransaction(?Connection $connection = null)` | 转发 Connection 的协议状态 getter；bool |
-| `invoke(callable $call)` | 执行并归还连接；返回回调值 |
+| `invoke(callable $call)` | 将连接交给回调。只归还本次新借的连接，返回回调值 |
 | `currentConnection()` | 当前 Connection 或 null |
 | `recycleContext(): void` | 归还当前协程全部连接，未结束数据库事务由池清理 |
 | `preConnect()` | 预热各连接池 |
@@ -2221,7 +2221,7 @@ php tests/run.php --list-tests
 php tests/run.php --log-junit ./test-results.xml
 ```
 
-`tests/run.php` 使用 PHPUnit 13 的 `TextUI\Application` 并在 Swoole 协程内执行测试，信息查询命令在协程外运行。`vendor/bin/phpunit --testsuite unit` 可直接执行单元测试；数据库测试请使用协程入口。
+`tests/run.php` 使用 PHPUnit 13 的 `TextUI\Application` 并在 Swoole 协程内执行测试，信息查询命令在协程外运行。单元与集成测试均使用协程入口，也可通过 `composer test:unit` 或 `composer test:integration` 执行。
 
 配置位于 `phpunit.xml.dist`，分为 `unit` 与 `integration`。数据库用例结束后回收上下文、重置池并清理测试定时器。更多说明见 [tests/README.md](tests/README.md)。
 

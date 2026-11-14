@@ -46,48 +46,6 @@
                     }
                 ]
             },
-            "__setRelationData": {
-                "visibility": "public",
-                "static": false,
-                "final": false,
-                "abstract": false,
-                "return": "static",
-                "returnsReference": false,
-                "params": [
-                    {
-                        "name": "plan",
-                        "type": "EasySwoole\\FastDb\\Internal\\RelationPlan",
-                        "byReference": false,
-                        "variadic": false,
-                        "hasDefault": false,
-                        "default": null
-                    },
-                    {
-                        "name": "lookup",
-                        "type": "EasySwoole\\Mysqli\\QueryBuilder",
-                        "byReference": false,
-                        "variadic": false,
-                        "hasDefault": false,
-                        "default": null
-                    },
-                    {
-                        "name": "connectionName",
-                        "type": "string",
-                        "byReference": false,
-                        "variadic": false,
-                        "hasDefault": false,
-                        "default": null
-                    },
-                    {
-                        "name": "data",
-                        "type": "mixed",
-                        "byReference": false,
-                        "variadic": false,
-                        "hasDefault": false,
-                        "default": null
-                    }
-                ]
-            },
             "all": {
                 "visibility": "public",
                 "static": false,
