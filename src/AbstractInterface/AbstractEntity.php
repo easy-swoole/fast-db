@@ -247,22 +247,22 @@ abstract class AbstractEntity implements \JsonSerializable
         }
     }
 
-    public function sum(string|array $cols, string|null $group = null, bool $force = true): int|array|float
+    public function sum(string|array $cols, string|null $group = null, bool $force = true): int|array|float|string
     {
         return $this->aggregate('SUM', $cols, $group, $force);
     }
 
-    public function avg(string|array $cols, string|null $group = null, bool $force = true): int|array|float
+    public function avg(string|array $cols, string|null $group = null, bool $force = true): int|array|float|string
     {
         return $this->aggregate('AVG', $cols, $group, $force);
     }
 
-    public function max(string|array $cols, string|null $group = null, bool $force = true): int|array|float
+    public function max(string|array $cols, string|null $group = null, bool $force = true): int|array|float|string
     {
         return $this->aggregate('MAX', $cols, $group, $force);
     }
 
-    public function min(string|array $cols, string|null $group = null, bool $force = true): int|array|float
+    public function min(string|array $cols, string|null $group = null, bool $force = true): int|array|float|string
     {
         return $this->aggregate('MIN', $cols, $group, $force);
     }
@@ -508,7 +508,7 @@ abstract class AbstractEntity implements \JsonSerializable
         if (is_string($callback->callback)) {
             return $this->{$callback->callback}();
         }
-        return ($callback->callback)(...$callback->buildEntityHookRuntimeParams($this));
+        return ($callback->callback)($this);
     }
 
     /** @internal 直接读取关联声明并调用配置方法，不执行业务 getter。 */
@@ -665,7 +665,7 @@ abstract class AbstractEntity implements \JsonSerializable
         }
     }
 
-    private function aggregate(string $aggregate, string|array $cols, string|null $group = null, bool $force = false): int|array|float
+    private function aggregate(string $aggregate, string|array $cols, string|null $group = null, bool $force = false): int|array|float|string
     {
         try {
             $cols = is_array($cols) ? $cols : [$cols];

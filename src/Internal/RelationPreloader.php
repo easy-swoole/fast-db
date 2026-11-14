@@ -7,6 +7,7 @@ use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Beans\ListResult;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\FastDb;
+use EasySwoole\FastDb\Utility\ReflectionCache;
 use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\Mysqli\QueryBuilder\TableReference;
 
@@ -43,7 +44,22 @@ final class RelationPreloader
         $groups = [];
         $parentPosition = 0;
         $parentClass = $source::class;
+        $metadata = ReflectionCache::getInstance();
+        $parentFields = [];
+        foreach ($relationMethods as $method) {
+            $parentFields[] = $metadata->parseRelation($parentClass, $method)->selfProperty;
+        }
+
         foreach ($parentRows as $parentRow) {
+            // 配置方法可能读取父键，先检查原始投影，再生成关联计划。
+            foreach ($parentFields as $parentField) {
+                if (!array_key_exists($parentField, $parentRow)) {
+                    throw new RuntimeError('Preloading requires the parent relation field to be selected under its original name: ' . $parentField);
+                }
+                if (!$returnAsArray && in_array($parentField, $hiddenFields, true)) {
+                    throw new RuntimeError('An entity relation field cannot be hidden while preloading: ' . $parentField);
+                }
+            }
             if ($returnAsArray) {
                 // 临时父模型的初始化和字段转换沿用父查询实际连接。
                 $db->selectConnection($parentQueryConnection);
@@ -58,13 +74,6 @@ final class RelationPreloader
                     throw new RuntimeError('Relation name conflicts with a selected field: ' . $relationMethod);
                 }
                 $relationPlan = $parent->__relationPlan($relationMethod);
-                $parentField = $relationPlan->relate->selfProperty;
-                if (!array_key_exists($parentField, $parentRow)) {
-                    throw new RuntimeError('Preloading requires the parent relation field to be selected under its original name: ' . $parentField);
-                }
-                if (!$returnAsArray && in_array($parentField, $hiddenFields, true)) {
-                    throw new RuntimeError('An entity relation field cannot be hidden while preloading: ' . $parentField);
-                }
                 $parentKeyValue = $relationPlan->selfValue;
                 if ($parentKeyValue !== null && !is_int($parentKeyValue) && !is_string($parentKeyValue)) {
                     throw new RuntimeError('Parent relation fields must contain an integer, string or null');

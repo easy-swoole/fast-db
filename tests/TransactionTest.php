@@ -505,6 +505,23 @@ final class TransactionTest extends TestCase
         $this->assertSame(20.0, $entity->sum('b.order'));
     }
 
+    public function testMysqlDecimalAggregatesKeepTheDriverValueWithoutForcingFloat(): void
+    {
+        $this->observer->query("ALTER TABLE `{$this->table}` ADD COLUMN amount DECIMAL(35,2) NULL");
+        $this->observer->query("UPDATE `{$this->table}` SET amount = 9007199254740993.01 WHERE id = 1");
+        $this->observer->query("INSERT INTO `{$this->table}` (id, value, amount) VALUES (2,0,0.01)");
+
+        $entity = new TransactionEntity();
+        foreach (['sum', 'avg', 'min', 'max'] as $method) {
+            $expression = strtoupper($method) . '(amount)';
+            $original = $this->db->rawQuery("SELECT {$expression} AS amount FROM `{$this->table}`")->getResultOne()['amount'];
+            $this->assertIsString($original);
+            $this->assertSame($original, $entity->$method('amount', force: false));
+            $this->assertSame($original, $entity->$method(['amount', 'id'], force: false)['amount']);
+            $this->assertSame((float) $original, $entity->$method('amount'));
+        }
+    }
+
     public function testMysqlPaginationKeepsItsTotalWhenObserverReusesTheBuilder(): void
     {
         $this->observer->query("INSERT INTO `{$this->table}` VALUES (2,1),(3,2)");
@@ -1162,6 +1179,7 @@ final class TransactionTest extends TestCase
         $this->assertSame(1, $this->value());
         $this->db->rollback();
         foreach (['commit', 'rollback'] as $operation) {
+            $this->db->rawQuery('SET SESSION completion_type = 2');
             $this->db->begin();
             $this->write(3);
             $client = $this->db->currentConnection();

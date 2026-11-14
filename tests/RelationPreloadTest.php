@@ -641,10 +641,10 @@ final class RelationPreloadTest extends TestCase
     public static function invalidParentSelections(): array
     {
         return [
-            'missing primary key' => [['name'], false, false, 'children'],
+            'missing primary key' => [['name'], false, false, 'dynamicChildren'],
             'renamed primary key' => [['id AS other', 'name'], false, false, 'children'],
             'hidden primary key for entities' => [null, true, false, 'children'],
-            'missing primary key for array output' => [['name'], false, true, 'children'],
+            'missing primary key for array output' => [['name'], false, true, 'dynamicChildren'],
             'missing explicit relation field' => [['id', 'name'], false, false, 'groupChildren'],
         ];
     }
@@ -656,8 +656,9 @@ final class RelationPreloadTest extends TestCase
         $owner->queryLimit()->fields($fields, $arrays)->withRelations($relation);
         if ($hideKey) { $owner->queryLimit()->hideFields('id'); }
         try { $owner->all(); $this->fail('A missing relation field must not silently create empty groups'); }
-        catch (RuntimeError|\InvalidArgumentException|\UnexpectedValueException) { $this->addToAssertionCount(1); }
-        catch (\Error $error) { $this->assertStringContainsString('must not be accessed before initialization', $error->getMessage()); }
+        catch (RuntimeError $error) {
+            $this->assertStringContainsString($hideKey ? 'cannot be hidden' : 'under its original name', $error->getMessage());
+        }
         $this->assertCount(1, $this->connection->queries);
         $this->assertNull($owner->queryLimit()->getFields());
         $this->assertNull($owner->queryLimit()->getHideFields());

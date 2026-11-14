@@ -613,7 +613,7 @@ $sum = (new User())->sum('order'); // 列名 order 会正确引用。
 $values = (new User())->sum(['users.score', 'users.order']);
 ```
 
-`sum()` / `avg()` / `max()` / `min()` 的签名为 `($cols, $group = null, $force = true)`。单列返回数字，多列返回数组；默认强制转为 float，没有聚合值时单列按 0 处理。金额等精确值可用底层参数化 SQL 获取原始结果，避免浮点精度损失。
+`sum()` / `avg()` / `max()` / `min()` 的签名为 `($cols, $group = null, $force = true)`。单列返回 `int|float|string`，多列返回数组。默认将聚合值转为 float。传入 `force: false` 可保留 mysqli 返回的整数、浮点数或字符串，例如 `sum('amount', force: false)` 可以得到未经浮点转换的 DECIMAL 数字字符串。没有聚合值时单列按 0 处理。
 
 这些快捷聚合方法只取第一行。传入 `$group` 或先调用 `groupBy()` 不会返回所有分组；需要完整分组结果时用 `QueryBuilder` 查询。
 
@@ -1211,7 +1211,7 @@ class AuditedUser extends User
 
 插入、更新、删除钩子返回严格的 `false` 会中止操作；其他返回值继续执行。初始化钩子没有以返回 false 中止构造的机制。
 
-字符串钩子参数表示当前实体的方法名。可调用对象、闭包和数组回调默认收到当前实体，显式参数支持 `Call::PARAM_CURRENT_ENTITY`。使用全局函数时，先用 `Closure::fromCallable()` 转成闭包。钩子可从父类继承，最近一级的声明优先。当前没有 after-insert / after-update / after-delete 钩子，`fastUpdate()`、`fastDelete()` 和原始 SQL 不触发这些生命周期钩子。
+钩子声明只指定回调。字符串表示当前实体的方法名，无参数调用。可调用对象、闭包和数组回调收到当前实体作为唯一参数。回调需要的业务数据和配置由其实现自行获取。使用全局函数时，先用 `Closure::fromCallable()` 转成闭包。钩子可从父类继承，最近一级的声明优先。同一个类重复声明同一种钩子时，PHP 在解析实体时抛出异常。当前没有 after-insert / after-update / after-delete 钩子，`fastUpdate()`、`fastDelete()` 和原始 SQL 不触发这些生命周期钩子。
 
 ## 关联查询
 
@@ -1308,7 +1308,7 @@ foreach ($rows as $row) {
 
 附加键使用关系方法的声明名；如果父数组已经有同名键，会明确报错，不覆盖原字段。数组模式下父行和关联行保持数据库表示，例如 JSON 字段仍是 JSON 字符串，不会把转换对象放进返回数组。
 
-无论返回实体还是数组，父关联键 `selfProperty` 必须以原列名被 SELECT 选中；不能只选择别名，也不会自动扩大父字段白名单。实体模式不能用 `hideFields()` 隐藏该键，因为后续 getter 需要真实父键；数组模式可以隐藏，库使用隐藏前的原始行完成关联匹配。配置方法读取的其他 `$this` 字段也应由父查询选中。目标关系的 `fields()` 不必选中 `targetProperty`：内部匹配辅助列会被移除，不进入关联输出。当前实体的关联字段可以使用 `convertObject` 值对象或枚举；按需加载与预加载均使用其 `toValue()` 数据库值生成关联条件和匹配缓存。预加载要求转换后的关联值为整数、字符串或 null。
+无论返回实体还是数组，父关联键 `selfProperty` 都必须以原列名被 SELECT 选中。预加载在执行关联配置前检查该列。实体模式不能用 `hideFields()` 隐藏该键，因为后续 getter 需要真实父键；数组模式可以隐藏，库使用隐藏前的原始行完成关联匹配。配置方法读取的其他 `$this` 字段也应由父查询选中。目标关系的 `fields()` 不必选中 `targetProperty`：内部匹配辅助列会被移除，不进入关联输出。当前实体的关联字段可以使用 `convertObject` 值对象或枚举；按需加载与预加载均使用其 `toValue()` 数据库值生成关联条件和匹配缓存。预加载要求转换后的关联值为整数、字符串或 null。
 
 数组结果启用预加载时，会为每一条父行临时构造父模型，以便实例配置方法读取 `$this` 字段。实体模式的父模型和数组模式的临时父模型，都在父查询实际使用的连接下初始化、赋值并转换字段。预加载完成后恢复父查询回调选中的连接。未启用预加载的数组查询仍不会逐行构造实体。
 
@@ -1582,7 +1582,7 @@ flags 不接受整数、枚举的 `value` 或错误的枚举类型；这些输�
 | `ChainNoRelease` | `AND CHAIN NO RELEASE` | 开始新事务并保留连接 |
 | `NoChainNoRelease` | `AND NO CHAIN NO RELEASE` | 不开始新事务，保留连接；FastDb 默认值 |
 
-使用默认 `NoChainNoRelease` 可明确结束事务并保留池内连接。Chain / ChainNoRelease 会开始新事务，`Release` / `NoChainRelease` 成功时会关闭连接，FastDb 在查询回调前移除并淘汰这次池连接借用。同一协程随后执行独立查询时按需借用新连接。实际事务状态由 Connection 直接读取底层协议。需要明确的结束行为时，应显式选择对应 flags。
+使用默认 `NoChainNoRelease` 可明确结束事务并保留池内连接。Chain / ChainNoRelease 会开始新事务，`Release` / `NoChainRelease` 成功时会关闭连接，FastDb 在查询回调前移除并淘汰这次池连接借用。同一协程随后执行独立查询时按需借用新连接。实际事务状态由 Connection 直接读取底层协议。如果会话设置了 `completion_type=2`，请使用显式 `Release` 或 `NoChainRelease` 让 FastDb 清理池内借用，或用默认的 `NoChainNoRelease` 保留连接。使用 `None` 等会继承服务端默认释放行为的选项时，由调用者负责该会话的回收。
 
 FastDb 查询和事务执行超时抛出 `EasySwoole\FastDb\Exception\TimeoutException`，驱动会关闭失步连接。提交超时可能发生在服务端已提交、客户端尚未收到响应时，结果需要结合业务记录核实，不能直接重试提交。事务日志和查询栈中的 SQL 包含 flags 对应的完整语句，例如 `START TRANSACTION READ ONLY`、`COMMIT AND NO CHAIN NO RELEASE`。
 
@@ -2113,7 +2113,7 @@ $config = ConfigModel::findRecord(
 | `fastInsertAll(iterable $rows, ?string $tableName = null, ?callable $onQuery = null, int $batchSize = 500)` | 分批直接插入；合计影响行数 int\|string |
 | `fastUpsert(iterable $rows, array $updateColumns, ?string $tableName = null, ?callable $onQuery = null, int $batchSize = 500)` | 主键/唯一键冲突时更新；合计影响行数 int\|string |
 | `count($field = '*', $group = null)` | 整数或多列计数数组 |
-| `sum/avg/max/min($cols, $group = null, $force = true)` | 数字或多列聚合数组 |
+| `sum/avg/max/min($cols, $group = null, $force = true)` | 单列 `int|float|string` 或多列聚合数组 |
 | `chunk(callable $func, int $chunkSize = 10)` | OFFSET 分页逐条回调；false 停止，不返回累计条数 |
 | `chunkById(callable $func, int $chunkSize = 10, ?string $column = null): int` | 按稳定唯一列 ASC 键集分页；返回已交付条数 |
 | `hasChange(?string $field = null): bool` | 检查全部或指定映射字段的待保存修改 |

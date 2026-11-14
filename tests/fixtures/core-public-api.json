@@ -111,7 +111,7 @@
                 "static": false,
                 "final": false,
                 "abstract": false,
-                "return": "array|int|float",
+                "return": "array|string|int|float",
                 "returnsReference": false,
                 "params": [
                     {
@@ -563,7 +563,7 @@
                 "static": false,
                 "final": false,
                 "abstract": false,
-                "return": "array|int|float",
+                "return": "array|string|int|float",
                 "returnsReference": false,
                 "params": [
                     {
@@ -597,7 +597,7 @@
                 "static": false,
                 "final": false,
                 "abstract": false,
-                "return": "array|int|float",
+                "return": "array|string|int|float",
                 "returnsReference": false,
                 "params": [
                     {
@@ -684,7 +684,7 @@
                 "static": false,
                 "final": false,
                 "abstract": false,
-                "return": "array|int|float",
+                "return": "array|string|int|float",
                 "returnsReference": false,
                 "params": [
                     {

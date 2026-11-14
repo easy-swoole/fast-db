@@ -136,7 +136,7 @@ class ReflectionCache
     protected function parseClassTag(string $targetTag, \ReflectionClass $ref)
     {
         $attributes = $ref->getAttributes($targetTag);
-        if ($attributes !== []) { return new $targetTag(...$attributes[0]->getArguments()); }
+        if ($attributes !== []) { return $attributes[0]->newInstance(); }
         $parent = $ref->getParentClass();
         return $parent ? $this->parseClassTag($targetTag, $parent) : null;
     }
