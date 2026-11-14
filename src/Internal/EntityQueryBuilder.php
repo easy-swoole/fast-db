@@ -9,6 +9,18 @@ use EasySwoole\Mysqli\QueryBuilder\TableReference;
 final class EntityQueryBuilder extends QueryBuilder
 {
     private ?array $duplicateColumns = null;
+    private bool $hasLimit = false;
+
+    public function limit(int $one, ?int $two = null): QueryBuilder
+    {
+        $this->hasLimit = true;
+        return parent::limit($one, $two);
+    }
+
+    public function hasLimit(): bool
+    {
+        return $this->hasLimit;
+    }
 
     public function onDuplicate(mixed $updateColumns): QueryBuilder
     {
@@ -17,7 +29,7 @@ final class EntityQueryBuilder extends QueryBuilder
         return $this;
     }
 
-    // mysqli 的前缀会跨查询保留，预加载使用它限定默认投影。
+    // mysqli 的前缀会跨查询保留，关联查询用它限定框架生成的外键条件。
     private mixed $tablePrefix = '';
 
     public function setPrefix(mixed $prefix = ''): QueryBuilder
@@ -41,6 +53,7 @@ final class EntityQueryBuilder extends QueryBuilder
     {
         // 驱动构建完一条 SQL 就会重置选项，跟随同一次重置清理写入信息。
         $this->duplicateColumns = null;
+        $this->hasLimit = false;
         return parent::reset();
     }
 }

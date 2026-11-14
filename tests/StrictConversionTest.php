@@ -75,7 +75,7 @@ final class StrictConversionTest extends TestCase
         try { $entity->setData([$field => '{bad']); $this->fail('Expected JSON parse error'); }
         catch (\JsonException) {}
         $this->assertSame($before, $entity->{$field});
-        $this->assertTrue($entity->update());
+        $this->assertFalse($entity->hasChange());
         $entity->setData([$field => null]);
         $this->assertNull($entity->{$field});
     }

@@ -14,7 +14,6 @@ namespace EasySwoole\FastDb\Tests;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Beans\ListResult;
 use EasySwoole\FastDb\Beans\Query;
-use EasySwoole\FastDb\Config;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\FastDb\Tests\Model\Address;
@@ -31,8 +30,6 @@ final class ModelTest extends BaseTestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $configObj = new Config(MYSQL_CONFIG);
-        FastDb::getInstance()->addDb($configObj);
         FastDb::getInstance()->setOnQuery(function (QueryResult $queryResult) {
             if ($queryResult->getQueryBuilder()) {
                 //                echo $queryResult->getQueryBuilder()->getLastQuery() . "\n";

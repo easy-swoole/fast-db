@@ -22,7 +22,7 @@ final class NullableConvertTest extends TestCase
         $this->assertSame(SexEnum::MALE, $entity->sex);
         $this->assertSame(SexEnum::FEMAILE, $entity->nullableSex);
         $this->assertSame(['sex' => 1, 'nullableSex' => 2], $entity->toArray());
-        $this->assertTrue($entity->update());
+        $this->assertFalse($entity->hasChange());
     }
 
     public function testConstructorCanOverrideEnumDefaults(): void

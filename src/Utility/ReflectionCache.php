@@ -58,7 +58,7 @@ class ReflectionCache
                 continue;
             }
 
-            $property = new Property(...$attributes[0]->getArguments());
+            $property = $attributes[0]->newInstance();
             $property->__setName($propertyRef->name);
             $type = $propertyRef->getType();
             if ($type !== null && $type->allowsNull()) { $property->allowNull = true; }

@@ -27,7 +27,7 @@ final class RelationLoader
 
     /** 两种关联共用构建、缓存查找和写回流程，结果组装分别处理。 */
     public function load(AbstractEntity $entity, Query $selection, Relate $relate, ?string $tableName,
-        callable $execute, callable $beforeOneHydration): mixed
+        callable $execute, callable $beforeOneHydration, callable $hydrate): mixed
     {
         $target = new $relate->targetEntity();
         $query = $selection->__getQueryBuilder();
@@ -53,13 +53,12 @@ final class RelationLoader
             else {
                 // 单条实体赋值前结束父查询配置，子类赋值或字段转换时可重入父模型；最终清理由实体入口负责。
                 $beforeOneHydration();
-                $target->setData($rows[0], true);
-                $data = $target;
+                $data = $hydrate($relate->targetEntity, $rows[0], $target);
             }
         } else {
             $items = [];
             foreach ($rows as $row) {
-                $items[] = $returnAsArray ? $row : new $relate->targetEntity($row);
+                $items[] = $returnAsArray ? $row : $hydrate($relate->targetEntity, $row);
             }
             $data = new ListResult($items, $result->getTotalCount());
         }

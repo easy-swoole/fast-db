@@ -63,6 +63,108 @@ final class TransactionTest extends TestCase
         return (int) $this->observer->query("SELECT value FROM `{$this->table}` WHERE id = 1")->fetch_assoc()['value'];
     }
 
+    public function testPartialEntityCannotWriteUsingTheDefaultPrimaryKey(): void
+    {
+        $this->observer->query("INSERT INTO `{$this->table}` VALUES (2, 20)");
+        $owner = new PartialKeyMysqlEntity();
+        $owner->queryLimit()->where('id', 1)->fields(['value']);
+        $entity = $owner->all()->first();
+        $this->assertSame(2, $entity->id);
+        foreach (['update', 'delete', 'insert'] as $operation) {
+            try {
+                $entity->$operation();
+                $this->fail('A partially loaded primary key cannot locate a write');
+            } catch (\EasySwoole\FastDb\Exception\RuntimeError $error) {
+                $this->assertStringContainsString('without primary key value', $error->getMessage());
+            }
+        }
+        $selection = static fn (\EasySwoole\Mysqli\QueryBuilder $query) => $query->fields(['value'])->where('id', 1);
+        $owner->queryLimit()->where('id', 1)->hideFields('id');
+        foreach ([$owner->all()->first(), PartialKeyMysqlEntity::findRecord($selection),
+            PartialKeyMysqlEntity::findAll($selection)[0]] as $partial) {
+            try {
+                $partial->update();
+                $this->fail('Expected the write to reject a missing row key');
+            } catch (\EasySwoole\FastDb\Exception\RuntimeError $error) {
+                $this->assertStringContainsString('without primary key value', $error->getMessage());
+            }
+        }
+        $entity->setData(['id' => 1], true);
+        $entity->value = 5;
+        $this->assertTrue($entity->update());
+        $this->assertSame(5, $this->value());
+        $this->assertSame(20, TransactionEntity::findRecord(2)->value);
+    }
+
+    public static function chunkMethods(): array { return [['chunk'], ['chunkById']]; }
+
+    #[DataProvider('chunkMethods')]
+    public function testChunkKeepsFirstQueryConnectionWhenCallbackSwitchesDatabase(string $method): void
+    {
+        $this->db->addDb(new Config(MYSQL_CONFIG), 'other');
+        $this->observer->query("INSERT INTO `{$this->table}` VALUES (2, 20)");
+        $this->db->rawQuery("CREATE TEMPORARY TABLE `{$this->table}` (id INT PRIMARY KEY, value INT)", connection: 'other');
+        $this->db->rawQuery("INSERT INTO `{$this->table}` VALUES (2, 200), (3, 300)", connection: 'other');
+        $owner = new TransactionEntity();
+        $owner->queryLimit()->orderBy('id', 'ASC');
+        $seen = [];
+        $owner->$method(function (TransactionEntity $row) use (&$seen): void {
+            $seen[$row->id] = $row->value;
+            $this->db->selectConnection('other');
+        }, 1);
+        $this->assertSame([1 => 0, 2 => 20], $seen);
+        $this->assertSame('other', $this->db->selectConnection());
+    }
+
+    public function testChunkKeepsTheFirstTableWhenCallbackChangesTheOwner(): void
+    {
+        $this->observer->query("INSERT INTO `{$this->table}` VALUES (2, 20)");
+        $owner = new class extends PartialKeyMysqlEntity {
+            public bool $changed = false;
+            public function tableName(): string { return $this->changed ? 'table_does_not_exist' : parent::tableName(); }
+        };
+        $seen = [];
+        $owner->chunkById(static function (PartialKeyMysqlEntity $row) use ($owner, &$seen): void {
+            $seen[] = $row->id;
+            $owner->changed = true;
+        }, 1);
+        $this->assertSame([1, 2], $seen);
+    }
+
+    public function testWriteReturnsTheRowsReportedBeforeTheObserver(): void
+    {
+        $observer = static function (QueryResult $result): void { $result->setAffectedRows(0); };
+        $entity = TransactionEntity::findRecord(1);
+        $entity->setOnQuery($observer);
+        $entity->value = 5;
+        $this->assertTrue($entity->update());
+        $this->assertFalse($entity->hasChange());
+        $this->assertSame(5, $this->value());
+        $this->assertSame(1, TransactionEntity::fastUpdate(1, ['value' => 6], onQuery: $observer));
+        $this->assertSame(2, TransactionEntity::fastInsertAll([['id' => 2, 'value' => 1], ['id' => 3, 'value' => 2]],
+            onQuery: $observer, batchSize: 1));
+        $this->assertTrue($entity->delete());
+        $this->assertSame(1, TransactionEntity::fastDelete(2, onQuery: $observer));
+    }
+
+    public function testInitializedPoolRejectsReplacementAndKeepsRegisteredSnapshot(): void
+    {
+        $config = new Config(MYSQL_CONFIG);
+        $this->db->addDb($config);
+        $config->setDatabase('external_mutation');
+        $this->db->rawQuery('SELECT 1');
+        $this->db->getConfig()->setDatabase('lookup_mutation');
+        try {
+            $this->db->addDb(new Config(array_replace(MYSQL_CONFIG, ['database' => 'replacement'])));
+            $this->fail('A configured pool cannot be replaced');
+        } catch (\EasySwoole\FastDb\Exception\RuntimeError $error) {
+            $this->assertStringContainsString('after its pool has been created', $error->getMessage());
+        }
+        $this->assertSame(MYSQL_CONFIG['database'], $this->db->getConfig()->getDatabase());
+        $this->db->recycleContext();
+        $this->assertSame(MYSQL_CONFIG['database'], $this->db->rawQuery('SELECT DATABASE() AS db')->getResultOne()['db']);
+    }
+
     public function testChunkByIdUsesExplicitQualifiedCursorAcrossJoinedPages(): void
     {
         $this->observer->query("INSERT INTO `{$this->table}` VALUES (2, 10), (3, 20)");
@@ -1271,6 +1373,16 @@ final class TransactionEntity extends AbstractEntity
     {
         return self::$table;
     }
+}
+
+class PartialKeyMysqlEntity extends AbstractEntity
+{
+    #[Property(defaultValue: 2)]
+    #[PrimaryKey]
+    public int $id;
+    #[Property]
+    public int $value;
+    public function tableName(): string { return TransactionEntity::$table; }
 }
 
 class DeclaredMysqlEntity extends AbstractEntity

@@ -6,7 +6,6 @@ namespace EasySwoole\FastDb\Tests;
 
 use EasySwoole\FastDb\RelationType;
 use EasySwoole\FastDb\Attributes\Relate;
-use EasySwoole\FastDb\Config;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Tests\Model\StudentModel;
@@ -19,7 +18,7 @@ final class RelationTest extends BaseTestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $db = FastDb::getInstance()->addDb(new Config(MYSQL_CONFIG));
+        $db = FastDb::getInstance();
         $db->setOnQuery(static function (): void {});
         foreach (['student', 'student_info', 'student_score'] as $table) {
             $this->truncateTable($table);

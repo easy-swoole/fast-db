@@ -19,11 +19,16 @@ use Swoole\Coroutine;
 
 class BaseTestCase extends TestCase
 {
+    private \ReflectionProperty $instance;
+    private mixed $previousInstance;
+
     protected function setUp(): void
     {
         parent::setUp();
 
-        FastDb::getInstance()->selectConnection('default');
+        $this->instance = new \ReflectionProperty(FastDb::class, 'instance');
+        $this->previousInstance = $this->instance->getValue();
+        $this->instance->setValue(null, (new FastDb())->addDb(new Config(MYSQL_CONFIG)));
 
         // 检查测试表是否存在。
         $this->createTestTable();
@@ -34,9 +39,9 @@ class BaseTestCase extends TestCase
         try {
             FastDb::getInstance()->recycleContext();
             FastDb::getInstance()->reset();
-            FastDb::getInstance()->selectConnection('default');
             \Swoole\Timer::clearAll();
         } finally {
+            $this->instance->setValue(null, $this->previousInstance);
             parent::tearDown();
         }
     }

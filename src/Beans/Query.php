@@ -98,16 +98,15 @@ class Query
     }
 
     /** @internal 输出与写入共用字段白名单，隐藏字段仅作用于输出。 */
-    public function filterProperties(array $properties, bool $forOutput = false): array
+    public function filterProperties(array $properties, bool $forOutput = false, ?QueryBuilder $builder = null): array
     {
         if ($this->selection !== null) {
             $properties = $this->selection->filterProperties($properties, $forOutput);
         }
-        return !$forOutput && $this->queryBuilder !== null
-            ? self::filterWriteFields($properties, $this->queryBuilder) : $properties;
+        return $forOutput ? $properties : self::filterWriteFields($properties, $builder ?? $this->__getQueryBuilder());
     }
 
-    /** @internal 转换前筛选属性，构建 SQL 前再按同一规则确认实际写入的列。 */
+    /** @internal 在转换前按底层构建器的写入白名单筛选字段。 */
     public static function filterWriteFields(array $values, QueryBuilder $builder): array
     {
         $fields = $builder->getField();

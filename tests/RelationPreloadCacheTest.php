@@ -190,7 +190,8 @@ final class RelationPreloadCacheTest extends TestCase
                     $result = new QueryResult(microtime(true));
                     $result->setResult([['id' => 99, 'parent_id' => $parent->id, 'label' => 'database']]);
                     return $result;
-                }, $reset);
+                }, $reset, \Closure::bind(static fn (string $class, array $row, ?AbstractEntity $target = null) =>
+                    AbstractEntity::hydrateEntity($class, $row, $target), null, AbstractEntity::class));
         } finally {
             $this->resets++;
             $reset();

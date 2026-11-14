@@ -40,7 +40,7 @@ final class BatchWriter
         $query = new QueryBuilder();
         if ($updates === null) { $query->insertAll($table, $rows); }
         else { $query->upsert($table, $rows, $updates); }
-        $affected = $execute($query, $connection)->getAffectedRows();
+        $affected = $execute($query, $connection);
         return self::add($total, $affected);
     }
 

@@ -13,6 +13,19 @@ use PHPUnit\Framework\TestCase;
 
 final class DefaultValueTest extends TestCase
 {
+    public function testDuplicatePropertyAttributeFailsAtReflection(): void
+    {
+        $this->expectException(\Error::class);
+        $this->expectExceptionMessage('must not be repeated');
+        new class extends AbstractEntity {
+            #[Property(defaultValue: 1)]
+            #[Property(defaultValue: 2)]
+            public int $value;
+
+            public function tableName(): string { return 'unused'; }
+        };
+    }
+
     public function testConvertedDefaultsBelongToEachEntity(): void
     {
         $first = new MutableDefaultEntity();
@@ -21,7 +34,7 @@ final class DefaultValueTest extends TestCase
 
         $this->assertNotSame($first->tags, $second->tags);
         $this->assertSame([], $second->tags->toArray());
-        $this->assertTrue($second->update());
+        $this->assertFalse($second->hasChange());
         $defaults = ReflectionCache::getInstance()->parseEntity(MutableDefaultEntity::class)->allProperties();
         $this->assertSame([], $defaults['tags']->defaultValue->toArray());
     }
@@ -45,7 +58,7 @@ final class DefaultValueTest extends TestCase
         $this->assertNotSame($first->createdAt, $second->createdAt);
         $this->assertSame('Asia/Shanghai', $second->createdAt->getTimezone()->getName());
         $this->assertSame('2026-11-09 12:34:56.123456', $second->createdAt->format('Y-m-d H:i:s.u'));
-        $this->assertTrue($second->update());
+        $this->assertFalse($second->hasChange());
     }
 
     public function testDefaultsUseTheSameComparisonAsLaterChanges(): void

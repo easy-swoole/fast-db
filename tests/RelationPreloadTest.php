@@ -447,6 +447,40 @@ final class RelationPreloadTest extends TestCase
         $this->assertCount(1, $this->events);
     }
 
+    public function testRelationPreloadRejectsLimitBeforeRunningAnyRelationQuery(): void
+    {
+        $parent = new PreloadFixtureParent(['id' => 1]);
+        $this->assertSame(12, $parent->latestChild()->first()->id);
+        $this->connection->queries = $this->events = [];
+
+        try {
+            $this->parents(['children', 'latestChild']);
+            $this->fail('Preloading with LIMIT must fail');
+        } catch (RuntimeError $error) {
+            $this->assertSame('Relation preload does not support limit()', $error->getMessage());
+        }
+        $this->assertCount(1, $this->connection->queries);
+        $this->assertCount(1, $this->events);
+    }
+
+    public function testPartiallyLoadedRelationEntitiesCannotWriteThroughDefaultPrimaryKey(): void
+    {
+        $parent = new PreloadFixtureParent(['id' => 1]);
+        $preloaded = $this->parents('partialChildren')[0];
+        foreach ([$parent, $preloaded] as $owner) {
+            $child = $owner->partialChildren()->first();
+            $this->assertSame(13, $child->id);
+            $child->name = 'blocked';
+            try {
+                $child->update();
+                $this->fail('A relation row without its primary key cannot be updated');
+            } catch (RuntimeError $error) {
+                $this->assertStringContainsString('without primary key value', $error->getMessage());
+            }
+        }
+        $this->assertSame('child-13', $this->connection->database->query('SELECT name FROM preload_children WHERE id = 13')->fetchColumn());
+    }
+
     public function testLazyRelationRequiresAnInitializedParentField(): void
     {
         $parent = new PreloadFixtureParent();
@@ -733,6 +767,22 @@ class PreloadFixtureParent extends AbstractEntity
         $query->withTotalCount();
     }
 
+    #[Relate(PreloadFixtureChild::class, 'parent_id', type: RelationType::Many, configure: 'configureLatestChild')]
+    public function latestChild() { return $this->relateMany(); }
+
+    protected function configureLatestChild(QueryBuilder $query): void
+    {
+        $query->orderBy('id', 'DESC')->limit(1);
+    }
+
+    #[Relate(PreloadFixtureDefaultKeyChild::class, 'parent_id', type: RelationType::Many, configure: 'configurePartialChildren')]
+    public function partialChildren() { return $this->relateMany(); }
+
+    protected function configurePartialChildren(QueryBuilder $query): void
+    {
+        $query->fields(['name']);
+    }
+
     #[Relate(PreloadFixtureChild::class, 'parent_id', type: RelationType::Many, configure: 'configureEmptyProjection')]
     public function emptyProjectionChildren() { return $this->relateMany(); }
 
@@ -783,6 +833,13 @@ class PreloadFixtureProfile extends AbstractEntity
     #[Property] public ?int $parent_id;
     #[Property] public ?string $name;
     public function tableName(): string { return 'preload_profiles'; }
+}
+
+final class PreloadFixtureDefaultKeyChild extends PreloadFixtureChild
+{
+    #[Property(defaultValue: 13)]
+    #[PrimaryKey]
+    public int $id;
 }
 
 class PreloadFixtureAliasedChild extends PreloadFixtureChild

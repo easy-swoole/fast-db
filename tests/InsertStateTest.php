@@ -297,7 +297,7 @@ final class InsertStateTest extends TestCase
 
     public function testSelectedConverterErrorsPropagateWithoutExecutingSql(): void
     {
-        $entity = new InsertStateRecord(['name' => 'before', 'payload' => '[1]']);
+        $entity = new InsertStateRecord(['id' => 1, 'name' => 'before', 'payload' => '[1]']);
         InsertStateList::$failEncoding = true;
         foreach (['toArray', 'insert', 'update'] as $operation) {
             $entity->setData(['payload' => [2]]);
@@ -401,13 +401,15 @@ final class InsertStateTest extends TestCase
     #[DataProvider('writeOperations')]
     public function testFieldsExcludedByTableNameStayPending(string $operation): void
     {
-        $entity = new LateFieldSelectionRecord(['name' => 'before', 'score' => 0]);
+        $entity = new LateFieldSelectionRecord(['name' => 'before', 'score' => 0, 'items' => '[1]']);
         if ($operation === 'update') {
             $this->client->database->exec("INSERT INTO insert_state (id,name) VALUES (1,'before')");
             $entity->setData(['id' => 1], true);
         }
         $entity->setData(['name' => 'saved', 'score' => 9]);
+        InsertStateList::$valueCalls = 0;
         $this->assertTrue($entity->{$operation}());
+        $this->assertSame(0, InsertStateList::$valueCalls);
         $this->assertSame('saved', $this->client->row()['name']);
         $this->assertSame(0, $this->client->row()['score']);
         $this->assertSame(['score' => 9], $entity->getChanges());

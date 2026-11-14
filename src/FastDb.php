@@ -54,14 +54,20 @@ class FastDb
 
     public function addDb(Config $config, ?string $name = null): static
     {
+        $connectionName = $name ?? $config->getName();
+        if (isset($this->pools[$connectionName])) {
+            throw new RuntimeError("Cannot replace configuration for connection {$connectionName} after its pool has been created");
+        }
+        // 注册时保存配置快照，外部再修改 Config 不会改变池中已有连接的配置。
+        $config = clone $config;
         if ($name !== null) { $config->setName($name); }
-        $this->configs[$config->getName()] = $config;
+        $this->configs[$connectionName] = $config;
         return $this;
     }
 
     public function getConfig(string $name = 'default'): bool|Config
     {
-        return $this->configs[$name] ?? false;
+        return isset($this->configs[$name]) ? clone $this->configs[$name] : false;
     }
 
     public function testDb(string $connectionName = 'default'): bool
@@ -372,9 +378,12 @@ class FastDb
         $name ??= $this->selectConnection();
         if (isset($this->currentConnection[$cid][$name])) { return $this->currentConnection[$cid][$name]; }
         $this->registerContextCleanup($cid, true);
-        $config = $this->getConfig($name);
-        if ($config === false) { throw new RuntimeError("connection {$name} not register yet"); }
-        $pool = $this->pools[$name] ??= new Pool($config);
+        $pool = $this->pools[$name] ?? null;
+        if ($pool === null) {
+            $config = $this->getConfig($name);
+            if ($config === false) { throw new RuntimeError("connection {$name} not register yet"); }
+            $pool = $this->pools[$name] = new Pool($config);
+        }
         // 仅在借用入口已开启查询跟踪时计时；计时值始终在本方法内消费。
         $trace = $this->diagnostics?->enabled() ?? false;
         $startTime = $trace ? microtime(true) : 0.0;

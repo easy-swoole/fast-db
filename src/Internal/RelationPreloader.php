@@ -16,7 +16,7 @@ final class RelationPreloader
     private const BATCH_SIZE = 250;
 
     public function load(AbstractEntity $source, array $parents, array $rows, array $relations,
-        bool $asArray, string $connectionName, array $hiddenFields, callable $execute): array
+        bool $asArray, string $connectionName, array $hiddenFields, callable $execute, callable $hydrate): array
     {
         if ($parents === []) { return $parents; }
         $db = FastDb::getInstance();
@@ -27,7 +27,8 @@ final class RelationPreloader
                 $parents,
                 $this->collectPlans($source, $parents, $rows, $relations, $asArray, $connectionName, $hiddenFields),
                 $asArray,
-                $execute
+                $execute,
+                $hydrate
             );
         } finally {
             $db->selectConnection($connectionToRestore);
@@ -71,6 +72,13 @@ final class RelationPreloader
                 $db->selectConnection($relationPlan->connectionName);
                 $tableName = $relationPlan->tableName;
                 $builder = $relationPlan->builder;
+                // 批量 LIMIT 会截断其他父对象的结果，不能写入单父键关联缓存。
+                if (!$builder instanceof EntityQueryBuilder) {
+                    throw new RuntimeError('Relation preload requires the entity query builder');
+                }
+                if ($builder->hasLimit()) {
+                    throw new RuntimeError('Relation preload does not support limit()');
+                }
                 $columns = $relationPlan->columns;
                 // 先生成不带具体父键的 SQL，配置和参数相同的父记录可共用一条批量查询。
                 $previewQuery = (clone $builder)->get($tableName, null, $columns);
@@ -109,7 +117,8 @@ final class RelationPreloader
     }
 
     /** 每组只执行批量查询，再按原父记录位置回填独立的关联结果。 */
-    private function attachResults(array $parentResults, array $groups, bool $returnAsArray, callable $execute): array
+    private function attachResults(array $parentResults, array $groups, bool $returnAsArray, callable $execute,
+        callable $hydrate): array
     {
         $db = FastDb::getInstance();
         // 只遍历分组键，避免遍历期间 PHP 保留整份分组数据，便于回填后释放每组的缓存查询和结果行。
@@ -122,7 +131,7 @@ final class RelationPreloader
                 $parentPosition = $parentEntry['parentPosition'];
                 $matchedRows = $rowsByParentKey[$parentEntry['serializedParentKey']] ?? [];
                 $db->selectConnection($batchPlan->connectionName);
-                $relationData = $this->materialize($batchPlan, $matchedRows, $returnAsArray);
+                $relationData = $this->materialize($batchPlan, $matchedRows, $returnAsArray, $hydrate);
                 if ($returnAsArray) {
                     $parentResults[$parentPosition][$parentEntry['relationMethod']] = $relationData;
                 } else {
@@ -186,7 +195,7 @@ final class RelationPreloader
         return $matches;
     }
 
-    private function materialize(RelationPlan $plan, array $rows, bool $parentAsArray): mixed
+    private function materialize(RelationPlan $plan, array $rows, bool $parentAsArray, callable $hydrate): mixed
     {
         $asArray = $parentAsArray || $plan->returnAsArray;
         if ($plan->relate->type === RelationType::One) {
@@ -194,10 +203,10 @@ final class RelationPreloader
                 throw new RuntimeError('more than one record hit is no allow in relateOne method');
             }
             if ($rows === []) { return null; }
-            return $asArray ? $rows[0] : new ($plan->relate->targetEntity)($rows[0]);
+            return $asArray ? $rows[0] : $hydrate($plan->relate->targetEntity, $rows[0]);
         }
         if (!$asArray) {
-            foreach ($rows as $index => $row) { $rows[$index] = new ($plan->relate->targetEntity)($row); }
+            foreach ($rows as $index => $row) { $rows[$index] = $hydrate($plan->relate->targetEntity, $row); }
         }
         // 数组父结果直接附加行列表；实体的 returnAsArray 关系仍返回 ListResult。
         return $parentAsArray ? $rows : new ListResult($rows);
