@@ -336,6 +336,9 @@ abstract class AbstractEntity implements \JsonSerializable
             $selection = $this->queryLimit();
             $query = $selection->__getQueryBuilder();
             $tableName = $this->tableName();
+            if (in_array('IGNORE', $query->getQueryOptions(), true)) {
+                throw new \InvalidArgumentException('Entity update() does not support IGNORE; use QueryBuilder directly');
+            }
             $properties = $selection->filterProperties($entityRef->allProperties(), builder: $query);
             $data = $this->entityState->changes($this, $properties);
             $this->requirePrimaryKey($query, $entityRef, 'update');

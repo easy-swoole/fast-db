@@ -21,7 +21,7 @@ final class QueryResult
         private readonly int|string|null $insertId = null,
         private readonly ?string $rawSql = null,
         ?QueryBuilder $builder = null,
-        private readonly ?self $totalResult = null,
+        private ?self $totalResult = null,
     ) {
         $this->sql = new SqlSnapshot($rawSql, $builder);
     }
@@ -55,6 +55,14 @@ final class QueryResult
     public function getTotalResult(): ?self
     {
         return $this->totalResult;
+    }
+
+    /** @internal 保留主查询快照，为分页结果附上成功取得的总数。 */
+    public function withTotalResult(self $totalResult): self
+    {
+        $result = clone $this;
+        $result->totalResult = $totalResult;
+        return $result;
     }
 
     public function getTotalCount(): ?int

@@ -181,14 +181,14 @@ class FastDb
             return true;
         }
         $sql = ($rollback ? 'ROLLBACK' : 'COMMIT') . $flags->toSqlSuffix();
-        return $this->execute($client, function () use ($client, $rollback, $flags, $timeout): bool {
-            $success = $rollback ? $client->rollbackTransaction($flags, $timeout) : $client->commitTransaction($flags, $timeout);
-            if ($success && $flags->releasesConnection() && isset($client->connectionName)) {
-                // RELEASE 关闭会话后立即解除池内借用。
-                $this->recycleConnection(Coroutine::getCid(), $client->connectionName, $client, discard: true);
-            }
-            return $success;
-        }, null, $sql)->getResult() === true;
+        $result = $this->executeResult($client, static fn () => $rollback
+            ? $client->rollbackTransaction($flags, $timeout)
+            : $client->commitTransaction($flags, $timeout), null, $sql);
+        if ($result->getResult() === true && $flags->releasesConnection() && isset($client->connectionName)) {
+            // 先保存事务 SQL 的结果和耗时，再淘汰连接，最后通知观察者。
+            $this->recycleConnection(Coroutine::getCid(), $client->connectionName, $client, discard: true);
+        }
+        return $this->publishQueryResult($result)->getResult() === true;
     }
 
     public function isInTransaction(?Connection $connection = null): bool
@@ -228,8 +228,25 @@ class FastDb
     private function execute(Connection $client, callable $operation, ?QueryBuilder $builder = null,
         ?string $sql = null, ?float $totalQueryTimeout = null, ?callable $onQuery = null): QueryResult
     {
+        $queryResult = $this->executeResult($client, $operation, $builder, $sql);
         $totalQueryResult = null;
-        $queryResult = $this->executeResult($client, $operation, $builder, $sql, $totalQueryTimeout, $totalQueryResult);
+        if ($queryResult->getException() === null && $builder !== null
+            && in_array('SQL_CALC_FOUND_ROWS', $builder->getLastQueryOptions(), true)) {
+            // 在同一连接上读出总数，再通知观察者。
+            $totalSql = 'SELECT FOUND_ROWS() as count';
+            $totalQueryResult = $this->executeResult(
+                $client, static fn () => $client->rawQuery($totalSql, $totalQueryTimeout), null, $totalSql
+            );
+            if ($totalQueryResult->getException() === null) {
+                $queryResult = $queryResult->withTotalResult($totalQueryResult);
+            }
+        }
+        return $this->publishQueryResult($queryResult, $totalQueryResult, $onQuery);
+    }
+
+    private function publishQueryResult(QueryResult $queryResult, ?QueryResult $totalQueryResult = null,
+        ?callable $onQuery = null): QueryResult
+    {
         $firstError = $queryResult->getException() ?? $totalQueryResult?->getException();
         // 执行记录先于观察回调，回调抛异常也保留已经执行的 SQL。
         $this->diagnostics?->record($queryResult);
@@ -248,8 +265,7 @@ class FastDb
     }
 
     /** 驱动返回后立即保存本次结果；异常只在此记录，统一由调用层通知后抛出。 */
-    private function executeResult(Connection $client, callable $operation, ?QueryBuilder $builder, ?string $sql,
-        ?float $totalQueryTimeout = null, ?QueryResult &$totalQueryResult = null): QueryResult
+    private function executeResult(Connection $client, callable $operation, ?QueryBuilder $builder, ?string $sql): QueryResult
     {
         $startTick = hrtime(true);
         $startTime = microtime(true);
@@ -265,16 +281,8 @@ class FastDb
         $duration = (hrtime(true) - $startTick) / 1_000_000_000;
         $endTime = microtime(true);
 
-        if ($exception === null && $builder !== null && in_array('SQL_CALC_FOUND_ROWS', $builder->getLastQueryOptions(), true)) {
-            // 同一连接的后续 SQL 可能覆盖 FOUND_ROWS()，在通知观察者前先取总数。
-            $totalSql = 'SELECT FOUND_ROWS() as count';
-            $totalQueryResult = $this->executeResult(
-                $client, static fn () => $client->rawQuery($totalSql, $totalQueryTimeout), null, $totalSql
-            );
-        }
-        $totalResult = $totalQueryResult?->getException() === null ? $totalQueryResult : null;
         return new QueryResult($startTime, $endTime, $duration, $connectionName, $result, $exception,
-            $affectedRows, $insertId, $sql, $builder, $totalResult);
+            $affectedRows, $insertId, $sql, $builder);
     }
 
     public function invoke(callable $call): mixed

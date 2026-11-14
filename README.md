@@ -656,6 +656,18 @@ $user->insert(['name', 'score']);
 
 命中重复键时，按底层 `onDuplicate()` 的规则更新指定列。返回值表示 SQL 是否成功，重复键更新未改变数据时也可以返回 `true`。实体只更新两个分支都能确认写入实体值的字段基准，规则同样适用于通过实体查询构建器配置的 `onDuplicate()`。一次插入使用 `insert($updateDuplicateCols)` 或构建器的 `onDuplicate()` 指定冲突更新，两处同时设置会抛出异常。同一列只指定一次赋值。未列入更新列表或使用显式冲突更新值的字段保留原基准。需要准确的最终记录时重新查询。
 
+假设 `users.id` 是主键，`email` 也有唯一索引。数据库中已有 `id=1`、`email='a@example.com'`、`score=10` 的记录。
+
+```php
+$user = new User(['id' => 9, 'email' => 'a@example.com', 'score' => 20]);
+$user->score = 21;
+$user->insert(['score']); // email 冲突时，将 id=1 的 score 更新为 21。
+
+$stored = User::findRecord(['email' => 'a@example.com']); // 取得实际记录 id=1。
+```
+
+这个例子中，`insert()` 返回 `true`，`$user->id` 仍为 `9`，`getChanges()` 可以为空。调用方应根据表上的唯一索引决定是否使用重复键更新。后续需要操作实际命中的记录时，请用业务明确知道的唯一键重新查询，并使用查询返回的实体。
+
 ### 检查待保存修改
 
 `hasChange(?string $field = null): bool` 检查全部或指定映射字段是否相对比较基准发生变化；未映射或不存在的字段返回 false。`getChanges(): array` 返回全部变化字段的当前属性值，与直接访问属性一致。`ConvertBean`、`ConvertList` 等转换字段返回属性持有的同一个对象，不转成 JSON、不克隆；普通数组仍返回数组。变更比较使用转换对象的 `toValue()` 结果。
@@ -713,7 +725,7 @@ $user->update(); // 保存尚未写入的 score。
 
 `toArray()` 在转换前应用 `fields()` 和 `hideFields()`；`insert()` / `update()` 在转换及变更比较前只应用 `fields()`。字段配置为 `null` 时没有白名单，空数组不选任何写入列，显式 `['*']` 也不会扩展成全部写入列。被排除的字段不会调用转换对象的 `toValue()`，不会因其转换失败阻止本次操作。部分更新只接受实际写入字段的比较基准，其他修改仍可在后续放开白名单后保存。
 
-实体写入先确定表名和写入配置，再按实体字段限制及底层构建器的白名单筛选，最后转换参与写入的字段。已提供主键且筛选后没有变化时，`update()` 返回 `true` 并跳过 SQL。每次更新结束都会清理查询配置。实体写入、快捷写入和批量写入的返回值均使用公开查询回调前的执行结果。
+实体写入先确定表名和写入配置，再按实体字段限制及底层构建器的白名单筛选，最后转换参与写入的字段。已提供主键且筛选后没有变化时，`update()` 返回 `true` 并跳过 SQL。每次更新结束都会清理查询配置。 实体 `update()` 在执行前拒绝 `IGNORE`。需要 `UPDATE IGNORE` 时请直接使用 `QueryBuilder`，由业务按需重新读取实际写入值。实体写入、快捷写入和批量写入的返回值均使用公开查询回调前的执行结果。
 
 ### 快捷更新
 
@@ -1588,7 +1600,7 @@ flags 不接受整数、枚举的 `value` 或错误的枚举类型；这些输�
 | `ChainNoRelease` | `AND CHAIN NO RELEASE` | 开始新事务并保留连接 |
 | `NoChainNoRelease` | `AND NO CHAIN NO RELEASE` | 不开始新事务，保留连接；FastDb 默认值 |
 
-使用默认 `NoChainNoRelease` 可明确结束事务并保留池内连接。Chain / ChainNoRelease 会开始新事务，`Release` / `NoChainRelease` 成功时会关闭连接，FastDb 在查询回调前移除并淘汰这次池连接借用。同一协程随后执行独立查询时按需借用新连接。实际事务状态由 Connection 直接读取底层协议。如果会话设置了 `completion_type=2`，请使用显式 `Release` 或 `NoChainRelease` 让 FastDb 清理池内借用，或用默认的 `NoChainNoRelease` 保留连接。使用 `None` 等会继承服务端默认释放行为的选项时，由调用者负责该会话的回收。
+使用默认 `NoChainNoRelease` 可明确结束事务并保留池内连接。Chain / ChainNoRelease 会开始新事务，`Release` / `NoChainRelease` 成功时会关闭连接。FastDb 先保存事务 SQL 的执行结果和耗时，再淘汰该池连接，最后通知查询观察者。同一协程随后执行独立查询时按需借用新连接。实际事务状态由 Connection 直接读取底层协议。如果会话设置了 `completion_type=2`，请使用显式 `Release` 或 `NoChainRelease` 让 FastDb 清理池内借用，或用默认的 `NoChainNoRelease` 保留连接。使用 `None` 等会继承服务端默认释放行为的选项时，由调用者负责该会话的回收。
 
 FastDb 查询和事务执行超时抛出 `EasySwoole\FastDb\Exception\TimeoutException`，驱动会关闭失步连接。提交超时可能发生在服务端已提交、客户端尚未收到响应时，结果需要结合业务记录核实，不能直接重试提交。事务日志和查询栈中的 SQL 包含 flags 对应的完整语句，例如 `START TRANSACTION READ ONLY`、`COMMIT AND NO CHAIN NO RELEASE`。
 
@@ -1856,7 +1868,7 @@ $insertId = $result->getInsertId();
 
 连接名在执行 SQL 前从实际连接记录，查询失败时也保留。查询栈统一读取该快照，不会因为构建器回调或日志回调切换连接而记错数据库。
 
-FastDb 在 Connection 返回后立即保存结果行、影响行数、自增 ID、SQL、参数和耗时。需要总数时，在同一连接上先取得 `FOUND_ROWS()`，然后通知查询观察者。显式传入的 `$timeout` 分别应用于主查询和总数查询。查询结果保存的是本次执行的返回值，后续数据库变化不会自动刷新这些 PHP 数据；需要新数据时应再次查询。
+FastDb 在 Connection 返回后立即保存结果行、影响行数、自增 ID、SQL、参数和耗时。需要总数时，主查询结果保存后在同一连接上单独执行 `FOUND_ROWS()`，成功时将总数结果附到主结果，再统一通知查询观察者。总数 SQL 失败会单独记录并向调用方抛出原异常。显式传入的 `$timeout` 分别应用于主查询和总数查询。查询结果保存的是本次执行的返回值，后续数据库变化不会自动刷新这些 PHP 数据；需要新数据时应再次查询。
 
 Connection 的 `getLastAffectRows()` / `getLastInsertId()` 始终表示最后一条实际执行 SQL 的元数据，包括分页总数查询。通过 FastDb 执行时，使用返回的 `QueryResult` 获取该次操作的影响行数和自增 ID。
 
@@ -1864,7 +1876,7 @@ Connection 的 `getLastAffectRows()` / `getLastInsertId()` 始终表示最后一
 
 分页总数及对应查询结果随主查询的 QueryResult 一起保存，可直接读取 `$result->getTotalCount()` 和 `$result->getTotalResult()`。实体列表从本次查询结果读取总数。
 
-`getDuration()` 只记录驱动执行阶段，排除 SQL 构建、获取连接和查询观察回调。
+`getDuration()` 只记录驱动执行阶段，排除 SQL 构建、获取连接、池连接淘汰和查询观察回调。
 
 连接获取耗时通过查询栈的独立 `connectionAcquire` 事件读取，不分摊给某条 SQL 或 QueryResult。计时覆盖连接池 `getObj()` 阶段，包含排队、按需新建连接、健康检查及重试；它不是纯粹的队列等待时间。业务端到端耗时还包含进入查询执行阶段前的构建和业务代码等阶段，需要另行计时。
 

@@ -496,20 +496,24 @@ final class InsertStateTest extends TestCase
         $this->assertSame(9, $this->client->row()['score']);
     }
 
-    public function testInsertIgnoreIsRejectedBeforeSqlAndLeavesChangesPending(): void
+    #[DataProvider('writeOperations')]
+    public function testEntityWriteRejectsIgnoreBeforeSqlAndLeavesChangesPending(string $operation): void
     {
         $entity = new InsertStateRecord(['id' => 1, 'name' => 'original']);
         $entity->name = 'ignored';
         $entity->queryLimit()->func(static fn (QueryBuilder $query) => $query->setQueryOption('IGNORE'));
         try {
-            $entity->insert();
+            $entity->$operation();
             $this->fail('Expected IGNORE to be rejected');
         } catch (\InvalidArgumentException $error) {
             $this->assertStringContainsString('does not support IGNORE', $error->getMessage());
         }
         $this->assertSame([], $this->client->queries);
         $this->assertSame(['name' => 'ignored'], $entity->getChanges());
-        $this->assertTrue($entity->insert());
+        if ($operation === 'update') {
+            $this->client->database->exec("INSERT INTO insert_state (id, name) VALUES (1, 'original')");
+        }
+        $this->assertTrue($entity->$operation());
     }
 
     public function testDuplicateOptionsCannotBeConfiguredThroughBothEntryPoints(): void

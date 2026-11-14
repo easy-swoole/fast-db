@@ -6,6 +6,7 @@ namespace EasySwoole\FastDb\Tests;
 
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
+use EasySwoole\FastDb\Mysql\Pool;
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\Mysqli\Client;
 use EasySwoole\Mysqli\Config;
@@ -346,6 +347,32 @@ final class ConnectionObserverTest extends TestCase
             catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
             $this->assertFalse($connection->isInTransaction());
             $this->assertNull($connection->mysqlClient());
+        }, true);
+    }
+
+    public function testReleaseCapturesSqlMetadataBeforePoolDiscardAndObserver(): void
+    {
+        $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
+            $discardStarted = null;
+            $pool = $this->createMock(Pool::class);
+            $pool->expects($this->once())->method('unsetObj')->with($connection)->willReturnCallback(
+                static function (Connection $client) use (&$discardStarted): bool {
+                    $discardStarted = microtime(true);
+                    (new \ReflectionProperty(Client::class, 'lastAffectRows'))->setValue($client, null);
+                    return true;
+                }
+            );
+            (new \ReflectionProperty(FastDb::class, 'pools'))->setValue($db, ['default' => $pool]);
+            $observed = null;
+            $db->setOnQuery(function (QueryResult $result) use ($db, &$discardStarted, &$observed): void {
+                $this->assertNotNull($discardStarted);
+                $this->assertNull($db->currentConnection());
+                $observed = $result;
+            });
+            $this->queueQuery($peer, 'raw', $this->ok(2, 3));
+            $this->assertTrue($db->commit(flags: TransactionCompletionFlags::Release));
+            $this->assertSame(3, $observed->getAffectedRows());
+            $this->assertLessThanOrEqual($discardStarted, $observed->getEndTime());
         }, true);
     }
 
