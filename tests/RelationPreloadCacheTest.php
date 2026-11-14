@@ -131,7 +131,7 @@ final class RelationPreloadCacheTest extends TestCase
 
     public function testPrimeOverridesAnExistingLazyCacheAndClearRemovesBoth(): void
     {
-        $parent = $this->parent(); $relation = $this->relation(RelationType::One); $relation->cacheResult = true; $loader = new RelationLoader();
+        $parent = $this->parent(); $relation = $this->relation(RelationType::One, cacheResult: true); $loader = new RelationLoader();
         $lazy = $this->load($loader, $parent, $relation);
         $this->assertSame($lazy, $this->load($loader, $parent, $relation));
         $this->assertSame(1, $this->queries);
@@ -168,9 +168,10 @@ final class RelationPreloadCacheTest extends TestCase
     }
 
     private function parent(): PreloadCacheParent { return new PreloadCacheParent(['id' => 1]); }
-    private function relation(RelationType $type = RelationType::Many, string $target = PreloadCacheChild::class): Relate
+    private function relation(RelationType $type = RelationType::Many, string $target = PreloadCacheChild::class,
+        bool $cacheResult = false): Relate
     {
-        return new Relate($target, 'parent_id', $type, selfProperty: 'id');
+        return new Relate($target, 'parent_id', $type, selfProperty: 'id', cacheResult: $cacheResult);
     }
     private function lookup(PreloadCacheParent $parent, Relate $relation): QueryBuilder
     {

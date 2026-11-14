@@ -76,8 +76,12 @@ final class RelationPreloader
                 if (!$builder instanceof EntityQueryBuilder) {
                     throw new RuntimeError('Relation preload requires the entity query builder');
                 }
-                if ($builder->hasLimit()) {
+                if ($builder->getLimitRowCount() !== null) {
                     throw new RuntimeError('Relation preload does not support limit()');
+                }
+                // 批量分组可能把多个父对象的关系行合成一行，失去按父键回填的依据。
+                if ($builder->hasGroupBy()) {
+                    throw new RuntimeError('Relation preload does not support groupBy()');
                 }
                 $columns = $relationPlan->columns;
                 // 先生成不带具体父键的 SQL，配置和参数相同的父记录可共用一条批量查询。

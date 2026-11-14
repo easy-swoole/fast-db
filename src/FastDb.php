@@ -55,6 +55,9 @@ class FastDb
     public function addDb(Config $config, ?string $name = null): static
     {
         $connectionName = $name ?? $config->getName();
+        if ($connectionName === '' || $connectionName === '0') {
+            throw new \InvalidArgumentException('Connection name must be non-empty and cannot be "0"');
+        }
         if (isset($this->pools[$connectionName])) {
             throw new RuntimeError("Cannot replace configuration for connection {$connectionName} after its pool has been created");
         }
@@ -99,7 +102,6 @@ class FastDb
     {
         $cid = Coroutine::getCid();
         if ($name !== null) {
-            if ($name === '' || $name === '0') { throw new \InvalidArgumentException('Connection name must be non-empty and cannot be "0"'); }
             $this->registerContextCleanup($cid);
             $this->selectConnection[$cid] = $name;
             return $this;
@@ -109,7 +111,6 @@ class FastDb
 
     public function withConnection(string $name, callable $callback): mixed
     {
-        if ($name === '' || $name === '0') { throw new \InvalidArgumentException('Connection name must be non-empty and cannot be "0"'); }
         $cid = Coroutine::getCid();
         if (!isset($this->configs[$name]) && !isset($this->currentConnection[$cid][$name])) {
             throw new RuntimeError('connection ' . $name . ' not register yet');

@@ -9,6 +9,7 @@ use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Exception\RuntimeError;
+use EasySwoole\FastDb\Utility\ReflectionCache;
 use EasySwoole\Mysqli\QueryBuilder;
 use PHPUnit\Framework\TestCase;
 
@@ -23,6 +24,26 @@ final class RelationDeclarationTest extends TestCase
         $this->assertSame('id', $plan->relate->selfProperty);
         $this->assertSame('children', $plan->tableName);
         $this->assertSame([], $plan->builder->get('children')->getLastBindParams());
+    }
+
+    public function testResolvedRelationIsSharedAndReadOnly(): void
+    {
+        $cache = ReflectionCache::getInstance();
+        $relate = $cache->parseRelation(DeclarationParent::class, 'plain');
+        $this->assertSame('id', $relate->selfProperty);
+        $this->assertSame($relate, $cache->parseRelation(DeclarationParent::class, 'plain'));
+
+        $this->expectException(\Error::class);
+        $relate->targetProperty = 'another_field';
+    }
+
+    public function testResolvingAnExplicitRelationKeepsItsOriginalDefinition(): void
+    {
+        $relate = new Relate(DeclarationTarget::class, 'parent_id', RelationType::Many);
+        $resolved = ReflectionCache::getInstance()->resolveRelation(DeclarationParent::class, $relate);
+
+        $this->assertSame('id', $resolved->selfProperty);
+        $this->assertNull($relate->selfProperty);
     }
 
     public function testProtectedConfigurationUsesEachParentAndKeepsExistingQueryReferences(): void

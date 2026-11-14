@@ -8,8 +8,8 @@ class Call
 {
     const PARAM_CURRENT_ENTITY = 'PARAM_CURRENT_ENTITY';
 
-    public mixed $callback;
-    public array|null $params;
+    public readonly mixed $callback;
+    public readonly ?array $params;
 
     function __construct(
         callable|string $callback,

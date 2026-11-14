@@ -5,11 +5,24 @@ declare(strict_types=1);
 namespace EasySwoole\FastDb\Tests;
 
 use EasySwoole\FastDb\Attributes\Hook\Call;
+use EasySwoole\FastDb\Attributes\Hook\OnInitialize;
+use EasySwoole\FastDb\Utility\ReflectionCache;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use PHPUnit\Framework\TestCase;
 
 final class CallTest extends TestCase
 {
+    public function testCachedHookDefinitionIsReadOnly(): void
+    {
+        $cache = ReflectionCache::getInstance();
+        $hook = $cache->parseEntity(CachedHookCallOwner::class)->getOnInitialize();
+        $this->assertSame('instanceHook', $hook->callback);
+        $this->assertSame(['instance'], (new CachedHookCallOwner())->events);
+
+        $this->expectException(\Error::class);
+        $hook->callback = 'get_class';
+    }
+
     public function testHooksKeepProtectedInheritanceAndCallableParameterRules(): void
     {
         $entity = new InheritedHookCallOwner();
@@ -32,3 +45,6 @@ class HookCallOwner extends AbstractEntity
     public static function staticHook(self $owner, string $value): bool { $owner->events[] = $value; return true; }
 }
 class InheritedHookCallOwner extends HookCallOwner {}
+
+#[OnInitialize('instanceHook')]
+class CachedHookCallOwner extends HookCallOwner {}

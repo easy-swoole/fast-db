@@ -14,16 +14,6 @@ final class FieldCodec
         return $property->convertObject ? self::convertObject($property, $value) : $value;
     }
 
-    public static function defaultValue(Property $property): mixed
-    {
-        $value = $property->defaultValue;
-        // 默认对象按自身 __clone 规则复制，枚举保持原值。
-        if (is_object($value) && !($value instanceof \UnitEnum)) {
-            $value = clone $value;
-        }
-        return self::assign($property, $value);
-    }
-
     private static function convertObject(Property $property, mixed $value): ?object
     {
         if ($value === null && $property->allowNull) { return null; }

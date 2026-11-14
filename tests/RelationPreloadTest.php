@@ -463,6 +463,22 @@ final class RelationPreloadTest extends TestCase
         $this->assertCount(1, $this->events);
     }
 
+    public function testRelationPreloadRejectsGroupByBeforeRunningAnyRelationQuery(): void
+    {
+        $parent = new PreloadFixtureParent(['id' => 1]);
+        $this->assertSame(['group_code' => 'a', 'total' => 2], $parent->childCounts()->first());
+        $this->connection->queries = $this->events = [];
+
+        try {
+            $this->parents(['children', 'childCounts']);
+            $this->fail('Preloading with GROUP BY must fail');
+        } catch (RuntimeError $error) {
+            $this->assertSame('Relation preload does not support groupBy()', $error->getMessage());
+        }
+        $this->assertCount(1, $this->connection->queries);
+        $this->assertCount(1, $this->events);
+    }
+
     public function testPartiallyLoadedRelationEntitiesCannotWriteThroughDefaultPrimaryKey(): void
     {
         $parent = new PreloadFixtureParent(['id' => 1]);
@@ -773,6 +789,14 @@ class PreloadFixtureParent extends AbstractEntity
     protected function configureLatestChild(QueryBuilder $query): void
     {
         $query->orderBy('id', 'DESC')->limit(1);
+    }
+
+    #[Relate(PreloadFixtureChild::class, 'parent_id', type: RelationType::Many, configure: 'configureChildCounts', returnAsArray: true)]
+    public function childCounts() { return $this->relateMany(); }
+
+    protected function configureChildCounts(QueryBuilder $query): void
+    {
+        $query->fields(['group_code', 'COUNT(*) AS total'])->groupBy('group_code');
     }
 
     #[Relate(PreloadFixtureDefaultKeyChild::class, 'parent_id', type: RelationType::Many, configure: 'configurePartialChildren')]

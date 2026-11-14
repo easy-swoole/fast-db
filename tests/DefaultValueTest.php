@@ -36,7 +36,34 @@ final class DefaultValueTest extends TestCase
         $this->assertSame([], $second->tags->toArray());
         $this->assertFalse($second->hasChange());
         $defaults = ReflectionCache::getInstance()->parseEntity(MutableDefaultEntity::class)->allProperties();
-        $this->assertSame([], $defaults['tags']->defaultValue->toArray());
+        $this->assertSame([], $defaults['tags']->getDefaultValue()->toArray());
+    }
+
+    public function testCachedPropertyMetadataCannotBeChangedThroughItsReaders(): void
+    {
+        $cache = ReflectionCache::getInstance();
+        $metadata = $cache->parseEntity(MutableDefaultEntity::class);
+        $this->assertSame($metadata, $cache->parseEntity(MutableDefaultEntity::class));
+        $property = $metadata->allProperties()['tags'];
+        $property->getDefaultValue()->append('changed through metadata');
+        $this->assertSame([], (new MutableDefaultEntity())->tags->toArray());
+
+        $this->expectException(\Error::class);
+        $property->allowNull = true;
+    }
+
+    public function testObjectDefaultsInsideArraysAreCopied(): void
+    {
+        $metadata = ReflectionCache::getInstance()->parseEntity(MutableDefaultEntity::class);
+        $defaults = $metadata->allProperties()['nested']->getDefaultValue();
+        $defaults['outer']['object']->changed = true;
+
+        $first = new MutableDefaultEntity();
+        $first->nested['outer']['object']->changed = true;
+        $second = new MutableDefaultEntity();
+
+        $this->assertSame([], get_object_vars($second->nested['outer']['object']));
+        $this->assertNotSame($first->nested['outer']['object'], $second->nested['outer']['object']);
     }
 
     public function testOrdinaryObjectDefaultsAlsoBelongToEachEntity(): void
@@ -81,6 +108,9 @@ class MutableDefaultEntity extends AbstractEntity
 
     #[Property(defaultValue: new \stdClass())]
     public \stdClass $metadata;
+
+    #[Property(defaultValue: ['outer' => ['object' => new \stdClass()]])]
+    public array $nested;
 
     public function tableName(): string
     {

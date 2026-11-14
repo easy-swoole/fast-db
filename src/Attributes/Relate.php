@@ -8,13 +8,13 @@ use EasySwoole\FastDb\RelationType;
 class Relate
 {
     function __construct(
-        public string $targetEntity,
-        public string $targetProperty,
+        public readonly string $targetEntity,
+        public readonly string $targetProperty,
         public readonly RelationType $type,
-        public ?string $selfProperty = null,
-        public bool $cacheResult = false,
-        public ?string $configure = null,
-        public bool $returnAsArray = false,
+        public readonly ?string $selfProperty = null,
+        public readonly bool $cacheResult = false,
+        public readonly ?string $configure = null,
+        public readonly bool $returnAsArray = false,
     ) {
     }
 }

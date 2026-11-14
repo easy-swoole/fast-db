@@ -37,12 +37,9 @@ class ReflectionCache
             throw new RuntimeError("{$entityClass} not a subclass of " . AbstractEntity::class);
         }
 
-        $entity = new EntityReflection($entityClass,
-            $reflection->getMethod('queryLimit')->getDeclaringClass()->getName() !== AbstractEntity::class);
-        $entity->setOnDelete($this->parseClassTag(OnDelete::class, $reflection));
-        $entity->setOnInitialize($this->parseClassTag(OnInitialize::class, $reflection));
-        $entity->setOnInsert($this->parseClassTag(OnInsert::class, $reflection));
-        $entity->setOnUpdate($this->parseClassTag(OnUpdate::class, $reflection));
+        $properties = [];
+        $primaryKeyName = null;
+        $autoIncrementProperty = null;
 
         foreach ($reflection->getProperties() as $propertyRef) {
             $attributes = $propertyRef->getAttributes(Property::class);
@@ -59,25 +56,42 @@ class ReflectionCache
             }
 
             $property = $attributes[0]->newInstance();
-            $property->__setName($propertyRef->name);
-            $type = $propertyRef->getType();
-            if ($type !== null && $type->allowsNull()) { $property->allowNull = true; }
-            $default = $propertyRef->getDefaultValue();
-            if ($default !== null) { $property->defaultValue = $default; }
-            $entity->addProperty($property);
+            $property->__setMapping(
+                $propertyRef->name,
+                $propertyRef->getType()?->allowsNull() ?? false,
+                $propertyRef->getDefaultValue()
+            );
+            $properties[$property->name] = $property;
             if ($primaryKey !== []) {
                 $primaryKey[0]->newInstance();
-                $entity->setPrimaryKey($property->name);
+                if ($primaryKeyName !== null) {
+                    throw new RuntimeError("can not duplicate define primary key in class {$entityClass}");
+                }
+                $primaryKeyName = $property->name;
             }
             if ($autoIncrement !== []) {
                 $autoIncrement[0]->newInstance();
-                $entity->setAutoIncrementProperty($property);
+                if ($autoIncrementProperty !== null) {
+                    throw new RuntimeError("Only one AutoIncrement field can be declared in {$entityClass}");
+                }
+                $autoIncrementProperty = $property;
             }
         }
-        return $this->entityData[$entityClass] = $entity;
+
+        return $this->entityData[$entityClass] = new EntityReflection(
+            entityClass: $entityClass,
+            hasCustomQueryLimit: $reflection->getMethod('queryLimit')->getDeclaringClass()->getName() !== AbstractEntity::class,
+            properties: $properties,
+            primaryKey: $primaryKeyName,
+            autoIncrementProperty: $autoIncrementProperty ?? ($primaryKeyName === null ? null : $properties[$primaryKeyName]),
+            onDelete: $this->parseClassTag(OnDelete::class, $reflection),
+            onInitialize: $this->parseClassTag(OnInitialize::class, $reflection),
+            onInsert: $this->parseClassTag(OnInsert::class, $reflection),
+            onUpdate: $this->parseClassTag(OnUpdate::class, $reflection),
+        );
     }
 
-    /** 缓存解析后的关联声明，每次返回独立副本。 */
+    /** 关联声明解析后为只读，按实体类和方法共享同一份定义。 */
     public function parseRelation(string $entityClass, string $method): Relate
     {
         if (!isset($this->relationData[$entityClass][$method])) {
@@ -88,7 +102,7 @@ class ReflectionCache
             }
             $this->relationData[$entityClass][$method] = $this->resolveRelation($entityClass, $attributes[0]->newInstance());
         }
-        return clone $this->relationData[$entityClass][$method];
+        return $this->relationData[$entityClass][$method];
     }
 
     /** @internal 补全并校验显式传入的关联定义。 */
@@ -96,17 +110,27 @@ class ReflectionCache
     {
         $target = $this->parseEntity($relate->targetEntity);
         $parent = $this->parseEntity($entityClass);
-        if ($relate->selfProperty === null) {
-            $relate = clone $relate;
-            $relate->selfProperty = $parent->getPrimaryKey()
-                ?? throw new RuntimeError('can not relate entity without primary key set');
-        } elseif (!isset($parent->allProperties()[$relate->selfProperty])) {
-            throw new RuntimeError("{$relate->selfProperty} is not a define property in " . $entityClass);
+        $selfProperty = $relate->selfProperty ?? $parent->getPrimaryKey()
+            ?? throw new RuntimeError('can not relate entity without primary key set');
+        if (!isset($parent->allProperties()[$selfProperty])) {
+            throw new RuntimeError("{$selfProperty} is not a define property in " . $entityClass);
         }
         if (!isset($target->allProperties()[$relate->targetProperty])) {
             throw new RuntimeError("{$relate->targetProperty} is not a define property in {$relate->targetEntity}");
         }
-        return $relate;
+        if ($relate->selfProperty !== null) {
+            return $relate;
+        }
+        // 未指定父键时用本实体主键，显式传入的声明也可以在其他实体上继续使用。
+        return new Relate(
+            $relate->targetEntity,
+            $relate->targetProperty,
+            $relate->type,
+            $selfProperty,
+            $relate->cacheResult,
+            $relate->configure,
+            $relate->returnAsArray
+        );
     }
 
     protected function parseClassTag(string $targetTag, \ReflectionClass $ref)

@@ -179,7 +179,7 @@ final class ConnectionScopeTest extends TestCase
     {
         $calls = 0;
         try { $this->db->withConnection($name, static function () use (&$calls): void { $calls++; }); $this->fail('Invalid name must fail'); }
-        catch (\InvalidArgumentException) { $this->addToAssertionCount(1); }
+        catch (RuntimeError $error) { $this->assertStringContainsString('not register yet', $error->getMessage()); }
         $this->assertSame(0, $calls);
         $this->assertSame('a', $this->db->selectConnection());
         $this->assertSame([], $this->events);

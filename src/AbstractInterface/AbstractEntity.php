@@ -455,12 +455,19 @@ abstract class AbstractEntity implements \JsonSerializable
         if ($tableName === null) {
             $tableName = (new static())->tableName();
         }
-        $query = new QueryBuilder();
+        $query = new EntityQueryBuilder();
         self::applyQueryLimit($query, $queryLimit, 'find record');
-        if($selectForUpdate){
+        // 仅在未指定 LIMIT 时默认取一条，显式 LIMIT 中的偏移量由构造器原样保留。
+        $rowCount = $query->getLimitRowCount();
+        if ($rowCount === null) {
+            $query->limit(1);
+        } elseif ($rowCount > 1) {
+            throw new \InvalidArgumentException('findRecord() supports a LIMIT of at most one row');
+        }
+        if ($selectForUpdate) {
             $query->selectForUpdate();
         }
-        $query->get($tableName, 1);
+        $query->get($tableName);
         $ret = static::callQuery($query,$onQuery)->getResult();
         if (!empty($ret[0])) {
             return self::hydrateEntity(static::class, $ret[0]);
@@ -560,7 +567,7 @@ abstract class AbstractEntity implements \JsonSerializable
         // 通过缓存的属性元数据初始化字段，并建立默认值的比较基准。
         foreach ($entityRef->allProperties() as $property) {
             $name = $property->name;
-            $value = FieldCodec::defaultValue($property);
+            $value = FieldCodec::assign($property, $property->getDefaultValue());
             if ($value !== null || $property->allowNull) {
                 $this->{$name} = $value;
             }

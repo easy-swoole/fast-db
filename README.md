@@ -372,7 +372,9 @@ PHP 属性上非 null 的默认值会优先作为初始化值；nullable 属性�
 
 `#[PrimaryKey]` 标记带 `#[Property]` 的 public 非 static 属性。每个实体最多声明一个主键字段。同一字段重复声明 `#[Property]` 会在解析实体时抛出异常。`Property` 的 `isPrimaryKey` 参数已移除。将 `#[Property(isPrimaryKey: true)]` 改为在同一属性上分别声明 `#[Property]` 和 `#[PrimaryKey]`。原先传给 `Property` 第一个位置的主键布尔值也应移除，默认值和转换类建议使用 `defaultValue:` 和 `convertObject:` 命名参数。
 
-对象类型的默认值（枚举除外）会在每个实体初始化时通过 `clone` 复制，复制深度遵循该类型自身的 `__clone()`；PHP 默认只做浅复制。需要隔离嵌套可变对象时，应由对应类型实现克隆逻辑。例如，包含 Bean 实例的自定义 `ItemList`，应在 `ItemList::__clone()` 中复制需要独立的元素；Bean 内更深层的对象也由其自身负责。数组赋值同样不会自动复制其中的对象元素。
+框架按实体类缓存字段、主键、自增字段、关联和钩子定义。解析后的定义只读，配置通过对应的 PHP Attribute 声明。实体实例的字段值仍可按原有方式修改。
+
+对象默认值（枚举除外）会在每个实体初始化时复制，数组默认值中的对象元素也会复制。读取字段元数据的 `getDefaultValue()` 同样会取得副本。对象内部的复制深度遵循该类型自身的 `__clone()`。例如，包含 Bean 实例的自定义 `ItemList`，应在 `ItemList::__clone()` 中复制需要独立的元素。
 
 ### 构造和 setData
 
@@ -406,6 +408,16 @@ $user = User::findRecord(function (QueryBuilder $query): void {
 ```
 
 参数顺序：`findRecord($queryLimit, $tableName = null, $selectForUpdate = false, $onQuery = null)`。没有命中返回 `null`；查询失败抛异常。主键条件支持整数和字符串，按属性主键查找；数组/回调可以查询无主键实体。
+
+`findRecord()` 默认使用 `LIMIT 1`。在回调中调用 `limit(10, 1)` 会跳过 10 条后取一条，建议同时指定稳定的排序。
+
+```php
+$user = User::findRecord(function (QueryBuilder $query): void {
+    $query->where('status', 1)->orderBy('id', 'ASC')->limit(10, 1);
+});
+```
+
+`limit(0)` 返回 `null`。显式指定取多条时，`findRecord()` 会在执行 SQL 前抛出 `InvalidArgumentException`。需要多条结果时使用 `findAll()`。
 
 ### 查找多条记录
 
@@ -716,7 +728,7 @@ $affected = User::fastUpdate(function (QueryBuilder $query): void {
 
 `findRecord()`、`findAll()`、`fastUpdate()` 和 `fastDelete()` 直接使用显式传入的表名。省略表名时，才构造实体调用 `tableName()` 推导表名。返回实体的查询仍会按返回行构造实体。
 
-`findRecord()`、`findAll()`、`fastUpdate()`、`fastDelete()` 共用条件解析规则：条件数组中的普通值表示等值条件（字符串和布尔值作为参数绑定），数组值使用 `[值, 运算符]` 或 `[值, 运算符, AND/OR]`；回调接收原始 QueryBuilder。NULL 判断通过条件回调显式调用 `whereNull()` 或 `whereNotNull()`。字符串主键完整绑定为单个值。查询多个主键时在条件数组里明确写 `IN`。
+`findRecord()`、`findAll()`、`fastUpdate()`、`fastDelete()` 共用条件解析规则：条件数组中的普通值表示等值条件（字符串和布尔值作为参数绑定），数组值使用 `[值, 运算符]` 或 `[值, 运算符, AND/OR]`；回调接收可直接配置的 QueryBuilder。NULL 判断通过条件回调显式调用 `whereNull()` 或 `whereNotNull()`。字符串主键完整绑定为单个值。查询多个主键时在条件数组里明确写 `IN`。
 
 ```php
 $affected = User::fastUpdate(['score' => [60, '>=']], ['status' => 1]);
@@ -1355,7 +1367,7 @@ protected function configureChildren(QueryBuilder $query): void
 
 常见固定关系、每种关系不超过 250 个唯一父关联键时，通常是 1 条父查询加每种关系 1 条批查询；例如 100 个父实体同时预加载 profile 和 orders，通常为 3 条 SQL。更大的结果按每组查询计划、每 250 个去重父键分批；相同计划还可合并。若动态条件让每个父对象都产生不同计划，关联查询仍可能达到 N 条，不保证任意关系都固定为一条批 SQL。父分页的额外总数查询、业务方法或钩子自己执行的 SQL 另计；空父列表不执行关联 SQL。
 
-预加载关系配置了 `limit()` 或 `withTotalCount()` 时，会在执行关联查询前抛出异常。需要限定单个父对象的关联条数时，使用按需加载或显式构造 QueryBuilder 并组装结果。父列表仍支持分页和总数统计。`all()` 预加载当前列表，`chunk()` / `chunkById()` 只预加载当前批次，在逐条业务回调前完成。
+预加载关系配置了 `limit()`、`withTotalCount()` 或 `groupBy()` 时，会在执行任何预加载关联查询前抛出异常。需要限定单个父对象的关联条数时，可以按需加载。需要一批父对象的关联统计时，请显式构造 QueryBuilder，例如按 `user_id` 和 `status` 分组统计订单，再按 `user_id` 组装结果。父列表仍支持分页和总数统计。`all()` 预加载当前列表，`chunk()` / `chunkById()` 只预加载当前批次，在逐条业务回调前完成。
 
 预加载声明只作用于本次查询，执行后会被消费；查询模板或实体克隆会保留尚未消费的声明，并独立复制查询配置。实体缓存按连接、父键、实际 SQL、参数和返回模式匹配，更改条件、父键、目标表或实体/数组模式不会错误命中旧结果。`clearRelationCache()` 同时清除预加载结果和普通关联缓存，之后 getter 恢复查询；数组附加值已经是普通数组，不受该方法影响。`cacheResult: false` 只关闭按需查询缓存，不会禁用显式预加载的结果。缓存不会自动感知外部写入或事务结果，长生命周期实体应按需清理。
 
@@ -1710,7 +1722,7 @@ try {
 }
 ```
 
-`addDb()` 的第二个参数指定注册名称，传入的 Config 对象可以继续由调用方使用。
+`addDb()` 优先用第二个参数作为连接名，省略时使用 `Config::getName()`。如果最终名称是空字符串 `''` 或 `'0'`，注册时会抛出 `InvalidArgumentException`。传入的 Config 对象可以继续由调用方使用。
 
 连接选择按协程保存。实体没有自身绑定的连接名，所有实体查询使用 `FastDb::getInstance()` 当前选择的连接；使用局部 `new FastDb()` 不会改变实体所使用的单例。
 
@@ -1733,7 +1745,7 @@ $db->withConnection('primary', function (FastDb $db): void {
 }); // 外层退出后回到最初的连接名。
 ```
 
-`$name` 必须有已注册的配置，或当前协程已持有该名称的连接；完全未知的名字会在执行回调前被拒绝。空字符串 `''` 和 `'0'` 不是合法作用域连接名。配置存在不代表已连接或数据库一定可用；withConnection 本身不进行连接探测。
+`$name` 必须有已注册的配置，或当前协程已持有该名称的连接；完全未知的名字会在执行回调前被拒绝。配置存在不代表已连接或数据库一定可用；withConnection 本身不进行连接探测。
 
 该方法自己不借连接、不回收连接、不创建事务，也不提交或回滚已有事务。回调里的查询会按需使用现有连接池流程；只改变选库、不执行 SQL 的回调不会因此创建数据库连接。如果回调手工开始事务，退出选库作用域不会自动结束它；需要回调事务管理时显式调用 `transaction()`。
 

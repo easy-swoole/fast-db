@@ -63,6 +63,51 @@ final class EntityQueryBoundaryTest extends TestCase
         $this->assertSame(['other', 'trim'], $this->client->database->query('SELECT id FROM query_boundary ORDER BY id')->fetchAll(\PDO::FETCH_COLUMN));
     }
 
+    public static function findRecordLimits(): array
+    {
+        return [
+            'default' => [null, null, 'is_object', 'LIMIT 1'],
+            'one row' => [1, null, 'is_object', 'LIMIT 1'],
+            'one row with offset' => [1, 1, 'other', 'LIMIT 1, 1'],
+            'zero rows' => [0, null, null, 'LIMIT 0'],
+            'zero rows with offset' => [1, 0, null, 'LIMIT 1, 0'],
+        ];
+    }
+
+    #[DataProvider('findRecordLimits')]
+    public function testFindRecordPreservesExplicitLimit(?int $first, ?int $second, ?string $expectedId, string $expectedLimit): void
+    {
+        $record = QueryBoundaryRecord::findRecord(static function (QueryBuilder $query) use ($first, $second): void {
+            $query->orderBy('id', 'ASC');
+            if ($first !== null) {
+                $query->limit($first, $second);
+            }
+        });
+
+        $this->assertSame($expectedId, $record?->id);
+        $this->assertCount(1, $this->client->queries);
+        $this->assertStringEndsWith($expectedLimit, $this->client->queries[0]['sql']);
+    }
+
+    public static function multiRowFindRecordLimits(): array
+    {
+        return ['count only' => [2, null], 'offset and count' => [10, 2]];
+    }
+
+    #[DataProvider('multiRowFindRecordLimits')]
+    public function testFindRecordRejectsMultipleRowsBeforeExecutingSql(int $first, ?int $second): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('findRecord() supports a LIMIT of at most one row');
+        try {
+            QueryBoundaryRecord::findRecord(static function (QueryBuilder $query) use ($first, $second): void {
+                $query->limit($first, $second);
+            });
+        } finally {
+            $this->assertSame([], $this->client->queries);
+        }
+    }
+
     public static function zeroKeys(): array { return [['integer', 0], ['string', '0']]; }
 
     #[DataProvider('zeroKeys')]

@@ -16,6 +16,41 @@ use Swoole\Coroutine;
 
 final class ConnectionNameTest extends TestCase
 {
+    public static function invalidRegistrationNames(): array
+    {
+        return [
+            'empty config name' => ['', null],
+            'zero config name' => ['0', null],
+            'empty explicit name' => ['default', ''],
+            'zero explicit name' => ['default', '0'],
+        ];
+    }
+
+    #[DataProvider('invalidRegistrationNames')]
+    public function testInvalidNameFailsAtRegistration(string $configName, ?string $name): void
+    {
+        $db = new FastDb();
+        $config = new Config(['name' => $configName]);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Connection name must be non-empty and cannot be "0"');
+        try {
+            $db->addDb($config, $name);
+        } finally {
+            $this->assertFalse($db->getConfig($name ?? $configName));
+        }
+    }
+
+    public function testExplicitRegistrationNameTakesPrecedenceOverConfigName(): void
+    {
+        $config = new Config(['name' => '0']);
+        $db = (new FastDb())->addDb($config, 'reporting');
+
+        $this->assertSame('reporting', $db->getConfig('reporting')->getName());
+        $this->assertSame('0', $config->getName());
+        $this->assertFalse($db->getConfig('0'));
+    }
+
     public static function operations(): array
     {
         $cases = [];
