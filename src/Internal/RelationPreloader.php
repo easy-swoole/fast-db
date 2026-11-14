@@ -174,9 +174,10 @@ final class RelationPreloader
             $parameters = [];
             $identities = array_keys($batch);
             $conditions = [];
-            $parentIndex = TableReference::column($alias . '.' . $indexName);
+            $quotedIndexName = TableReference::identifier($indexName);
+            $parentIndex = TableReference::identifier($alias) . '.' . $quotedIndexName;
             foreach (array_values($batch) as $index => $value) {
-                $sql[] = 'SELECT ' . $index . ' AS ' . TableReference::identifier($indexName);
+                $sql[] = 'SELECT ' . $index . ' AS ' . $quotedIndexName;
                 $comparison = $value === null ? $foreign . ' IS NULL' : $foreign . ' = ?';
                 $conditions[] = '(' . $parentIndex . ' = ' . $index . ' AND ' . $comparison . ')';
                 if ($value !== null) { $parameters[] = $value; }
@@ -185,7 +186,7 @@ final class RelationPreloader
             $builder = clone $plan->builder;
             // 保留调用方投影或 mysqli 的默认通配符，只追加内部匹配列。
             $columns = $plan->columns ?? $builder->getField() ?? ['*'];
-            $columns[] = QueryBuilder::rawExpression($parentIndex . ' AS ' . TableReference::identifier($indexName));
+            $columns[] = QueryBuilder::rawExpression($parentIndex . ' AS ' . $quotedIndexName);
             // 派生表只承载数字位置；键仍作为常量参数比较，保留类型及 collation 规则。
             $builder->join($keys, QueryBuilder::rawExpression('(' . implode(' OR ', $conditions) . ')', $parameters), 'INNER');
             $builder->groupExistingWhere()->whereGroup(static function (QueryBuilder $query) use ($batch, $foreign): void {

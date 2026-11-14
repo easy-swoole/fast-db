@@ -120,7 +120,7 @@ class Connection extends Client implements ObjectInterface
     private function discardDisconnectedSession(): bool
     {
         $protocol = $this->mysqlClient();
-        if ($protocol !== null && (!$protocol->isConnected() || $protocol->isTransactionLost())) {
+        if ($protocol !== null && !$protocol->isConnected()) {
             $this->close();
             return true;
         }
