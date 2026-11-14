@@ -222,13 +222,22 @@ final class InsertStateTest extends TestCase
     {
         $entity = new InsertStateRecord(['name' => 'before', 'score' => 1]);
         $entity->name = 'inserted'; $entity->score = 9;
-        if ($builderFields) { $entity->queryLimit()->__getQueryBuilder()->fields(['name']); }
-        else { $entity->queryLimit()->fields(['name']); }
+        $held = $entity->queryLimit()->hideFields('payload')->persistFieldLimit();
+        if ($builderFields) { $held->returnAsArray()->__getQueryBuilder()->fields(['name']); }
+        else { $held->fields(['name'], true); }
+        $builder = $held->__getQueryBuilder();
         $this->assertTrue($entity->insert());
         $this->assertSame(1, $entity->id);
         $this->assertSame(0, $this->client->row()['score']);
         $this->assertSame(['score' => 9], $entity->getChanges());
-        $entity->queryLimit()->fields(null);
+        $next = $entity->queryLimit();
+        $this->assertNotSame($held, $next);
+        $this->assertSame($builder, $held->__getQueryBuilder());
+        $this->assertNull($next->getFields());
+        $this->assertFalse($next->isPersistFieldLimit());
+        $this->assertSame(['payload'], $next->getHideFields());
+        $this->assertArrayNotHasKey('payload', $entity->toArray());
+        $this->assertSame(9, $entity->toArray()['score']);
         $this->assertTrue($entity->update());
         $this->assertSame([9, 1], $this->client->queries[1]['parameters']);
         $this->assertSame('inserted', $this->client->row()['name']);

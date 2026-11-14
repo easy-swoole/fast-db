@@ -70,20 +70,18 @@ final class QueryLazyBuilderTest extends TestCase
         $query = (new Query($owner))->fields(['id'])->hideFields('secret')->persistFieldLimit();
         $clone = clone $query;
         $rebound = $query->forEntity($other);
-        $clean = $query->withoutSqlConditions();
         $query->fields(['name'])->hideFields('other')->persistFieldLimit(false);
 
-        foreach ([$query, $clone, $rebound, $clean] as $copy) {
+        foreach ([$query, $clone, $rebound] as $copy) {
             $this->assertNull($this->builderState($copy));
         }
-        foreach ([$clone, $rebound, $clean] as $copy) {
+        foreach ([$clone, $rebound] as $copy) {
             $this->assertSame(['fields' => ['id'], 'returnAsArray' => false], $copy->getFields());
             $this->assertSame(['secret'], $copy->getHideFields());
             $this->assertTrue($copy->isPersistFieldLimit());
         }
         $this->assertSame($owner, $clone->returnEntity());
         $this->assertSame($other, $rebound->returnEntity());
-        $this->assertSame($owner, $clean->returnEntity());
     }
 
     public function testExistingBuildersKeepTheirIdentityAndCloneTheirSqlState(): void
@@ -108,30 +106,6 @@ final class QueryLazyBuilderTest extends TestCase
         $this->assertSame([1, 20], $rebound->__getQueryBuilder()->getLastBindParams());
         $this->assertSame($held, $query->__getQueryBuilder());
         $this->assertSame($other, $rebound->returnEntity());
-    }
-
-    public function testWithoutSqlConditionsPreservesTheOldQueryAndBuilderReferences(): void
-    {
-        $query = (new Query(new LazyQueryOwner()))->where('id', 7)->page(2, true, 5)
-            ->fields(['id'])->hideFields('secret')->persistFieldLimit();
-        $held = $query->__getQueryBuilder();
-        $clean = $query->withoutSqlConditions();
-
-        $this->assertNotSame($query, $clean);
-        $this->assertNull($this->builderState($clean));
-        $cleanBuilder = $clean->__getQueryBuilder();
-        $this->assertNotSame($held, $cleanBuilder);
-        $cleanBuilder->get('items');
-        $held->get('items');
-        $this->assertSame([], $cleanBuilder->getLastBindParams());
-        $this->assertSame([], $cleanBuilder->getLastQueryOptions());
-        $this->assertStringNotContainsString('WHERE', $cleanBuilder->getLastPrepareQuery());
-        $this->assertStringNotContainsString('LIMIT', $cleanBuilder->getLastPrepareQuery());
-        $this->assertSame([7], $held->getLastBindParams());
-        $this->assertStringContainsString('LIMIT 5, 5', $held->getLastPrepareQuery());
-        $this->assertSame(['fields' => ['id'], 'returnAsArray' => false], $clean->getFields());
-        $this->assertSame(['secret'], $clean->getHideFields());
-        $this->assertTrue($clean->isPersistFieldLimit());
     }
 
     public static function sqlOperations(): array

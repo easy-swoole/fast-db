@@ -432,8 +432,13 @@ abstract class AbstractEntity implements \JsonSerializable
                 });
             return $isSuccess;
         } finally {
-            // 插入后兼容保留隐藏字段等输出配置，仅清除 SQL 条件。
-            $this->resetQueryOptions(true);
+            // 字段白名单只作用于本次插入，隐藏字段继续用于序列化。
+            $hideFields = $this->queryBuilder?->getHideFields();
+            $this->resetQueryOptions();
+            if ($hideFields !== null) {
+                // 直接创建查询配置，避免清理时调用子类的 queryLimit()。
+                $this->queryBuilder = (new Query($this))->hideFields($hideFields);
+            }
         }
     }
 
@@ -530,8 +535,11 @@ abstract class AbstractEntity implements \JsonSerializable
         $selfValue = FieldCodec::compare($this->{$relate->selfProperty});
         $builder = $query->__getQueryBuilder();
         $fields = $query->getFields();
+        $returnAsArray = $fields['returnAsArray'] ?? false;
+        // 一对一回填复用用于取得表名的实例，与按需加载的构造顺序一致。
         return new RelationPlan($relate, $tableName, $builder, $fields['fields'] ?? null,
-            $fields['returnAsArray'] ?? false, $connectionName, $selfValue);
+            $returnAsArray, $connectionName, $selfValue,
+            $relate->type === RelationType::One && !$returnAsArray ? $target : null);
     }
 
     protected function relateOne(Relate|null $relate = null,string|null $tableName = null):null|array|AbstractEntity
@@ -769,10 +777,10 @@ abstract class AbstractEntity implements \JsonSerializable
             static fn (QueryBuilder $query, string $connection) => self::callQuery($query, $onQuery, connection: $connection)->getAffectedRows());
     }
 
-    private function resetQueryOptions(bool $preserveSelection = false):void
+    private function resetQueryOptions():void
     {
         // 只清理查询状态，不清空实体属性、比较基准或查询回调。
-        $this->queryBuilder = $preserveSelection ? $this->queryBuilder?->withoutSqlConditions() : null;
+        $this->queryBuilder = null;
     }
 
     /** 实例写入统一使用原主键约束查询范围。 */

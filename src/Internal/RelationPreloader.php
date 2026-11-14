@@ -107,6 +107,8 @@ final class RelationPreloader
                     'relationMethod' => $relationMethod,
                     'serializedParentKey' => $serializedParentKey,
                     'cacheLookup' => $cacheLookup,
+                    // 同一组共用 SQL，每个父对象的目标实例各自回填。
+                    'target' => $returnAsArray ? null : $relationPlan->target,
                 ];
             }
             $parentPosition++;
@@ -130,7 +132,7 @@ final class RelationPreloader
                 $parentPosition = $parentEntry['parentPosition'];
                 $matchedRows = $rowsByParentKey[$parentEntry['serializedParentKey']] ?? [];
                 $db->selectConnection($batchPlan->connectionName);
-                $relationData = $this->materialize($batchPlan, $matchedRows, $returnAsArray, $hydrate);
+                $relationData = $this->materialize($batchPlan, $matchedRows, $returnAsArray, $hydrate, $parentEntry['target']);
                 if ($returnAsArray) {
                     $parentResults[$parentPosition][$parentEntry['relationMethod']] = $relationData;
                 } else {
@@ -194,7 +196,8 @@ final class RelationPreloader
         return $matches;
     }
 
-    private function materialize(RelationPlan $plan, array $rows, bool $parentAsArray, callable $hydrate): mixed
+    private function materialize(RelationPlan $plan, array $rows, bool $parentAsArray, callable $hydrate,
+        ?AbstractEntity $target): mixed
     {
         $asArray = $parentAsArray || $plan->returnAsArray;
         if ($plan->relate->type === RelationType::One) {
@@ -202,7 +205,7 @@ final class RelationPreloader
                 throw new RuntimeError('more than one record hit is no allow in relateOne method');
             }
             if ($rows === []) { return null; }
-            return $asArray ? $rows[0] : $hydrate($plan->relate->targetEntity, $rows[0]);
+            return $asArray ? $rows[0] : $hydrate($plan->relate->targetEntity, $rows[0], $target);
         }
         if (!$asArray) {
             foreach ($rows as $index => $row) { $rows[$index] = $hydrate($plan->relate->targetEntity, $row); }

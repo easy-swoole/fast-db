@@ -3,6 +3,7 @@
 namespace EasySwoole\FastDb\Internal;
 
 use EasySwoole\FastDb\RelationType;
+use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\Mysqli\QueryBuilder;
@@ -19,6 +20,7 @@ final class RelationPlan
         public readonly bool $returnAsArray,
         public readonly string $connectionName,
         public readonly mixed $selfValue,
+        public readonly ?AbstractEntity $target = null,
     ) {}
 
     /** 限定 FastDb 自己添加的外键条件，调用方投影和附加条件保持原样。 */

@@ -192,6 +192,40 @@ final class RelationPreloadTest extends TestCase
         $this->assertCount(3, $this->connection->queries);
     }
 
+    public function testOnePreloadFillsTheTargetConstructedForEachParent(): void
+    {
+        $this->connection->database->exec("INSERT INTO preload_profiles VALUES (25,1,'a')");
+        PreloadFixtureTrackedProfile::$constructed = 0;
+
+        $lazy = (new PreloadFixtureParent(['group_code' => 'a']))->groupProfile();
+        $this->assertSame(1, PreloadFixtureTrackedProfile::$constructed);
+        $this->assertNull($lazy->constructorData);
+        $this->assertSame(25, $lazy->id);
+        $this->assertFalse($lazy->hasChange());
+
+        PreloadFixtureTrackedProfile::$constructed = 0;
+        $this->connection->queries = [];
+        $owner = new PreloadFixtureParent();
+        $owner->queryLimit()->where('group_code', 'a')->orderBy('id', 'ASC')->withRelations('groupProfile');
+        [$firstParent, $secondParent] = $owner->all()->list();
+        $this->assertSame(2, PreloadFixtureTrackedProfile::$constructed);
+
+        $first = $firstParent->groupProfile();
+        $second = $secondParent->groupProfile();
+        $this->assertSame(1, $first->constructionOrder);
+        $this->assertSame(2, $second->constructionOrder);
+        $this->assertNull($first->constructorData);
+        $this->assertNull($second->constructorData);
+        $this->assertSame(25, $first->id);
+        $this->assertSame(25, $second->id);
+        $this->assertFalse($first->hasChange());
+        $this->assertFalse($second->hasChange());
+        $this->assertNotSame($first, $second);
+        $first->name = 'changed locally';
+        $this->assertSame('a', $second->name);
+        $this->assertCount(2, $this->connection->queries);
+    }
+
     public function testDuplicateOneRelationStillRaisesTheExistingCardinalityError(): void
     {
         $this->connection->database->exec("INSERT INTO preload_profiles VALUES (24,3,'duplicate')");
@@ -711,6 +745,9 @@ class PreloadFixtureParent extends AbstractEntity
     #[Relate(PreloadFixtureProfile::class, 'parent_id', cacheResult: true, type: RelationType::One)]
     public function profile() { return $this->relateOne(); }
 
+    #[Relate(PreloadFixtureTrackedProfile::class, 'name', type: RelationType::One, selfProperty: 'group_code')]
+    public function groupProfile() { return $this->relateOne(); }
+
     #[Relate(PreloadFixtureChild::class, 'group_code', selfProperty: 'group_code', cacheResult: true, type: RelationType::Many)]
     public function groupChildren() { return $this->relateMany(); }
 
@@ -827,6 +864,18 @@ class PreloadFixtureProfile extends AbstractEntity
     #[Property] public ?int $parent_id;
     #[Property] public ?string $name;
     public function tableName(): string { return 'preload_profiles'; }
+}
+
+class PreloadFixtureTrackedProfile extends PreloadFixtureProfile
+{
+    public static int $constructed = 0;
+    public int $constructionOrder;
+
+    public function __construct(public ?array $constructorData = null)
+    {
+        parent::__construct($constructorData);
+        $this->constructionOrder = ++self::$constructed;
+    }
 }
 
 final class PreloadFixtureDefaultKeyChild extends PreloadFixtureChild

@@ -43,8 +43,9 @@ final class ArrayReturnSemanticsTest extends TestCase
         next($rows);
         $result = $this->all($rows);
 
-        $this->assertSame(['id' => 1], $result->current());
-        $this->assertSame(0, $result->key());
+        $iterator = $result->getIterator();
+        $this->assertSame(['id' => 1], $iterator->current());
+        $this->assertSame(0, $iterator->key());
         $this->assertSame([['id' => 1], ['id' => 2], ['id' => 3]], $result->list());
         $this->assertSame(1, key($rows));
     }
@@ -55,8 +56,24 @@ final class ArrayReturnSemanticsTest extends TestCase
         $result = $this->all($rows, []);
 
         $this->assertSame([['id' => 2], ['id' => 1], ['id' => 3]], $result->list());
-        $this->assertSame(['id' => 2], $result->current());
+        $this->assertSame(['id' => 2], $result->getIterator()->current());
         $this->assertSame([10, 'custom', 30], array_keys($rows));
+    }
+
+    public function testNestedIterationUsesIndependentIteratorsAndPreservesKeys(): void
+    {
+        $result = new ListResult([10 => ['id' => 1], 'second' => ['id' => 2], 30 => ['id' => 3]]);
+        $pairs = [];
+        foreach ($result as $outerKey => $outer) {
+            foreach ($result as $innerKey => $inner) {
+                $pairs[$outerKey][$innerKey] = $outer['id'] + $inner['id'];
+            }
+        }
+        $this->assertSame([
+            10 => [10 => 2, 'second' => 3, 30 => 4],
+            'second' => [10 => 3, 'second' => 4, 30 => 5],
+            30 => [10 => 4, 'second' => 5, 30 => 6],
+        ], $pairs);
     }
 
     public function testRowReferencesAreDetachedFromTheReturnedList(): void

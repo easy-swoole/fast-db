@@ -183,14 +183,6 @@ class Query
         return $this->builder();
     }
 
-    /** 插入后清理 SQL 条件并保留输出配置。 */
-    public function withoutSqlConditions(): Query
-    {
-        $copy = new Query($this->entity);
-        $copy->selection = $this->selection === null ? null : clone $this->selection;
-        return $copy;
-    }
-
     /** 克隆实体时重新绑定所有者，同时复制 SQL 条件和输出配置。 */
     public function forEntity(AbstractEntity $entity): Query
     {
