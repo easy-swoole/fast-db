@@ -79,6 +79,6 @@ docker compose -f tests/docker/compose.yaml down --volumes --remove-orphans
 
 默认使用 MySQL 8.4.13。执行其他版本时，在上述命令的整个执行期间保持同一个 `MYSQL_VERSION`，例如先 `export MYSQL_VERSION=8.0.46`。并行运行不同版本时分别设置不同的 `COMPOSE_PROJECT_NAME`，清理时沿用对应名称。
 
-### 更新测试依赖
+### CI 依赖解析
 
-根目录 composer.lock 不跟踪；`tests/docker/dependencies.lock.json` 是 CI 专用锁文件快照，不影响库使用者解析依赖。修改 composer.json 或主动升级测试依赖后，在 PHP 8.4 的一次性工作区重新解析并验证依赖，将生成的 composer.lock 更新到这个快照，随后运行上述矩阵。不要手工修改锁文件中的版本或 content-hash。
+CI 每次根据 `composer.json` 的版本范围解析依赖。PHP 8.1 兼容任务只解析生产依赖，完整测试任务同时解析开发依赖。Composer 生成的 `composer.lock` 仅保存在本次运行的容器临时工作区。

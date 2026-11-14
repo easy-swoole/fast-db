@@ -14,9 +14,17 @@ tar -C /source --exclude='./.git' --exclude='./vendor' \
     --exclude='./composer.lock' --exclude='./.phpunit.cache' \
     --exclude='./tests/docker/results' -cf - . | tar -C /workspace/project -xf -
 cd /workspace/project
-cp tests/docker/dependencies.lock.json composer.lock
-composer validate --no-check-publish --check-lock
-composer install --prefer-dist --no-interaction --no-progress --no-scripts "${dependency_options[@]}"
+composer validate --no-check-publish
+if [ "$mode" = production ]; then
+    # Composer 解析时仍会检查 require-dev；最低版本任务只解析生产依赖。
+    php <<'PHP'
+<?php
+$manifest = json_decode(file_get_contents('composer.json'), false, 512, JSON_THROW_ON_ERROR);
+unset($manifest->{'require-dev'});
+file_put_contents('composer.json', json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . PHP_EOL);
+PHP
+fi
+composer update --prefer-dist --no-interaction --no-progress --no-scripts "${dependency_options[@]}"
 composer check-platform-reqs "${dependency_options[@]}"
 
 php <<'PHP' | tee /results/runtime.json
