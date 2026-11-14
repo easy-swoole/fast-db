@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "2c4b22b0e6a8c72598005ecf9af0b838",
+    "content-hash": "7e50c21e76a48f25fee3e8fc41ff1bf5",
     "packages": [
         {
             "name": "easyswoole/component",
@@ -62,7 +62,7 @@
         },
         {
             "name": "easyswoole/mysqli",
-            "version": "5.x-dev",
+            "version": "5.1.1",
             "source": {
                 "type": "git",
                 "url": "https://github.com/easy-swoole/mysqli.git",
@@ -113,7 +113,7 @@
             ],
             "support": {
                 "issues": "https://github.com/easy-swoole/mysqli/issues",
-                "source": "https://github.com/easy-swoole/mysqli/tree/e3095a851aa575f8f23cecdf5633dd3a4b8ba43c"
+                "source": "https://github.com/easy-swoole/mysqli/tree/5.1.1"
             },
             "time": "2026-11-14T05:48:46+00:00"
         },
@@ -2178,9 +2178,7 @@
     ],
     "aliases": [],
     "minimum-stability": "stable",
-    "stability-flags": {
-        "easyswoole/mysqli": 20
-    },
+    "stability-flags": [],
     "prefer-stable": false,
     "prefer-lowest": false,
     "platform": {
