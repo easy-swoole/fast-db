@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "dba7e1a628451c00e360ba3e6896f27a",
+    "content-hash": "2c4b22b0e6a8c72598005ecf9af0b838",
     "packages": [
         {
             "name": "easyswoole/component",
@@ -62,16 +62,16 @@
         },
         {
             "name": "easyswoole/mysqli",
-            "version": "5.0.9",
+            "version": "5.x-dev",
             "source": {
                 "type": "git",
                 "url": "https://github.com/easy-swoole/mysqli.git",
-                "reference": "ec06fdbd2ffdaeeb3d68942b2c8f935860cff0ce"
+                "reference": "e3095a851aa575f8f23cecdf5633dd3a4b8ba43c"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/easy-swoole/mysqli/zipball/ec06fdbd2ffdaeeb3d68942b2c8f935860cff0ce",
-                "reference": "ec06fdbd2ffdaeeb3d68942b2c8f935860cff0ce",
+                "url": "https://api.github.com/repos/easy-swoole/mysqli/zipball/e3095a851aa575f8f23cecdf5633dd3a4b8ba43c",
+                "reference": "e3095a851aa575f8f23cecdf5633dd3a4b8ba43c",
                 "shasum": ""
             },
             "require": {
@@ -113,9 +113,9 @@
             ],
             "support": {
                 "issues": "https://github.com/easy-swoole/mysqli/issues",
-                "source": "https://github.com/easy-swoole/mysqli/tree/5.0.9"
+                "source": "https://github.com/easy-swoole/mysqli/tree/e3095a851aa575f8f23cecdf5633dd3a4b8ba43c"
             },
-            "time": "2026-11-11T04:31:13+00:00"
+            "time": "2026-11-14T05:48:46+00:00"
         },
         {
             "name": "easyswoole/pool",
@@ -2178,7 +2178,9 @@
     ],
     "aliases": [],
     "minimum-stability": "stable",
-    "stability-flags": {},
+    "stability-flags": {
+        "easyswoole/mysqli": 20
+    },
     "prefer-stable": false,
     "prefer-lowest": false,
     "platform": {

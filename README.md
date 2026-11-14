@@ -4,7 +4,7 @@
 
 FastDb 是面向 Swoole 协程环境的 MySQL 数据访问库，组合连接池、SQL 构建器和基于 PHP Attributes 的实体映射。可以在 EasySwoole 框架内使用，也可以独立使用。
 
-本文面向 `3.x` 分支，使用 `easyswoole/mysqli` 5.x 和 `easyswoole/pool` 3.x，以当前 `src/` 和 `composer.json` 为准。实体 API 位于 `AbstractEntity`，数据库与连接管理位于 `FastDb`，SQL 构建能力由 `easyswoole/mysqli` 提供。
+本文面向 `3.x` 分支，使用 `easyswoole/mysqli` 的 `e3095a8` 提交和 `easyswoole/pool` 3.x，以当前 `src/` 和 `composer.json` 为准。实体 API 位于 `AbstractEntity`，数据库与连接管理位于 `FastDb`，SQL 构建能力由 `easyswoole/mysqli` 提供。
 
 ## 内部执行与实体状态
 
@@ -88,7 +88,7 @@ FastDb 通过 `FastDb::getInstance()` 获取固定实例并长期复用。需要
 | 数据库 | MySQL；示例表使用 InnoDB、utf8mb4 与 JSON 字段 |
 | 开发测试 | PHP ≥ 8.4.1、PHPUnit ^13.4、原生 mysqli 扩展，以及 Composer 安装的开发依赖 |
 
-数据库访问由 `easyswoole/mysqli` 5.x 的 Swoole 协程 Socket 协议客户端完成，生产环境不需要原生 mysqli 扩展，也不需要为数据库访问启用 runtime hooks。数据库操作应在 Swoole 协程内执行；`testDb()` 可在协程外调用，内部会创建协程调度器。原生 mysqli 仅用于开发测试中的独立观察连接。
+数据库访问由 `easyswoole/mysqli` 5.x 的 Swoole 协程 Socket 协议客户端完成，生产环境不需要原生 mysqli 扩展，也不需要为数据库访问启用 runtime hooks。通过连接池使用 FastDb 时，数据库操作应在 Swoole 协程内执行；`testDb()` 可在协程外调用，内部会创建协程调度器。原生 mysqli 仅用于开发测试中的独立观察连接。
 
 ## 安装与快速开始
 
@@ -338,7 +338,7 @@ $registered = $db->getConfig('default'); // Config 或 false。
 $db->preConnect(); // 对已注册的连接池预热到最小连接数。
 ```
 
-连接池在首次使用时创建。`addDb()` 更新配置不会自动替换已经创建的连接池，应在初始化阶段完成注册。
+连接池在首次使用时创建，由池显式调用 `connect()` 建立会话。借用时会淘汰已断开的连接，并可在该次借用中补充新连接。SQL 发出后若断线或超时，FastDb 将异常交给调用方。持有失效会话的协程应先回收上下文，业务需要继续时再发起独立操作。事务丢失后的提交与回滚报告事务丢失，回收后失效会话由池淘汰。`addDb()` 更新配置不会自动替换已经创建的连接池，应在初始化阶段完成注册。
 
 ## 实体与属性映射
 
@@ -407,17 +407,16 @@ $user = User::findRecord(function (QueryBuilder $query): void {
 ```php
 $users = User::findAll(); // 普通 PHP 数组，元素为 User。
 $users = User::findAll('1'); // 单个主键条件。
-$users = User::findAll('1,2,3'); // 数字主键列表。
+$users = User::findAll(['id' => [[1, 2, 3], 'IN']]);
 $users = User::findAll(['status' => 1]);
 $rows = User::findAll(['status' => 1], returnAsArray: true);
 ```
 
 参数顺序：`findAll($queryLimit = null, $tableName = null, $returnAsArray = false, $selectForUpdate = false, $onQuery = null)`。
 
-`findAll()` 的主键简写参数类型是字符串，不是整数。逗号分隔的主键按字符串原样绑定，保留前导零，也支持 UUID、字符串主键列表；还可以使用显式 `IN` 条件：
+`findAll()` 的字符串参数表示单个主键。前导零和逗号都是主键值的一部分。查询多个主键时显式使用 `IN`。
 
 ```php
-$users = User::findAll('uuid-a,uuid-b');
 $users = User::findAll(['id' => [['uuid-a', 'uuid-b'], 'IN']]);
 ```
 
@@ -512,7 +511,7 @@ $page = new Page(3, true, 20);
 $page->toLimitArray(); // [40, 20]。
 ```
 
-调用方应保证页码、每页条数和分块大小为合理正数。
+显式页码和每页条数必须大于零。仅限制数量时使用 `limit()`，分块大小必须大于零。
 
 ### 分块处理
 
@@ -575,7 +574,7 @@ $values = (new User())->sum(['score', 'status']);
 
 `count($field = '*', $group = null)` 返回整数；通过 `fields()` 指定多列计数时返回列名到计数的数组。
 
-聚合字段支持普通列名、保留字列名和带表名/别名的列引用；`count()` 还支持 `*`。单列 `count()` 支持可信 SQL 参数（如 `DISTINCT id`、`CASE WHEN ... END`），表达式内容由调用方负责，不能直接拼接外部输入。字段各段与结果别名分别引用，多列返回值的键保留传入的列名：
+聚合字段支持普通列名、保留字列名和带表名/别名的列引用；`count()` 还支持 `*`。需要 `COUNT(DISTINCT ...)` 或 `COUNT(CASE ...)` 时，通过底层 QueryBuilder 的 `rawExpression()` 显式表达，例如 `$query->get('users', null, [QueryBuilder::rawExpression('COUNT(DISTINCT id) AS total')])`。字段各段与结果别名分别引用，多列返回值的键保留传入的列名：
 
 ```php
 $entity->queryLimit()->fields(['users.id', 'users.order']);
@@ -598,7 +597,7 @@ $ok = $user->insert(); // bool。
 $id = $user->id; // 自增主键由 last insert id 回填。
 ```
 
-插入使用字段转换器生成数据库值，`fields()` 控制写入白名单，`hideFields()` 只控制输出。普通 null 属性会被过滤，数据库默认值可生效；转换字段是否生成 null 由转换逻辑决定。SQL 成功后，在公开查询回调前接受本次写入字段的比较基准并回填自增 ID，保留模型当前属性值。自增主键回填遵循该字段的 `convertObject` / `assignCall` 定义。字段对象、时区以及回调中继续修改的属性均保留；这些修改可通过后续 `update()` 保存。未从数据库读取的默认值、触发器结果等需要重新查询才能获得。
+插入使用字段转换器生成数据库值，`fields()` 控制写入白名单，`hideFields()` 只控制输出。普通 null 属性会被过滤，数据库默认值可生效；转换字段是否生成 null 由转换逻辑决定。SQL 成功后，在公开查询回调前接受本次写入字段的比较基准并回填自增 ID，保留模型当前属性值。实体未写入主键列时，可用驱动返回的自增 ID 回填，遵循该字段的 `convertObject` / `assignCall` 定义。显式写入的主键保持原值。字段对象、时区以及回调中继续修改的属性均保留；这些修改可通过后续 `update()` 保存。未从数据库读取的默认值、触发器结果等需要重新查询才能获得。
 
 支持 MySQL duplicate-key 更新：
 
@@ -606,7 +605,7 @@ $id = $user->id; // 自增主键由 last insert id 回填。
 $user->insert(['name', 'score']);
 ```
 
-命中重复键时，按底层 `onDuplicate()` 的规则更新指定列。返回值表示 SQL 是否成功，重复键更新未改变数据时也可以返回 `true`。实体只更新两个分支都能确认写入实体值的字段基准，规则同样适用于通过实体查询构建器配置的 `onDuplicate()`。未列入更新列表或使用显式冲突更新值的字段保留原基准。需要准确的最终记录时重新查询。
+命中重复键时，按底层 `onDuplicate()` 的规则更新指定列。返回值表示 SQL 是否成功，重复键更新未改变数据时也可以返回 `true`。实体只更新两个分支都能确认写入实体值的字段基准，规则同样适用于通过实体查询构建器配置的 `onDuplicate()`。一次插入使用 `insert($updateDuplicateCols)` 或构建器的 `onDuplicate()` 指定冲突更新，两处同时设置会抛出异常。同一列只指定一次赋值。未列入更新列表或使用显式冲突更新值的字段保留原基准。需要准确的最终记录时重新查询。
 
 ### 检查待保存修改
 
@@ -663,7 +662,7 @@ $user->update(); // 只更新 name。
 $user->update(); // 保存尚未写入的 score。
 ```
 
-`toArray()` 在转换前应用 `fields()` 和 `hideFields()`；`insert()` / `update()` 在转换及变更比较前只应用 `fields()`。被排除的字段不会执行 `toValue` 回调或转换对象的 `toValue()`，不会因其转换失败阻止本次操作。部分更新只接受实际写入字段的比较基准，其他修改仍可在后续放开白名单后保存。
+`toArray()` 在转换前应用 `fields()` 和 `hideFields()`；`insert()` / `update()` 在转换及变更比较前只应用 `fields()`。字段配置为 `null` 时没有白名单，空数组不选任何写入列，显式 `['*']` 也不会扩展成全部写入列。被排除的字段不会执行 `toValue` 回调或转换对象的 `toValue()`，不会因其转换失败阻止本次操作。部分更新只接受实际写入字段的比较基准，其他修改仍可在后续放开白名单后保存。
 
 通过 `func()` 配置底层构建器的字段白名单时，`insert()` 和 `update()` 会在字段转换前应用该白名单，只接受实际提交的字段基准。若筛选后没有变化字段可写，`update()` 直接返回 `true`。
 
@@ -673,7 +672,7 @@ $user->update(); // 保存尚未写入的 score。
 
 ```php
 $affected = User::fastUpdate(1, ['status' => 0]);
-$affected = User::fastUpdate('1,2', ['status' => 0]);
+$affected = User::fastUpdate(['id' => [[1, 2], 'IN']], ['status' => 0]);
 $affected = User::fastUpdate(['status' => 1], ['score' => 5]);
 $affected = User::fastUpdate(function (QueryBuilder $query): void {
     $query->where('score', 10, '<');
@@ -684,7 +683,7 @@ $affected = User::fastUpdate(function (QueryBuilder $query): void {
 
 `findRecord()`、`findAll()`、`fastUpdate()` 和 `fastDelete()` 直接使用显式传入的表名。省略表名时，才构造实体调用 `tableName()` 推导表名。返回实体的查询仍会按返回行构造实体。
 
-`findRecord()`、`findAll()`、`fastUpdate()`、`fastDelete()` 共用条件解析规则：条件数组中的普通值表示等值条件，数组值展开为 `[值, 运算符]`；回调接收原始 QueryBuilder。`findRecord()` 的字符串主键始终是单个值，另外三个方法的逗号主键简写表示 `IN`，各片段保留字符串，不强制转为整数。不做空白裁剪；主键本身包含逗号时，用条件数组显式指定。
+`findRecord()`、`findAll()`、`fastUpdate()`、`fastDelete()` 共用条件解析规则：条件数组中的普通值表示等值条件（字符串和布尔值作为参数绑定），数组值展开为 `[值, 运算符]`；回调接收原始 QueryBuilder。NULL 判断通过条件回调显式调用 `whereNull()` 或 `whereNotNull()`。字符串主键完整绑定为单个值。查询多个主键时在条件数组里明确写 `IN`。
 
 ```php
 $affected = User::fastUpdate(['score' => [60, '>=']], ['status' => 1]);
@@ -708,16 +707,16 @@ $user = User::findRecord(1);
 $deleted = $user?->delete(); // bool；没有对象时示例结果为 null。
 
 $affected = User::fastDelete(1);
-$affected = User::fastDelete('1,2');
+$affected = User::fastDelete(['id' => [[1, 2], 'IN']]);
 $affected = User::fastDelete(['score' => [10, '<']]);
 $affected = User::fastDelete(function (QueryBuilder $query): void {
     $query->where('status', 0);
 });
 ```
 
-`delete()` 使用对象主键并触发删除钩子，影响至少一行才返回 `true`。`fastDelete($deleteLimit, $tableName = null, $onQuery = null)` 直接删除并返回影响行数，不触发实体钩子。空数组/空字符串条件直接返回 0；回调如果不添加条件仍可能删除所有记录。
+`delete()` 使用对象主键并触发删除钩子，影响至少一行才返回 `true`。`fastDelete($deleteLimit, $tableName = null, $onQuery = null)` 直接删除并返回影响行数，不触发实体钩子。空数组和空字符串直接抛出异常。回调传入的构建器按回调提供的条件执行，空 WHERE 会删除所有记录。
 
-实例 `update()` / `delete()` 仅将未赋值、null 或空字符串视为缺失主键；整数 `0` 和字符串 `'0'` 均可正常更新、删除。`fastDelete(0)` 与 `fastDelete('0')` 都会生成主键等值条件，空数组和空字符串仍直接返回 0。
+实例 `update()` / `delete()` 仅将未赋值、null 或空字符串视为缺失主键；整数 `0` 和字符串 `'0'` 均可正常更新、删除。`fastDelete(0)` 与 `fastDelete('0')` 都会生成主键等值条件。
 
 ### 批量直接写入
 
@@ -1348,7 +1347,7 @@ $orders = $users[0]->activeOrders(); // 同样的配置可命中预加载缓存�
 
 按需加载和预加载共用配置方法。配置方法通过传入的构建器设置 SQL 条件、排序或字段；关系返回数组的规则使用 `Relate::returnAsArray` 声明。预加载从 `type` 获取关联类型，不执行 getter。
 
-配置会按父实体分别应用，相同连接、目标实体、关联类型、表名、条件参数、排序、字段和返回形式的计划合并查询。目标表由目标实体的 `tableName()` 确定，连接在配置及目标模型初始化后记录。
+配置会按父实体分别应用，相同连接、目标实体、关联类型、表名、条件参数、排序、字段和返回形式的计划合并查询。目标表由目标实体的 `tableName()` 确定，连接在配置及目标模型初始化后记录。未指定字段时，批量查询按目标表名或别名选列，再追加内部匹配索引。显式投影按原样使用，空数组由驱动按空投影报错。父关联值为 null 时使用 `IS NULL` 匹配。
 
 关联的附加条件通过 `configure` 声明。getter 中自行切库、覆盖表名、临时修改父键等业务行为不会参与预加载；需要这些复杂查询时，由业务显式查询和组装结果。预加载结果按声明及配置生成，getter 的后处理仅在业务实际调用 getter 时执行。
 
@@ -2265,7 +2264,7 @@ SELECT * FROM users WHERE (status = 0) AND id > 4 ORDER BY id ASC LIMIT 2;
 
 ### 如何批量查询 UUID 主键？
 
-可以使用 `findAll('uuid-a,uuid-b')`，各主键按字符串原样绑定。也可以用 `findAll(['id' => [['uuid-a', 'uuid-b'], 'IN']])` 或回调显式构建 `IN`；主键值本身包含逗号时使用数组/回调。
+可以使用 `findAll(['id' => [['uuid-a', 'uuid-b'], 'IN']])`，或在回调中调用 `whereIn()`。
 
 ### 事务中能使用 invoke() 吗？
 

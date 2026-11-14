@@ -80,6 +80,18 @@ final class TransactionTest extends TestCase
         $this->assertSame(0, $this->value());
     }
 
+    public function testInsertIdFromAnotherColumnDoesNotReplaceAnExplicitModelKey(): void
+    {
+        $this->observer->query("ALTER TABLE `{$this->table}` MODIFY id VARCHAR(64) NOT NULL,
+            ADD COLUMN seq INT NOT NULL AUTO_INCREMENT UNIQUE");
+        $entity = new TextKeyMysqlEntity(['id' => 'order-a', 'value' => 7]);
+        $this->assertTrue($entity->insert());
+        $this->assertSame('order-a', $entity->id);
+        $entity->value = 8;
+        $this->assertTrue($entity->update());
+        $this->assertSame(8, TextKeyMysqlEntity::findRecord('order-a')->value);
+    }
+
     public static function stringPrimaryKeyModes(): array
     {
         $cases = [];
@@ -245,7 +257,7 @@ final class TransactionTest extends TestCase
     {
         $this->observer->query("ALTER TABLE `{$this->table}` MODIFY id VARCHAR(20) NOT NULL");
         $this->observer->query("INSERT INTO `{$this->table}` VALUES ('01',10),('02',20),('a',30),('b',40),('a,b',50)");
-        $rows = TextKeyMysqlEntity::findAll('01,02,a', returnAsArray: true);
+        $rows = TextKeyMysqlEntity::findAll(['id' => [['01', '02', 'a'], 'IN']], returnAsArray: true);
         $ids = array_column($rows, 'id'); sort($ids);
         $this->assertSame(['01', '02', 'a'], $ids);
         $this->assertSame('a,b', TextKeyMysqlEntity::findRecord('a,b')->id);
@@ -253,10 +265,10 @@ final class TransactionTest extends TestCase
         $this->assertSame(99, TextKeyMysqlEntity::findRecord('01')->value);
         $this->assertSame(0, TextKeyMysqlEntity::findRecord('1')->value);
         $this->assertSame(20, TextKeyMysqlEntity::findRecord('02')->value);
-        $this->assertSame(2, TextKeyMysqlEntity::fastDelete('01,a'));
-        $this->assertSame([], TextKeyMysqlEntity::findAll('01,a', returnAsArray: true));
+        $this->assertSame(2, TextKeyMysqlEntity::fastDelete(['id' => [['01', 'a'], 'IN']]));
+        $this->assertSame([], TextKeyMysqlEntity::findAll(['id' => [['01', 'a'], 'IN']], returnAsArray: true));
         $this->assertSame(50, TextKeyMysqlEntity::findRecord('a,b')->value);
-        $this->assertSame(2, TextKeyMysqlEntity::fastUpdate('02,b', ['value' => 77]));
+        $this->assertSame(2, TextKeyMysqlEntity::fastUpdate(['id' => [['02', 'b'], 'IN']], ['value' => 77]));
         $this->assertSame(77, TextKeyMysqlEntity::findRecord('02')->value);
         $this->assertSame(1, TextKeyMysqlEntity::fastDelete(['value' => [75, '>'], 'id' => '02']));
         $this->assertSame('b', TextKeyMysqlEntity::findRecord(['value' => [70, '>']])->id);
@@ -291,10 +303,7 @@ final class TransactionTest extends TestCase
         $qualified = $this->table . '.order';
         $this->assertSame(2, $entity->count('order'));
         $this->assertSame(2, $entity->count($qualified));
-        $this->assertSame(3, $entity->count('1'));
-        $this->assertSame(0, $entity->count('NULL'));
-        $this->assertSame(2, $entity->count('DISTINCT `order`'));
-        $this->assertSame(1, $entity->count('CASE WHEN value > 5 THEN id END'));
+        $this->assertSame(3, $entity->count());
         $entity->queryLimit()->fields(['order', $qualified]);
         $this->assertSame(['order' => 2, $qualified => 2], $entity->count());
         foreach (['sum' => 30.0, 'avg' => 15.0, 'min' => 10.0, 'max' => 20.0] as $method => $expected) {
@@ -846,7 +855,7 @@ final class TransactionTest extends TestCase
         $this->assertFalse($this->db->isInTransaction());
         $this->assertSame(0, $this->value());
     }
-    public function testRealQueryTimeoutAndReconnectForBothProtocols(): void
+    public function testRealQueryTimeoutRequiresRecyclingBeforeAnotherBorrow(): void
     {
         foreach (['raw', 'prepared'] as $mode) {
             $this->db->rawQuery('SELECT 1'); // 开始计时前先获取并建立连接。
@@ -877,7 +886,15 @@ final class TransactionTest extends TestCase
                     $this->assertSame('SELECT SLEEP(?)', $error->getQueryBuilder()->getLastPrepareQuery());
                 }
             }
+            try {
+                $this->db->rawQuery('SELECT 1 AS value');
+                $this->fail('A held, disconnected session must not reconnect');
+            } catch (\EasySwoole\Mysqli\Exception\Exception $error) {
+                $this->assertStringContainsString('connection is not open', $error->getMessage());
+            }
+            $this->db->recycleContext();
             $this->assertSame(1, $this->db->rawQuery('SELECT 1 AS value')->getResultOne()['value']);
+            $this->assertNotSame($client, $this->db->currentConnection());
         }
     }
 
@@ -900,9 +917,18 @@ final class TransactionTest extends TestCase
         } catch (\EasySwoole\Mysqli\Exception\TransactionLostException $error) {
             $this->assertSame(0, $error->getCode());
         }
+        foreach (['commit', 'rollback'] as $operation) {
+            try {
+                $this->db->$operation();
+                $this->fail('A lost connection must not report transaction completion');
+            } catch (\EasySwoole\Mysqli\Exception\TransactionLostException $error) {
+                $this->assertSame(0, $error->getCode());
+            }
+        }
         $this->db->recycleContext();
-        $this->assertFalse($client->isInTransaction());
+        $this->assertNull($client->mysqlClient());
         $this->assertTrue($this->db->begin());
+        $this->assertNotSame($client, $this->db->currentConnection());
         $this->write(3); // 等待服务端释放已断开会话持有的行锁。
         $this->assertTrue($this->db->rollback());
         $this->assertSame(0, $this->value());
@@ -950,6 +976,7 @@ final class TransactionTest extends TestCase
             $this->assertNull($client->mysqlClient());
             $this->assertFalse($client->isInTransaction());
             $this->assertSame(3, $this->value());
+            $this->db->recycleContext();
         }
     }
 

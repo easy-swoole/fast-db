@@ -6,11 +6,12 @@ use EasySwoole\FastDb\RelationType;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Beans\ListResult;
+use EasySwoole\FastDb\Beans\Query;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\Mysqli\QueryBuilder;
 
-/** 负责按需关联的查询组装、缓存和结果转换，不持有父实体或执行回调。 */
+/** @internal 负责按需关联的查询组装、缓存和结果转换，不持有父实体或执行回调。 */
 final class RelationLoader
 {
     private array $cache = [];
@@ -25,15 +26,14 @@ final class RelationLoader
     }
 
     /** 两种关联共用构建、缓存查找和写回流程，结果组装分别处理。 */
-    public function load(AbstractEntity $entity, Relate $relate, ?string $tableName,
+    public function load(AbstractEntity $entity, Query $selection, Relate $relate, ?string $tableName,
         callable $execute, callable $beforeOneHydration): mixed
     {
         $target = new $relate->targetEntity();
-        $selection = $entity->queryLimit();
         $query = $selection->__getQueryBuilder();
         $fields = $selection->getFields();
         $returnAsArray = $fields['returnAsArray'] ?? false;
-        RelationPlan::buildLookup($query, $tableName ?: $target->tableName(), $relate,
+        RelationPlan::buildLookup($query, $tableName ?? $target->tableName(), $relate,
             FieldCodec::compare($entity->{$relate->selfProperty} ?? null), $fields['fields'] ?? null);
         $key = $relate->cacheResult || $this->preloaded !== []
             ? $this->fingerprint($relate, $query, $returnAsArray, FastDb::getInstance()->selectConnection()) : null;

@@ -411,8 +411,7 @@ final class ModelTest extends BaseTestCase
         $this->assertNull($student);
 
         $this->createStudentFixture();
-        $primaryKeyIdStr = '1,2';
-        $result          = StudentModel::fastDelete($primaryKeyIdStr, 'student');
+        $result = StudentModel::fastDelete(['id' => [[1, 2], 'IN']], 'student');
         $this->assertIsInt($result);
         $this->assertSame(1, $result);
         // 检查记录是否存在。
@@ -477,8 +476,8 @@ final class ModelTest extends BaseTestCase
         $this->createStudentFixture();
         // (new StudentModel())->insertAll([['id' => 2, 'name' => 'EasySwoole2']], false);
         (new StudentModel())->setData(['id' => 2, 'name' => 'EasySwoole2'])->insert();
-        // 1. 使用主键字符串作为查询条件。
-        $list = StudentModel::findAll('1,2', null, true);
+        // 1. 显式查询多个主键。
+        $list = StudentModel::findAll(['id' => [[1, 2], 'IN']], null, true);
         $this->assertIsArray($list);
         $this->assertEquals(2, count($list));
         foreach ($list as $student) {

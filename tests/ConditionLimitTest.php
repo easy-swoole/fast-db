@@ -35,8 +35,7 @@ final class ConditionLimitTest extends TestCase
             yield "$operation callback" => [$operation, static function (QueryBuilder $query): void {
                 $query->where('value', 10, '>=');
             }, [10], '`value` >= ?'];
-            yield "$operation csv" => [$operation, '01,a', $operation === 'findRecord' ? ['01,a'] : ['01', 'a'],
-                $operation === 'findRecord' ? '`id` = ?' : '`id` IN'];
+            yield "$operation comma in literal key" => [$operation, '01,a', ['01,a'], '`id` = ?'];
         }
     }
 

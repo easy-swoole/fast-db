@@ -157,6 +157,12 @@ final class QueryLazyBuilderTest extends TestCase
         $this->assertInstanceOf(QueryBuilder::class, $this->builderState($query));
     }
 
+    public function testInvalidPageIsNotInterpretedAsLimit(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        (new Query(new LazyQueryOwner()))->page(0);
+    }
+
     public static function pages(): array
     {
         return [
@@ -169,7 +175,7 @@ final class QueryLazyBuilderTest extends TestCase
     }
 
     #[DataProvider('pages')]
-    public function testPageKeepsTheExistingPageHelperSemantics(?int $page, bool $total, int $size): void
+    public function testPageMatchesThePageValueObject(?int $page, bool $total, int $size): void
     {
         $capture = static function (callable $operation): array {
             try {

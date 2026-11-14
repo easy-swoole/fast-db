@@ -88,13 +88,20 @@ final class EntityQueryBoundaryTest extends TestCase
         $this->assertSame(3, (int)$this->client->database->query('SELECT COUNT(*) FROM query_boundary')->fetchColumn());
     }
 
-    public function testFastDeleteStillIgnoresEmptyConditionsWithoutExecutingSql(): void
+    #[DataProvider('emptyDeleteConditions')]
+    public function testFastDeleteRejectsEmptyConditionsWithoutExecutingSql(array|string $condition): void
     {
-        $this->assertSame(0, QueryBoundaryRecord::fastDelete([]));
-        $this->assertSame(0, QueryBoundaryRecord::fastDelete(''));
+        try {
+            QueryBoundaryRecord::fastDelete($condition);
+            $this->fail('Expected an empty delete condition to fail');
+        } catch (\InvalidArgumentException $error) {
+            $this->assertStringContainsString('non-empty condition', $error->getMessage());
+        }
         $this->assertSame([], $this->client->queries);
         $this->assertSame(3, (int)$this->client->database->query('SELECT COUNT(*) FROM query_boundary')->fetchColumn());
     }
+
+    public static function emptyDeleteConditions(): array { return [[[]], ['']]; }
 
     public static function missingKeys(): iterable
     {
@@ -251,14 +258,12 @@ final class EntityQueryBoundaryTest extends TestCase
         $this->assertSame(['order' => 3, 'query_boundary.value' => 2], $entity->count());
     }
 
-    public function testSingleCountKeepsTrustedSqlExpressionsAndQuotedColumnReferences(): void
+    public function testCountUsesColumnNamesWithoutGuessingSqlExpressions(): void
     {
         $entity = new QueryBoundaryRecord();
-        $this->assertSame(3, $entity->count('1'));
-        $this->assertSame(0, $entity->count('NULL'));
-        $this->assertSame(2, $entity->count('DISTINCT grp'));
-        $this->assertSame(2, $entity->count('CASE WHEN grp = 1 THEN id END'));
         $this->assertSame(3, $entity->count('`query_boundary`.`order`'));
+        $this->expectException(\PDOException::class);
+        $entity->count('DISTINCT grp');
     }
 
     public function testJoinedAggregatesUseTheSpecifiedAliasAndPreserveBindings(): void

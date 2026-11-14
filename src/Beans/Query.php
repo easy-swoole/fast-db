@@ -6,6 +6,7 @@ use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Internal\EntityQueryBuilder;
 use EasySwoole\FastDb\Internal\FieldSelection;
 use EasySwoole\Mysqli\QueryBuilder;
+use EasySwoole\Mysqli\QueryBuilder\Pagination;
 
 class Query
 {
@@ -47,10 +48,10 @@ class Query
     function page(?int $page,bool $withTotalCount = false,int $pageSize = 10):Query
     {
         $builder = $this->builder();
-        if($page >= 1){
-            $builder->limit(($page - 1) * $pageSize, $pageSize);
-        }else{
+        if ($page === null) {
             $builder->limit($pageSize);
+        } else {
+            $builder->limit(Pagination::offset($pageSize, $page), $pageSize);
         }
         if($withTotalCount){
             $builder->withTotalCount();
@@ -110,11 +111,10 @@ class Query
     public static function filterWriteFields(array $values, QueryBuilder $builder): array
     {
         $fields = $builder->getField();
-        // mysqli 的 getField() 把默认通配符和显式白名单 ['*'] 都返回为同一个数组。
-        if ($fields === ['*'] && !($builder instanceof EntityQueryBuilder && $builder->hasExplicitFields())) {
+        if ($fields === null) {
             return $values;
         }
-        return array_filter($values, static fn ($field) => in_array($field, $fields), ARRAY_FILTER_USE_KEY);
+        return array_filter($values, static fn ($field) => in_array($field, $fields, true), ARRAY_FILTER_USE_KEY);
     }
 
     /** 声明本次查询需要批量加载的关系方法；空数组清除声明。 */
@@ -159,7 +159,7 @@ class Query
 
     function orWhere(string $col, mixed $whereValue, $operator = '='):Query
     {
-        $this->builder()->orWhere($col,$whereValue,$operator,"OR");
+        $this->builder()->orWhere($col, $whereValue, $operator);
         return $this;
     }
 

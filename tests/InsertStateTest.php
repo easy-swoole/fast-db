@@ -371,13 +371,26 @@ final class InsertStateTest extends TestCase
         $this->assertSame(9, $this->client->row()['score']);
     }
 
+    public function testDuplicateOptionsCannotBeConfiguredThroughBothEntryPoints(): void
+    {
+        $entity = new InsertStateRecord(['name' => 'incoming']);
+        $entity->queryLimit()->func(static fn (QueryBuilder $builder) => $builder->onDuplicate(['name']));
+        try {
+            $entity->insert(['name' => 'other']);
+            $this->fail('Expected conflicting duplicate-update configuration to fail');
+        } catch (\InvalidArgumentException $error) {
+            $this->assertStringContainsString('onDuplicate()', $error->getMessage());
+        }
+        $this->assertSame([], $this->client->queries);
+    }
+
     public function testExplicitDuplicateValueDoesNotAcceptTheEntityValue(): void
     {
         $this->client->database->exec("INSERT INTO insert_state (id,name) VALUES (20,'database')");
         $entity = new InsertStateRecord(['id' => 20, 'name' => 'old']);
         $entity->name = 'entity';
         $this->client->nextNoOp = true;
-        $this->assertTrue($entity->insert(['name', 'name' => 'database']));
+        $this->assertTrue($entity->insert(['name' => 'database']));
         $this->assertSame(['name' => 'entity'], $entity->getChanges());
         $this->assertSame('database', $this->client->row(20)['name']);
     }

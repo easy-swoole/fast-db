@@ -17,6 +17,7 @@ final class BatchWriter
         $total = 0;
         foreach ($rows as $row) {
             // 按当前行顺序取值，解除标量引用；列名校验、排序及 upsert 整理由驱动负责。
+            if (!is_array($row)) { throw new \TypeError('Each batch row must be an array'); }
             $snapshot = [];
             foreach ($row as $column => $value) { $snapshot[$column] = $value; }
             $batch[] = $snapshot;

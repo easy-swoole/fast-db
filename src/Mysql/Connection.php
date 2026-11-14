@@ -125,11 +125,11 @@ class Connection extends Client implements ObjectInterface
         return $success;
     }
 
-    /** 已断开的会话无需再发 ROLLBACK，后续借用检查会淘汰连接。 */
+    /** 断线或事务已丢失时直接关闭会话，后续借用检查会淘汰连接。 */
     private function discardDisconnectedSession(): bool
     {
         $protocol = $this->mysqlClient();
-        if ($protocol !== null && !$protocol->isConnected()) {
+        if ($protocol !== null && (!$protocol->isConnected() || $protocol->isTransactionLost())) {
             $this->close();
             return true;
         }
@@ -138,7 +138,7 @@ class Connection extends Client implements ObjectInterface
 
     private function shouldRollback(): bool
     {
-        // 已主动关闭的会话无需回滚，否则驱动会为了执行 ROLLBACK 重新建连。
+        // 强制回滚只适用于仍持有会话的连接。
         return $this->isInTransaction() || ($this->isForceRollback && $this->mysqlClient() !== null);
     }
 
@@ -177,7 +177,7 @@ class Connection extends Client implements ObjectInterface
             }
             $this->lastActiveTick = hrtime(true);
             return true;
-        } catch (\Throwable $throwable) {
+        } catch (\Throwable) {
             $this->lastActiveTick = null;
             return false;
         }

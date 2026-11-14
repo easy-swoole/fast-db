@@ -60,7 +60,8 @@ final class UpdateFieldsTest extends TestCase
             'multiple selected fields' => [['name', 'score'], ['name', 'score']],
             'unchanged selected field' => [['status'], []],
             'null leaves fields unrestricted' => [null, ['name', 'score']],
-            'empty list leaves fields unrestricted' => [[], ['name', 'score']],
+            'empty list selects no fields' => [[], []],
+            'literal wildcard is not a write whitelist' => [['*'], []],
         ];
     }
 }

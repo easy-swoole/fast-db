@@ -13,7 +13,7 @@ final class FieldSelection
     public function filterProperties(array $properties, bool $forOutput): array
     {
         $fields = $this->fields['fields'] ?? null;
-        if (!empty($fields)) { $properties = array_intersect_key($properties, array_flip($fields)); }
+        if ($fields !== null) { $properties = array_intersect_key($properties, array_flip($fields)); }
         if ($forOutput && !empty($this->hideFields)) {
             $properties = array_diff_key($properties, array_flip($this->hideFields));
         }

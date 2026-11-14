@@ -2,6 +2,8 @@
 
 namespace EasySwoole\FastDb\Beans;
 
+use EasySwoole\Mysqli\QueryBuilder\Pagination;
+
 class Page
 {
     private ?int $page = 1;
@@ -46,12 +48,8 @@ class Page
 
     function toLimitArray():array
     {
-        if($this->page >= 1){
-            return [
-                ($this->page - 1)*$this->pageSize,$this->pageSize
-            ];
-        }else{
-            return [$this->pageSize];
-        }
+        return $this->page === null
+            ? [$this->pageSize]
+            : [Pagination::offset($this->pageSize, $this->page), $this->pageSize];
     }
 }

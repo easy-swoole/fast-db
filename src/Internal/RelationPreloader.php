@@ -136,6 +136,9 @@ final class RelationPreloader
     {
         $db = FastDb::getInstance();
         $matches = [];
+        $target = RelationPlan::tableTarget($plan->builder, $plan->tableName)
+            ?? throw new \InvalidArgumentException('Relation preload requires an identifiable target table');
+        $foreign = $target . '.' . TableReference::identifier($plan->relate->targetProperty);
         foreach (array_chunk($values, self::BATCH_SIZE, true) as $batch) {
             // 前一批的查询回调可能已选中其他连接。
             $db->selectConnection($plan->connectionName);
@@ -146,22 +149,28 @@ final class RelationPreloader
             $parameters = [];
             $identities = array_keys($batch);
             $conditions = [];
-            $foreign = TableReference::column($plan->relate->targetProperty);
             $parentIndex = TableReference::column($alias . '.' . $indexName);
             foreach (array_values($batch) as $index => $value) {
                 $sql[] = 'SELECT ' . $index . ' AS ' . TableReference::identifier($indexName);
-                $comparison = $value === null ? $foreign . ' = NULL' : $foreign . ' = ?';
+                $comparison = $value === null ? $foreign . ' IS NULL' : $foreign . ' = ?';
                 $conditions[] = '(' . $parentIndex . ' = ' . $index . ' AND ' . $comparison . ')';
                 if ($value !== null) { $parameters[] = $value; }
             }
             $keys = QueryBuilder::subQuery($alias)->raw(implode(' UNION ALL ', $sql));
             $builder = clone $plan->builder;
-            $columns = $plan->columns ?: $builder->getField();
+            // 默认只读关联目标表，避免连接表的同名列覆盖实体字段。
+            $columns = $plan->columns ?? $builder->getField() ?? [$target . '.*'];
             $columns[] = QueryBuilder::rawExpression($parentIndex . ' AS ' . TableReference::identifier($indexName));
             // 派生表只承载数字位置；键仍作为常量参数比较，保留类型及 collation 规则。
             $builder->join($keys, QueryBuilder::rawExpression('(' . implode(' OR ', $conditions) . ')', $parameters), 'INNER');
             $builder->groupExistingWhere()->whereGroup(static function (QueryBuilder $query) use ($batch, $foreign): void {
-                foreach ($batch as $value) { $query->where($foreign, $value, '=', 'OR'); }
+                foreach ($batch as $value) {
+                    if ($value === null) {
+                        $query->whereNull($foreign, 'OR');
+                    } else {
+                        $query->where($foreign, $value, '=', 'OR');
+                    }
+                }
             })
                 ->get($plan->tableName, null, $columns);
             $rows = $execute($builder)->getResult();

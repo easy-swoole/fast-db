@@ -92,7 +92,8 @@ class FastDb
     public function selectConnection(?string $name = null): static|string
     {
         $cid = Coroutine::getCid();
-        if (!empty($name)) {
+        if ($name !== null) {
+            if ($name === '' || $name === '0') { throw new \InvalidArgumentException('Connection name must be non-empty and cannot be "0"'); }
             $this->registerContextCleanup($cid);
             $this->selectConnection[$cid] = $name;
             return $this;
@@ -121,9 +122,6 @@ class FastDb
     public function transaction(callable $callback, TransactionStartFlags $flags = TransactionStartFlags::None,
         ?float $timeout = null): mixed
     {
-        if ($timeout !== null && (!is_finite($timeout) || $timeout <= 0)) {
-            throw new \InvalidArgumentException('Transaction timeout must be finite and greater than zero');
-        }
         $client = $this->getOrBorrowConnection();
         // 已有事务由原调用层负责结束，加入层只执行自己的业务回调。
         if ($client->isInTransaction()) { return $callback($this); }
@@ -164,7 +162,9 @@ class FastDb
         TransactionCompletionFlags $flags, ?float $timeout): bool
     {
         $client ??= $this->currentConnection();
-        if ($client === null || !$client->isInTransaction()) { return true; }
+        if ($client === null) { return true; }
+        // 丢失的事务也走执行入口，由驱动报告原异常并记录本次失败。
+        if (!$client->isInTransaction() && !$client->mysqlClient()?->isTransactionLost()) { return true; }
         $sql = ($rollback ? 'ROLLBACK' : 'COMMIT') . $flags->toSqlSuffix();
         return $this->execute($client, static fn () => $rollback
             ? $client->rollbackTransaction($flags, $timeout) : $client->commitTransaction($flags, $timeout),
@@ -201,7 +201,7 @@ class FastDb
                 return $this->finishQuery($result, $error, $onQuery);
             }
         }
-        $build = is_callable($queryBuilder) ? $queryBuilder : null;
+        $build = $queryBuilder instanceof QueryBuilder ? null : $queryBuilder;
         $builder = $build === null ? $queryBuilder : new QueryBuilder();
         return $this->execute($client, static function () use ($client, $builder, $build, $timeout) {
             if ($build !== null) { $build($builder); }

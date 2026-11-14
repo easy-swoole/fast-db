@@ -236,14 +236,6 @@ final class TransactionScopeTest extends TestCase
         $this->assertSame([0.125, 0.25, 0.125], array_column($queries, 'timeout'));
     }
 
-    public static function invalidTimeouts(): array { return [[0.0], [-1.0], [INF], [NAN]]; }
-
-    #[DataProvider('invalidTimeouts')]
-    public function testInvalidTimeoutIsRejectedBeforeBeginning(float $timeout): void
-    {
-        $this->expectException(\InvalidArgumentException::class);
-        $this->db->transaction(static function (): void { throw new \LogicException('Callback must not run'); }, timeout: $timeout);
-    }
 }
 
 /** 使用真实 SQLite 事务记录实际写入，仅替换网络访问及 MySQL 控制语法。 */

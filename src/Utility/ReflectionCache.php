@@ -77,7 +77,8 @@ class ReflectionCache
     {
         $target = $this->parseEntity($relate->targetEntity);
         $parent = $this->parseEntity($entityClass);
-        if (empty($relate->selfProperty)) {
+        if ($relate->selfProperty === null) {
+            $relate = clone $relate;
             $relate->selfProperty = $parent->getPrimaryKey()
                 ?? throw new RuntimeError('can not relate entity without primary key set');
         } elseif (!isset($parent->allProperties()[$relate->selfProperty])) {

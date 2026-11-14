@@ -74,7 +74,8 @@ final class RelationPreloadTest extends TestCase
     public static function scopedOutputModes(): array
     {
         return [[PreloadScopedParent::class,false], [PreloadScopedParent::class,true],
-            [PreloadInheritedScopedParent::class,false], [PreloadInheritedScopedParent::class,true]];
+            [PreloadInheritedScopedParent::class,false], [PreloadInheritedScopedParent::class,true],
+            [PreloadAppendingScopeParent::class,false], [PreloadAppendingScopeParent::class,true]];
     }
 
     #[DataProvider('scopedOutputModes')]
@@ -218,17 +219,16 @@ final class RelationPreloadTest extends TestCase
         $this->assertCount(2, $this->connection->queries);
     }
 
-    public function testSqlNullRelationKeysKeepTheExistingLazyEqualitySemantics(): void
+    public function testNullableRelationKeysUseIsNullInBothPaths(): void
     {
         $this->connection->database->exec("INSERT INTO preload_parents VALUES (4,NULL,'null group')");
         $this->connection->database->exec("INSERT INTO preload_children VALUES (14,4,NULL,'null child','[14]')");
         $lazyParent = new PreloadFixtureParent(['id' => 4, 'group_code' => null, 'name' => 'null group']);
-        // 当前驱动生成 '= NULL'；预加载必须与按需查询的结果保持一致。
-        $this->assertSame([], $lazyParent->groupChildren()->list());
+        $this->assertSame([14], array_map(static fn ($child) => $child->id, $lazyParent->groupChildren()->list()));
         $this->assertCount(1, $this->connection->queries);
         $parents = $this->parents('groupChildren');
         $this->assertCount(3, $this->connection->queries);
-        $this->assertSame([], $parents[3]->groupChildren()->list());
+        $this->assertSame([14], array_map(static fn ($child) => $child->id, $parents[3]->groupChildren()->list()));
         $this->assertSame([], $parents[2]->groupChildren()->list());
         $this->assertCount(3, $this->connection->queries);
     }
@@ -408,6 +408,32 @@ final class RelationPreloadTest extends TestCase
         $this->assertNull($parents[1]->arrayProfile());
         $this->assertSame([], $parents[2]->arrayChildren()->list());
         $this->assertCount(3, $this->connection->queries);
+    }
+
+    public function testDefaultProjectionUsesTheAliasedTargetAndItsPrefix(): void
+    {
+        $this->connection->database->exec("CREATE TABLE tenant_preload_children AS SELECT * FROM preload_children");
+        $this->connection->database->exec("CREATE TABLE tenant_preload_labels (id INTEGER, parent_id INTEGER, name TEXT)");
+        $this->connection->database->exec("INSERT INTO tenant_preload_labels VALUES (11,999,'joined-name'),(12,999,'joined-name')");
+        $owner = new PreloadFixtureParent();
+        $owner->queryLimit()->where('id', 1)->withRelations('joinedChildren');
+
+        $children = $owner->all()->first()->joinedChildren()->list();
+        $this->assertSame([11, 12], array_column($children, 'id'));
+        $this->assertSame(['child-11', 'child-12'], array_column($children, 'name'));
+        $this->assertStringContainsString('child.*', $this->connection->queries[1]['sql']);
+        $this->assertCount(2, $this->connection->queries);
+    }
+
+    public function testExplicitEmptyRelationFieldsFailBeforeBatchQuery(): void
+    {
+        try {
+            $this->parents('emptyProjectionChildren');
+            $this->fail('Expected empty projection to fail');
+        } catch (\InvalidArgumentException $error) {
+            $this->assertStringContainsString('at least one column', $error->getMessage());
+        }
+        $this->assertCount(1, $this->connection->queries);
     }
 
     public function testSelectedChildFieldsCanOmitTheForeignKeyAndPreserveAnAlias(): void
@@ -651,6 +677,23 @@ class PreloadFixtureParent extends AbstractEntity
     protected function configureSelectedChildren(QueryBuilder $query): void
     { $query->fields(['id', 'name', 'payload AS encoded']); }
 
+    #[Relate(PreloadFixtureAliasedChild::class, 'parent_id', type: RelationType::Many, configure: 'configureJoinedChildren', returnAsArray: true)]
+    public function joinedChildren() { return $this->relateMany(); }
+
+    protected function configureJoinedChildren(QueryBuilder $query): void
+    {
+        $query->setPrefix('tenant_')->join('preload_labels AS label', 'label.id = child.id', 'INNER')
+            ->orderBy('child.id', 'ASC');
+    }
+
+    #[Relate(PreloadFixtureChild::class, 'parent_id', type: RelationType::Many, configure: 'configureEmptyProjection')]
+    public function emptyProjectionChildren() { return $this->relateMany(); }
+
+    protected function configureEmptyProjection(QueryBuilder $query): void
+    {
+        $query->fields([]);
+    }
+
     #[Relate(PreloadFixtureConstructorChild::class, 'parent_id', cacheResult: true, type: RelationType::Many)]
     public function constructorChildren() { return $this->relateMany(); }
 
@@ -689,6 +732,11 @@ class PreloadFixtureProfile extends AbstractEntity
     #[Property] public ?int $parent_id;
     #[Property] public ?string $name;
     public function tableName(): string { return 'preload_profiles'; }
+}
+
+class PreloadFixtureAliasedChild extends PreloadFixtureChild
+{
+    public function tableName(): string { return 'preload_children AS child'; }
 }
 
 class PreloadFixtureDynamicChild extends PreloadFixtureChild
@@ -733,6 +781,13 @@ class PreloadScopedParent extends PreloadFixtureParent
             $query->where('active',1);
         }
         return $query;
+    }
+}
+class PreloadAppendingScopeParent extends PreloadFixtureParent
+{
+    public function queryLimit(): Query
+    {
+        return parent::queryLimit()->where('active', 1);
     }
 }
 class PreloadInheritedScopedParent extends PreloadScopedParent {}

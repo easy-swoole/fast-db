@@ -266,12 +266,10 @@ final class BulkWriteTest extends TestCase
         $this->assertStringContainsString('`__mysqli_new`.`name`', $this->connection->queries[0]['sql']);
     }
 
-    public function testImplicitUpsertColumnsMustAppearInTheIncomingRowsBeforeAnyWrite(): void
+    public function testUnknownUpsertColumnFailsAtTheDatabase(): void
     {
-        try { BulkWriteFixtureRecord::fastUpsert($this->rows(1), ['missing_column']); $this->fail('Incoming update columns must exist in the row schema'); }
-        catch (\InvalidArgumentException) { $this->addToAssertionCount(1); }
-        $this->assertSame([], $this->connection->queries);
-        $this->assertSame([], $this->events);
+        $this->expectException(\PDOException::class);
+        BulkWriteFixtureRecord::fastUpsert($this->rows(1), ['missing_column']);
     }
 
     public function testDriverAffectedRowsAreSummedWithoutFloatPrecisionLoss(): void

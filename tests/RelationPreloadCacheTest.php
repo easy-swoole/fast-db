@@ -11,6 +11,8 @@ use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Beans\ListResult;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Internal\RelationLoader;
+use EasySwoole\FastDb\Internal\RelationPlan;
+
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\Mysqli\QueryBuilder;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -173,8 +175,7 @@ final class RelationPreloadCacheTest extends TestCase
     {
         $query = clone $parent->queryLimit()->__getQueryBuilder();
         $fields = $parent->queryLimit()->getFields()['fields'] ?? null;
-        return $query->groupExistingWhere()->where($relation->targetProperty, $parent->id)
-            ->get((new $relation->targetEntity())->tableName(), $relation->type === RelationType::One ? 2 : null, $fields);
+        return RelationPlan::buildLookup($query, (new $relation->targetEntity())->tableName(), $relation, $parent->id, $fields);
     }
     private function load(RelationLoader $loader, PreloadCacheParent $parent, Relate $relation, ?string $table = null): mixed
     {
@@ -182,13 +183,13 @@ final class RelationPreloadCacheTest extends TestCase
             (new \ReflectionProperty(AbstractEntity::class, 'queryBuilder'))->setValue($parent, null);
         };
         try {
-            return $loader->load($parent, $relation, $table,
+            return $loader->load($parent, $parent->queryLimit(), $relation, $table,
                 function (QueryBuilder $query) use ($parent): QueryResult {
                     $this->queries++;
                     $result = new QueryResult(microtime(true));
                     $result->setResult([['id' => 99, 'parent_id' => $parent->id, 'label' => 'database']]);
                     return $result;
-                }, $reset, static fn () => null);
+                }, $reset);
         } finally {
             $this->resets++;
             $reset();
