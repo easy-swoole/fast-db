@@ -282,7 +282,7 @@ final class RelationPreloadTest extends TestCase
             [Coroutine::getCid() => ['default' => $this->connection, 'other' => $other]]);
         $this->db->setOnQuery(function (QueryResult $result): void {
             $this->events[] = $result;
-            if (str_contains($result->getQueryBuilder()?->getLastPrepareQuery() ?? '', 'preload_parents')) {
+            if (str_contains($result->getLastPrepareQuery() ?? '', 'preload_parents')) {
                 $this->db->selectConnection('other');
             }
         });
@@ -303,7 +303,7 @@ final class RelationPreloadTest extends TestCase
         $owner = new PreloadFixtureInitializingParent();
         PreloadFixtureInitializingParent::$connections = [];
         $this->db->setOnQuery(function (QueryResult $result): void {
-            if (str_contains($result->getQueryBuilder()?->getLastPrepareQuery() ?? '', 'preload_parents')) {
+            if (str_contains($result->getLastPrepareQuery() ?? '', 'preload_parents')) {
                 $this->db->selectConnection('observer');
             }
         });

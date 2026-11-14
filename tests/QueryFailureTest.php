@@ -16,7 +16,7 @@ final class QueryFailureTest extends TestCase
 {
     public function testUnassignedResultIsSafeToRead(): void
     {
-        $result = new QueryResult(microtime(true));
+        $result = new QueryResult(0.0, 0.0, 0.0, 'default');
         $this->assertNull($result->getResult());
         $this->assertNull($result->getResultOne());
         $this->assertNull($result->getException());
@@ -82,7 +82,7 @@ final class QueryFailureTest extends TestCase
                 $called = true;
                 $this->assertNull($result->getResult());
                 $this->assertSame($failure, $result->getException());
-                $this->assertInstanceOf(QueryBuilder::class, $result->getQueryBuilder());
+                $this->assertNotNull($result->getLastPrepareQuery());
                 throw new \RuntimeException('entity logger failure');
             });
             try {
@@ -125,7 +125,7 @@ final class QueryFailureTest extends TestCase
         }
         $builder->raw('SELECT ? AS next_query', [2]);
 
-        $this->assertSame('SELECT ? AS original_query', $failureResult->getQueryBuilder()->getLastPrepareQuery());
-        $this->assertSame([1], $failureResult->getQueryBuilder()->getLastBindParams());
+        $this->assertSame('SELECT ? AS original_query', $failureResult->getLastPrepareQuery());
+        $this->assertSame([1], $failureResult->getLastBindParams());
     }
 }

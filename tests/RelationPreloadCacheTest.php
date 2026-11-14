@@ -187,9 +187,8 @@ final class RelationPreloadCacheTest extends TestCase
             return $loader->load($parent, $parent->queryLimit(), $relation, $table,
                 function (QueryBuilder $query) use ($parent): QueryResult {
                     $this->queries++;
-                    $result = new QueryResult(microtime(true));
-                    $result->setResult([['id' => 99, 'parent_id' => $parent->id, 'label' => 'database']]);
-                    return $result;
+                    return new QueryResult(0.0, 0.0, 0.0, 'default',
+                        [['id' => 99, 'parent_id' => $parent->id, 'label' => 'database']]);
                 }, $reset, \Closure::bind(static fn (string $class, array $row, ?AbstractEntity $target = null) =>
                     AbstractEntity::hydrateEntity($class, $row, $target), null, AbstractEntity::class));
         } finally {

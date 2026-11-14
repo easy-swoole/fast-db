@@ -60,19 +60,11 @@ final class QueryDiagnostics
 
     public function record(QueryResult $result): void
     {
-        if ($this->enabled) {
-            $stack = new QueryStack();
-            $stack->connectionName = $result->getConnectionName();
-            $stack->startTime = $result->getStartTime();
-            $stack->endTime = $result->getEndTime();
-            $stack->duration = $result->getDuration();
-            $stack->exception = $result->getException();
-            // 查询结果会交给回调，诊断记录独立保留执行时的 SQL。
-            $builder = $result->getQueryBuilder();
-            $stack->query = $builder === null ? null : clone $builder;
-            $stack->rawQuery = $result->getRawSql();
-            $this->append($stack);
-        }
+        if (!$this->enabled) { return; }
+        $this->append(new QueryStack(
+            'query', $result->getConnectionName(), $result->getStartTime(), $result->getEndTime(),
+            $result->getDuration(), $result->getException(), $result->getRawSql(), $result->sqlSnapshot()
+        ));
     }
 
     /** 用户观察回调独立于执行记录，异常不影响已执行 SQL 的 trace。 */
@@ -85,16 +77,7 @@ final class QueryDiagnostics
         ?\Throwable $error = null): void
     {
         if (!$this->enabled) { return; }
-        $stack = new QueryStack();
-        $stack->type = 'connectionAcquire';
-        $stack->connectionName = $name;
-        $stack->startTime = $startTime;
-        $stack->endTime = $endTime;
-        $stack->duration = $duration;
-        $stack->exception = $error;
-        $stack->query = null;
-        $stack->rawQuery = null;
-        $this->append($stack);
+        $this->append(new QueryStack('connectionAcquire', $name, $startTime, $endTime, $duration, $error));
     }
 
     private function append(QueryStack $stack): void

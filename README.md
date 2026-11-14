@@ -529,7 +529,7 @@ $entity->chunk(function (User $user): void {
 }, 100);
 ```
 
-`chunk($callback, $chunkSize = 10)` 按 OFFSET 分页读取，每次回调接收一条记录，不是一个数组块。各页沿用入口处从发起实体取得的查询配置，并使用首个查询的表和连接。回调可以另选连接执行自己的查询，之后的分页仍使用首个查询的数据源。请提供稳定排序；遍历中删除记录或修改筛选条件可能改变后续页的偏移，不适合需要稳定游标的迁移任务。 `chunk()` 不主动请求总数统计，按公开查询回调处理前的原始页条数判断是否继续；调用前显式开启的总数统计选项仍保留。
+`chunk($callback, $chunkSize = 10)` 按 OFFSET 分页读取，每次回调接收一条记录，不是一个数组块。各页沿用入口处从发起实体取得的查询配置，并使用首个查询的表和连接。回调可以另选连接执行自己的查询，之后的分页仍使用首个查询的数据源。请提供稳定排序；遍历中删除记录或修改筛选条件可能改变后续页的偏移，不适合需要稳定游标的迁移任务。 `chunk()` 不主动请求总数统计，按原始页条数判断是否继续；调用前显式开启的总数统计选项仍保留。
 
 `$chunkSize` 必须大于 0。回调返回严格的 `false` 时立即停止，不再交付本批剩余记录或查询后续批次；没有返回值或返回其他值时继续。`chunk()` 本身不返回累计处理条数。
 
@@ -567,7 +567,7 @@ $entity->chunkById($processUser, chunkSize: 100, column: 'users.id');
 
 使用 `fields()` 时必须显式选中原始游标列，例如 `fields(['id', 'name', 'status'])`，不能只把游标列选为 `id AS cursor` 这样的别名；库不会为遍历悄悄扩大字段白名单。非空批次的末行缺少游标列或游标值为 null 时，会在交付该批数据前抛出异常。
 
-`hideFields()` 可以隐藏游标列，方法会在公开查询回调前从原始结果保存末行游标和页大小，再转换实体或隐藏输出字段。因此隐藏游标、修改回调对象或在 `onQuery` 中改写交付数据，都不会改变翻页位置及原始页的结束判断。返回实体后持续隐藏字段仍沿用 `persistFieldLimit()` 的规则。调用者负责选中符合约定的游标列，并保证其稳定、唯一且非 NULL；组件不逐行扫描校验游标。不要在数据库中修改用于本次遍历的游标列。
+`hideFields()` 可以隐藏游标列，方法从只读查询结果取得末行游标和页大小，再转换实体或隐藏输出字段。隐藏游标或修改分块回调收到的实体都不会改变翻页位置。返回实体后持续隐藏字段仍沿用 `persistFieldLimit()` 的规则。调用者负责选中符合约定的游标列，并保证其稳定、唯一且非 NULL；组件不逐行扫描校验游标。不要在数据库中修改用于本次遍历的游标列。
 
 查询结果必须具有唯一游标；使用 JOIN 时，也要保证连接结果中该列不重复。额外的查询选项沿用调用方配置；显式开启总数统计时，每页的总数查询同样通知全局和实体查询回调。复杂分组、联合或关联查询是否符合游标遍历语义，由调用者保证。需要限制扫描范围时，可预先增加游标上界；方法本身不提供跨页的一致性快照。
 
@@ -1826,10 +1826,14 @@ $row = $result->getResultOne();
 | `getInsertId()` | 本次成功查询的自增 ID 快照；未取得结果或查询失败时为 null |
 | `getTotalCount(): ?int` | 请求分页总数后的统计结果；未读取总数时为 null |
 | `getTotalResult(): ?self` | 总数查询的 QueryResult；未读取总数时为 null |
-| `getQueryBuilder()` | 构建器查询的副本；原始 SQL 查询时 null |
+| `getLastQuery(): ?string` | 按需展开绑定参数生成日志 SQL |
+| `getLastPrepareQuery(): ?string` | 保留占位符的 SQL |
+| `getLastBindParams(): array` | 按占位符顺序排列的绑定参数 |
 | `getRawSql()` | 原始 SQL 文本；构建器查询时通常 null |
 | `getDuration(): float` | 查询执行阶段耗时，秒；不含获取连接及日志回调，实体失败替代结果见下文 |
 | `getStartTime()` / `getEndTime()` | Unix 时间戳，用于日志定位；查询执行耗时使用 getDuration() |
+
+查询回调接收只读 `QueryResult`。三个日志 getter 也可用于 `QueryStack` 和 `TimeoutException`。原始 SQL 和事务操作的两个 SQL getter 都返回执行文本，绑定参数返回 `[]`。原先用于获取构建器和改写结果的接口已移除。业务需要裁剪或转换数据时，可以配置查询投影，或在读取结果后处理自己的数据。
 
 写入结果的影响行数和 insert id 从 QueryResult 快照读取：
 
@@ -1854,12 +1858,14 @@ Connection 的 `getLastAffectRows()` / `getLastInsertId()` 始终表示最后一
 
 ### 超时异常定位
 
-`FastDb::query()`、`rawQuery()` 及 `begin()` / `commit()` / `rollback()` 的执行超时抛出 `EasySwoole\FastDb\Exception\TimeoutException`。SQL 信息在创建异常后赋值给 public 属性 `rawSql` 和 `queryBuilder`，也可通过 getter 读取；构造函数仅接收标准的 message、code、previous。message 保持底层错误消息，不拼接 SQL 或参数。
+`FastDb::query()`、`rawQuery()` 及 `begin()` / `commit()` / `rollback()` 的执行超时抛出 `EasySwoole\FastDb\Exception\TimeoutException`。异常创建时保存只读 SQL 上下文。message 保持底层错误消息，不拼接 SQL 或参数。
 
 | 方法 | 返回内容 |
 | --- | --- |
 | `getRawSql(): ?string` | 对应 SQL；预处理查询保留占位符，事务 SQL 包含 flags |
-| `getQueryBuilder(): ?QueryBuilder` | 构建器查询的独立快照，可读取 SQL 和绑定参数；原始 SQL / 事务操作为 null |
+| `getLastQuery(): ?string` | 按需展开绑定参数的日志 SQL |
+| `getLastPrepareQuery(): ?string` | 保留占位符的 SQL |
+| `getLastBindParams(): array` | 按占位符顺序排列的绑定参数 |
 | `getPrevious()` | 原始 mysqli 超时异常；错误码和 message 保持一致 |
 
 ```php
@@ -1870,9 +1876,8 @@ $query->raw('SELECT SLEEP(?)', [1]);
 try {
     $db->query($query, timeout: 0.05);
 } catch (TimeoutException $error) {
-    $sql = $error->getRawSql(); // SELECT SLEEP(?)
-    $builder = $error->getQueryBuilder();
-    $params = $builder?->getLastBindParams() ?? []; // [1]
+    $sql = $error->getLastPrepareQuery(); // SELECT SLEEP(?)
+    $params = $error->getLastBindParams(); // [1]
     $message = $error->getMessage(); // 原始超时消息。
     $cause = $error->getPrevious();
     // 将 message、sql、params 按需交给日志系统。
@@ -1880,7 +1885,7 @@ try {
 }
 ```
 
-原始查询及事务超时可直接使用 `getRawSql()` 定位，例如 `COMMIT AND NO CHAIN NO RELEASE`。构建器在异常创建时复制，之后重用原构建器不会改变异常中保存的 SQL 和参数。
+原始查询及事务超时可直接使用 `getRawSql()` 定位，例如 `COMMIT AND NO CHAIN NO RELEASE`。异常的 `rawSql` 保留为只读字段，原先的构建器字段和 getter 已移除。
 
 FastDb 的超时异常继承 `EasySwoole\FastDb\Exception\Exception`。调用方可捕获 `EasySwoole\FastDb\Exception\TimeoutException`，或 FastDb 通用 `Exception`；它不继承 mysqli 异常，原始 mysqli 超时实例保存在 `getPrevious()` 中。
 
@@ -1893,9 +1898,8 @@ FastDb 的超时异常继承 `EasySwoole\FastDb\Exception\Exception`。调用方
 ```php
 $db->setOnQuery(function (QueryResult $result): void {
     $durationMs = $result->getDuration() * 1000;
-    $builder = $result->getQueryBuilder();
-    $sql = $result->getRawSql() ?? $builder?->getLastPrepareQuery();
-    $params = $builder?->getLastBindParams() ?? [];
+    $sql = $result->getLastPrepareQuery();
+    $params = $result->getLastBindParams();
     $exception = $result->getException();
     $errorMessage = $exception?->getMessage();
     $errorCode = $exception?->getCode();
@@ -1948,18 +1952,18 @@ $db->configureQueryStack(false, maxStackSize: 2); // 停止追加，保持相同
 
 每次启停调用都会应用 `maxStackSize`，缩小容量会立即裁剪该实例所有已有协程栈，包括关闭时。关闭只停止追加，不主动清空，但 `configureQueryStack(false)` 也会应用默认容量 256：此前容量大于 256 时，已有记录会缩到最近 256 条。需要保留更大容量下的现有记录，可显式传原容量，例如 `configureQueryStack(false, maxStackSize: 1024)`。协程退出或回收上下文时清理其记录。
 
-每项 `QueryStack` 的字段为：
+每项 `QueryStack` 的公共字段均为只读。
 
 | 字段 | 含义 |
 | --- | --- |
 | `type` | 普通 SQL 为 `query`，独立连接获取事件为 `connectionAcquire` |
 | `connectionName` | 本次操作的连接名快照，失败时也可定位尝试借用的连接 |
-| `query` / `rawQuery` | SQL 构造器快照或原始 SQL；连接获取事件两者均为 null |
+| `rawQuery` | 原始 SQL 文本，构建器查询和连接获取事件为 null |
 | `duration` | 当前事件耗时，秒；query 为原查询执行阶段（含 query(callable) 工厂），connectionAcquire 为本次 getObj() 的获取总耗时 |
 | `exception` | SQL 执行异常，或连接获取事件中实际向外抛出的借用异常；成功时为 null |
 | `startTime` / `endTime` | 记录的起止 Unix 时间戳，用于日志定位；耗时字段使用单调时钟 |
 
-主查询与 `SELECT FOUND_ROWS() as count` 都生成独立 trace，并分别触发全局 `onQuery`。FastDb 在完成回调和全局观察回调前记录两条已执行的 SQL。开启查询栈时，栈中保存独立的构建器副本。主查询的全局回调抛异常时，总数 SQL 的 trace 仍保留，总数查询的全局回调会跳过。SQL 执行异常优先于观察回调异常向外抛出。
+主查询与 `SELECT FOUND_ROWS() as count` 都生成独立 trace，并分别触发全局 `onQuery`。FastDb 在完成回调和全局观察回调前记录两条已执行的 SQL。查询事件通过 `getLastQuery()`、`getLastPrepareQuery()` 和 `getLastBindParams()` 读取 SQL 日志信息。查询栈与查询结果共享 SQL 快照。主查询的全局回调抛异常时，总数 SQL 的 trace 仍保留，总数查询的全局回调会跳过。SQL 执行异常优先于观察回调异常向外抛出。
 
 在完成回调或全局 `onQuery` 中开关查询栈，只影响后续查询的记录。回调中执行新 SQL 时，栈顺序是主查询、总数查询、回调内 SQL。
 
@@ -1969,7 +1973,7 @@ $db->configureQueryStack(false, maxStackSize: 2); // 停止追加，保持相同
 
 通过 FastDb 真正执行一次 `getObj()` 新借连接，无论由 `query()`、`rawQuery()`、直接 `begin()`，还是 `invoke()`、`transaction()` 触发，都生成一条独立的 `type = 'connectionAcquire'` 事件。复用已有连接不生成获取事件；向 `begin()` 显式传入已有 Connection 也不借连接。连接池内部的创建、健康检查与重试包含在这一条事件里，不拆成多条。配置校验、`testDb()` 和 `preConnect()` 不属于这段借用计时。
 
-借用失败同样记录独立获取事件：`query` 和 `rawQuery` 为 null，`duration` 是获取历时，连接名及实际向外抛出的异常可见。没有执行 SQL 时，不生成 `query` 事件，也不调用全局 `onQuery`。
+借用失败同样记录独立获取事件。`duration` 是获取历时，连接名及实际向外抛出的异常可见。连接获取事件的两个 SQL getter 返回 null，绑定参数返回 `[]`。没有执行 SQL 时，不生成 `query` 事件，也不调用全局 `onQuery`。
 
 仅在借用入口已启用查询栈时启动获取计时，记录完成时若已关闭则丢弃事件；入口关闭、借用过程中才开启时，该次借用不补记获取事件，之后的查询执行可正常入栈。工厂中首次注册全局回调、开启查询栈，对当前查询的最终通知也会生效。回调重入可能使内层事件先于外层出现，不能假定获取事件与使用该连接的 SQL 总是相邻。嵌套事件历时可能互相包含，也不能把全部事件的 `duration` 相加当作业务端到端耗时。
 
@@ -2004,12 +2008,11 @@ final class SlowQueryLogger
             return;
         }
 
-        $builder = $result->getQueryBuilder();
         $exception = $result->getException();
         error_log(json_encode([
             'type' => 'slow_query',
-            'sql' => $result->getRawSql() ?? $builder?->getLastPrepareQuery(),
-            'params' => $builder?->getLastBindParams() ?? [],
+            'sql' => $result->getLastPrepareQuery(),
+            'params' => $result->getLastBindParams(),
             'durationMs' => $durationMs,
             'startTime' => $result->getStartTime(),
             'errorMessage' => $exception?->getMessage(),

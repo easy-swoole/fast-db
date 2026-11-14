@@ -57,10 +57,34 @@ final class QueryResultMetadataTest extends TestCase
 
     public function testUnassignedAndFailedResultsHaveNullMetadata(): void
     {
-        $result = new QueryResult(microtime(true));
+        $result = new QueryResult(0.0, 0.0, 0.0, 'default');
         $this->assertNull($result->getAffectedRows());
         $this->assertNull($result->getInsertId());
-        $result->setAffectedRows('18446744073709551615');
+        $result = new QueryResult(0.0, 0.0, 0.0, 'default', affectedRows: '18446744073709551615');
         $this->assertSame('18446744073709551615', $result->getAffectedRows());
+    }
+
+    public function testLogGettersKeepOriginalSqlAndBindsWithoutExposingTheBuilder(): void
+    {
+        $builder = (new QueryBuilder())->noBackslashEscapes()->raw('SELECT ? AS value', ["a'b\\c"]);
+        $loggedSql = $builder->getLastQuery();
+        $result = new QueryResult(0.0, 0.0, 0.0, 'default', [['value' => 1]], builder: $builder);
+        $builder->noBackslashEscapes(false)->raw('SELECT 2');
+
+        $params = $result->getLastBindParams();
+        $params[0] = 'changed';
+        $rows = $result->getResult();
+        $rows[0]['value'] = 9;
+        $this->assertSame('SELECT ? AS value', $result->getLastPrepareQuery());
+        $this->assertSame(["a'b\\c"], $result->getLastBindParams());
+        $this->assertSame($loggedSql, $result->getLastQuery());
+        $this->assertSame(['value' => 1], $result->getResultOne());
+        $this->assertFalse(method_exists($result, 'getQueryBuilder'));
+        $this->assertFalse(method_exists($result, 'setResult'));
+
+        $raw = new QueryResult(0.0, 0.0, 0.0, 'default', rawSql: 'SELECT 3');
+        $this->assertSame('SELECT 3', $raw->getLastQuery());
+        $this->assertSame('SELECT 3', $raw->getLastPrepareQuery());
+        $this->assertSame([], $raw->getLastBindParams());
     }
 }

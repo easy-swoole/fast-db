@@ -131,9 +131,9 @@ final class TransactionTest extends TestCase
         $this->assertSame([1, 2], $seen);
     }
 
-    public function testWriteReturnsTheRowsReportedBeforeTheObserver(): void
+    public function testWriteReturnsTheRowsExposedToTheObserver(): void
     {
-        $observer = static function (QueryResult $result): void { $result->setAffectedRows(0); };
+        $observer = function (QueryResult $result): void { $this->assertSame(1, $result->getAffectedRows()); };
         $entity = TransactionEntity::findRecord(1);
         $entity->setOnQuery($observer);
         $entity->value = 5;
@@ -145,6 +145,31 @@ final class TransactionTest extends TestCase
             onQuery: $observer, batchSize: 1));
         $this->assertTrue($entity->delete());
         $this->assertSame(1, TransactionEntity::fastDelete(2, onQuery: $observer));
+    }
+
+    public function testTransactionObserversReadTheControlStatementResults(): void
+    {
+        $commands = [];
+        $this->db->setOnQuery(function (QueryResult $result) use (&$commands): void {
+            $sql = $result->getLastPrepareQuery();
+            if (!preg_match('/^(START TRANSACTION|COMMIT|ROLLBACK)\b/', $sql, $match)) { return; }
+            $commands[] = $match[1];
+            $this->assertTrue($result->getResult());
+            $this->assertSame($sql, $result->getLastQuery());
+            $this->assertSame([], $result->getLastBindParams());
+            $this->assertFalse(method_exists($result, 'setResult'));
+        });
+
+        $this->assertSame('committed', $this->db->transaction(function (): string {
+            $this->write(4);
+            return 'committed';
+        }));
+        $this->assertSame(4, $this->value());
+        $this->assertTrue($this->db->begin());
+        $this->write(5);
+        $this->assertTrue($this->db->rollback());
+        $this->assertSame(4, $this->value());
+        $this->assertSame(['START TRANSACTION', 'COMMIT', 'START TRANSACTION', 'ROLLBACK'], $commands);
     }
 
     public function testInitializedPoolRejectsReplacementAndKeepsRegisteredSnapshot(): void
@@ -186,7 +211,7 @@ final class TransactionTest extends TestCase
         $this->observer->query("ALTER TABLE `{$this->table}` MODIFY id INT NOT NULL AUTO_INCREMENT");
         $entity = new ConvertedKeyMysqlEntity(['value'=>7]);
         $this->db->setOnQuery(function (QueryResult $result) use ($entity): void {
-            if (!str_starts_with($result->getQueryBuilder()?->getLastPrepareQuery() ?? '', 'INSERT')) { return; }
+            if (!str_starts_with($result->getLastPrepareQuery() ?? '', 'INSERT')) { return; }
             $this->assertInstanceOf(ConvertedKey::class, $entity->id);
             $this->assertSame('2', $entity->id->value);
             $entity->value = 8;
@@ -274,7 +299,7 @@ final class TransactionTest extends TestCase
         $entity = new TextKeyMysqlEntity(['id'=>$key,'value'=>7]);
         $inserts = $updates = 0;
         $observer = function (QueryResult $result) use ($entity,$key,&$inserts,&$updates): void {
-            $sql = $result->getQueryBuilder()?->getLastPrepareQuery() ?? '';
+            $sql = $result->getLastPrepareQuery() ?? '';
             if (str_starts_with($sql,'UPDATE')) { $updates++; return; }
             if (!str_starts_with($sql,'INSERT')) { return; }
             $inserts++;
@@ -332,7 +357,7 @@ final class TransactionTest extends TestCase
         $this->assertCount(2, $queries);
     }
 
-    public function testMysqlChunkContinuesAfterTheObserverRemovesAFullPage(): void
+    public function testMysqlChunkObserverReceivesEveryPage(): void
     {
         $this->observer->query("INSERT INTO `{$this->table}` VALUES (2,1),(3,2),(4,3),(5,4)");
         $entity = new TransactionEntity();
@@ -340,11 +365,10 @@ final class TransactionTest extends TestCase
         $pages = 0;
         $entity->setOnQuery(static function (QueryResult $result) use (&$pages): void {
             $pages++;
-            if ($pages === 1) { $result->setResult([]); }
         });
         $seen = [];
         $entity->chunk(static function (TransactionEntity $row) use (&$seen): void { $seen[] = $row->id; },2);
-        $this->assertSame([3,4,5], $seen);
+        $this->assertSame([1,2,3,4,5], $seen);
         $this->assertSame(3, $pages);
     }
 
@@ -357,8 +381,8 @@ final class TransactionTest extends TestCase
         $this->observer->query("INSERT INTO `{$this->table}` VALUES (2,2,20),(3,3,30),(4,4,40),(5,5,50)");
         $pages = [];
         $this->db->setOnQuery(static function (QueryResult $result) use (&$pages): void {
-            $sql = $result->getQueryBuilder()?->getLastPrepareQuery();
-            if ($sql !== null && str_starts_with($sql, 'SELECT')) { $pages[] = $result; }
+            $sql = $result->getLastPrepareQuery();
+            if ($result->getRawSql() === null && $sql !== null && str_starts_with($sql, 'SELECT')) { $pages[] = $result; }
         });
         $seen = $entityEvents = [];
         $this->db->transaction(function () use ($withTotal, &$seen, &$entityEvents): void {
@@ -378,7 +402,7 @@ final class TransactionTest extends TestCase
         $this->assertCount(2, $pages);
         $this->assertSame($withTotal ? [null,'SELECT FOUND_ROWS() as count',null,'SELECT FOUND_ROWS() as count'] : [null,null], $entityEvents);
         foreach ($pages as $page) {
-            $sql = $page->getQueryBuilder()->getLastPrepareQuery();
+            $sql = $page->getLastPrepareQuery();
             $this->assertStringContainsString('ORDER BY `order` ASC', $sql);
             $this->assertStringContainsString('FOR UPDATE', $sql);
             $this->assertSame($withTotal, $page->getTotalResult() !== null);
@@ -749,7 +773,7 @@ final class TransactionTest extends TestCase
         $entity = new TransactionEntity(['id' => 1, 'value' => 0]);
         $this->db->begin(); $entity->value = 7; $once = false;
         $this->db->setOnQuery(function ($result) use (&$once): void {
-            if (!$once && str_starts_with($result->getQueryBuilder()?->getLastPrepareQuery() ?? '', 'UPDATE')) {
+            if (!$once && str_starts_with($result->getLastPrepareQuery() ?? '', 'UPDATE')) {
                 $once = true; $this->db->rollback();
             }
         });
@@ -773,7 +797,7 @@ final class TransactionTest extends TestCase
         $this->observer->query("INSERT INTO `{$this->table}` VALUES(2,0),(3,0)");
         $once = false;
         $this->db->setOnQuery(function ($result) use (&$once): void {
-            if (!$once && in_array('SQL_CALC_FOUND_ROWS', $result->getQueryBuilder()?->getLastQueryOptions() ?? [], true)) {
+            if (!$once && $result->getTotalResult() !== null) {
                 $once = true; $this->db->rawQuery('SELECT 1');
             }
         });
@@ -1043,13 +1067,14 @@ final class TransactionTest extends TestCase
                 $this->assertSame($error->getPrevious()->getCode(), $error->getCode());
                 $this->assertSame($mode === 'raw' ? 'SELECT SLEEP(1)' : 'SELECT SLEEP(?)', $error->getRawSql());
                 $this->assertSame($error->getPrevious()->getMessage(), $error->getMessage());
+                $this->assertSame('SELECT SLEEP(1)', $error->getLastQuery());
                 if ($mode === 'raw') {
-                    $this->assertNull($error->getQueryBuilder());
+                    $this->assertSame('SELECT SLEEP(1)', $error->getLastPrepareQuery());
+                    $this->assertSame([], $error->getLastBindParams());
                 } else {
-                    $this->assertNotSame($query, $error->getQueryBuilder());
-                    $this->assertSame([1], $error->getQueryBuilder()->getLastBindParams());
+                    $this->assertSame([1], $error->getLastBindParams());
                     $query->raw('SELECT 2');
-                    $this->assertSame('SELECT SLEEP(?)', $error->getQueryBuilder()->getLastPrepareQuery());
+                    $this->assertSame('SELECT SLEEP(?)', $error->getLastPrepareQuery());
                 }
             }
             try {

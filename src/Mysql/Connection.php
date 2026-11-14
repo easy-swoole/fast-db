@@ -97,10 +97,7 @@ class Connection extends Client implements ObjectInterface
 
     private function withTimeoutContext(DriverTimeoutException $error, ?string $sql, ?QueryBuilder $builder = null): TimeoutException
     {
-        $exception = new TimeoutException($error->getMessage(), (int) $error->getCode(), $error);
-        $exception->rawSql = $sql;
-        $exception->queryBuilder = $builder === null ? null : clone $builder;
-        return $exception;
+        return new TimeoutException($error->getMessage(), (int) $error->getCode(), $error, $sql, $builder);
     }
 
     public function beginTransaction(TransactionStartFlags $flags, ?float $timeout = null): bool

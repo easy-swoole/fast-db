@@ -10,6 +10,7 @@ use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\Pool;
 use EasySwoole\Mysqli\Config as DriverConfig;
+use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\Pool\ObjectInterface;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -39,6 +40,23 @@ final class QueryStackTest extends TestCase
         $db = (new FastDb())->addDb($config)->configureQueryStack(true, $capacity);
         (new \ReflectionProperty(FastDb::class, 'pools'))->setValue($db, ['default' => new QueryStackPool($config)]);
         return $db;
+    }
+
+    public function testQueryEventsExposeTheSameReadOnlySqlSnapshotAsTheResult(): void
+    {
+        $db = $this->database();
+        $builder = (new QueryBuilder())->noBackslashEscapes()->raw('SELECT ?', ["a'b"]);
+        $result = $db->query($builder);
+        $entry = $db->getQueryStack(-1);
+        $builder->raw('SELECT 2');
+
+        $this->assertSame('SELECT ?', $entry->getLastPrepareQuery());
+        $this->assertSame(["a'b"], $entry->getLastBindParams());
+        $this->assertSame($result->getLastQuery(), $entry->getLastQuery());
+        $this->assertFalse(property_exists($entry, 'query'));
+
+        $this->expectException(\Error::class);
+        $entry->duration = 0;
     }
 
     public function testNegativeIndexesCountFromLastQuery(): void

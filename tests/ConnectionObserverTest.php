@@ -69,7 +69,7 @@ final class ConnectionObserverTest extends TestCase
             $this->queueQuery($peer, 'prepared', $this->ok(2, 1, 11));
             $this->queueQuery($peer, 'prepared', $this->ok(2, 2, 22));
             $result = $db->query(static function (QueryBuilder $query) use (&$builder): void { $builder = $query; $query->raw('DO 1'); });
-            $this->assertSame('DO 1', $result->getQueryBuilder()->getLastPrepareQuery());
+            $this->assertSame('DO 1', $result->getLastPrepareQuery());
             $this->assertSame('DO 2', $builder->getLastPrepareQuery());
             $this->assertSame(1, $result->getAffectedRows());
         });
@@ -91,7 +91,7 @@ final class ConnectionObserverTest extends TestCase
             $this->assertTrue($retried);
             $this->assertCount(1, $completed);
             $this->assertSame($error, $completed[0]->getException());
-            $this->assertSame('DO 1', $completed[0]->getQueryBuilder()->getLastPrepareQuery());
+            $this->assertSame('DO 1', $completed[0]->getLastPrepareQuery());
         });
     }
 
@@ -120,7 +120,7 @@ final class ConnectionObserverTest extends TestCase
                 $connection->query($builder->raw('DO inner_query'));
                 $builder->raw('DO outer_query');
             }, onComplete: static function (QueryResult $result) use (&$completed): void { $completed[] = $result; });
-            $this->assertSame('DO outer_query', $result->getQueryBuilder()->getLastPrepareQuery());
+            $this->assertSame('DO outer_query', $result->getLastPrepareQuery());
             $this->assertSame(2, $result->getAffectedRows());
             $this->assertSame(22, $result->getInsertId());
             $this->assertSame([$result], $completed);
@@ -205,7 +205,7 @@ final class ConnectionObserverTest extends TestCase
             $this->assertSame([$result], $completed);
             $this->assertSame([$result], $logged);
             $this->assertNull($result->getException());
-            $this->assertSame('DO outer_query', $result->getQueryBuilder()->getLastPrepareQuery());
+            $this->assertSame('DO outer_query', $result->getLastPrepareQuery());
             $this->assertSame(1, $result->getAffectedRows());
             $this->assertSame(11, $result->getInsertId());
         });

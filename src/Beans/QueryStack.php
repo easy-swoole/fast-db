@@ -2,25 +2,33 @@
 
 namespace EasySwoole\FastDb\Beans;
 
-use EasySwoole\Mysqli\QueryBuilder;
+use EasySwoole\FastDb\Internal\SqlSnapshot;
 
-class QueryStack
+final class QueryStack
 {
-    /** query 为 SQL 执行，connectionAcquire 为独立连接借用事件。 */
-    public string $type = 'query';
+    public function __construct(
+        public readonly string $type,
+        public readonly string $connectionName,
+        public readonly float $startTime,
+        public readonly float $endTime,
+        public readonly float $duration,
+        public readonly ?\Throwable $exception = null,
+        public readonly ?string $rawQuery = null,
+        private readonly ?SqlSnapshot $sql = null,
+    ) {}
 
-    public ?\Throwable $exception = null;
+    public function getLastQuery(): ?string
+    {
+        return $this->sql?->getLastQuery() ?? $this->rawQuery;
+    }
 
-    public string $connectionName;
+    public function getLastPrepareQuery(): ?string
+    {
+        return $this->sql?->getLastPrepareQuery() ?? $this->rawQuery;
+    }
 
-    public ?QueryBuilder $query;
-
-    public ?string $rawQuery;
-
-    public float $startTime;
-
-    /** 单调时钟计算的事件耗时，单位为秒；由 type 区分查询执行或连接获取。 */
-    public float $duration = 0.0;
-
-    public float $endTime;
+    public function getLastBindParams(): array
+    {
+        return $this->sql?->getLastBindParams() ?? [];
+    }
 }

@@ -51,8 +51,8 @@ final class FastDbTest extends BaseTestCase
         $fastDb->addDb($config);
         // 调试输出示例。
 //        $fastDb->setOnQuery(function (QueryResult $queryResult) {
-//            if ($queryResult->getQueryBuilder()) {
-//                echo $queryResult->getQueryBuilder()->getLastQuery() . "\n";
+//            if ($queryResult->getLastPrepareQuery() !== null) {
+//                echo $queryResult->getLastQuery() . "\n";
 //            } else {
 //                echo $queryResult->getRawSql() . "\n";
 //            }

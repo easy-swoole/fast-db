@@ -197,13 +197,8 @@ class FastDb
             try {
                 $client = $this->getOrBorrowConnection($connection);
             } catch (\Throwable $error) {
-                $result = new QueryResult($startTime, $startTick);
-                $result->setConnectionName($connectionName);
-                $result->finishTiming();
-                $result->setException($error);
-                if ($queryBuilder instanceof QueryBuilder) {
-                    $result->setQueryBuilder(clone $queryBuilder);
-                }
+                $result = new QueryResult($startTime, microtime(true), (hrtime(true) - $startTick) / 1_000_000_000,
+                    $connectionName, exception: $error, builder: $queryBuilder instanceof QueryBuilder ? $queryBuilder : null);
                 return $this->finishQuery($result, $error, $onQuery);
             }
         }
@@ -230,21 +225,9 @@ class FastDb
         ?string $sql = null, ?callable $onComplete = null, ?float $totalQueryTimeout = null,
         ?callable $onQuery = null, ?callable $onTotalQuery = null): QueryResult
     {
-        $queryResult = $this->executeResult($client, $operation, $builder, $sql);
-        $firstError = $queryResult->getException();
         $totalQueryResult = null;
-        if ($firstError === null && $builder !== null
-            && in_array('SQL_CALC_FOUND_ROWS', $queryResult->getQueryBuilder()->getLastQueryOptions(), true)) {
-            // 同一连接上的其他查询可能覆盖 FOUND_ROWS()，所以要赶在任何回调之前取得总数。
-            $totalSql = 'SELECT FOUND_ROWS() as count';
-            $totalQueryResult = $this->executeResult(
-                $client, static fn () => $client->rawQuery($totalSql, $totalQueryTimeout), builder: null, sql: $totalSql
-            );
-            $firstError = $totalQueryResult->getException();
-            if ($firstError === null) {
-                $queryResult->setTotalResult($totalQueryResult);
-            }
-        }
+        $queryResult = $this->executeResult($client, $operation, $builder, $sql, $totalQueryTimeout, $totalQueryResult);
+        $firstError = $queryResult->getException() ?? $totalQueryResult?->getException();
         // 先记录已经执行的 SQL，回调里发起的查询才能按实际执行顺序入栈。
         $this->diagnostics?->record($queryResult);
         if ($totalQueryResult !== null) {
@@ -286,7 +269,6 @@ class FastDb
             throw $firstError;
         }
         if ($onTotalQuery !== null) {
-            // 前面的回调可以修改查询结果，总数通知沿用回调处理后的结果。
             $totalQueryResult = $queryResult->getTotalResult();
             if ($totalQueryResult !== null) {
                 $onTotalQuery($totalQueryResult);
@@ -296,22 +278,33 @@ class FastDb
     }
 
     /** 驱动返回后立即保存本次结果；异常只在此记录，统一由调用层通知后抛出。 */
-    private function executeResult(Connection $client, callable $operation, ?QueryBuilder $builder, ?string $sql): QueryResult
+    private function executeResult(Connection $client, callable $operation, ?QueryBuilder $builder, ?string $sql,
+        ?float $totalQueryTimeout = null, ?QueryResult &$totalQueryResult = null): QueryResult
     {
-        $result = new QueryResult(microtime(true));
-        $result->setConnectionName($client->connectionName ?? 'default');
-        $result->setRawSql($sql);
+        $startTick = hrtime(true);
+        $startTime = microtime(true);
+        $connectionName = $client->connectionName ?? 'default';
+        $result = $exception = $affectedRows = $insertId = null;
         try {
-            $result->setResult($operation());
-            $result->setAffectedRows($client->getLastAffectRows());
-            $result->setInsertId($client->getLastInsertId());
+            $result = $operation();
+            $affectedRows = $client->getLastAffectRows();
+            $insertId = $client->getLastInsertId();
         } catch (\Throwable $error) {
-            $result->setException($error);
-        } finally {
-            if ($builder !== null) { $result->setQueryBuilder(clone $builder); }
-            $result->finishTiming();
+            $exception = $error;
         }
-        return $result;
+        $duration = (hrtime(true) - $startTick) / 1_000_000_000;
+        $endTime = microtime(true);
+
+        if ($exception === null && $builder !== null && in_array('SQL_CALC_FOUND_ROWS', $builder->getLastQueryOptions(), true)) {
+            // 同一连接的后续 SQL 可能覆盖 FOUND_ROWS()，在通知观察者前先取总数。
+            $totalSql = 'SELECT FOUND_ROWS() as count';
+            $totalQueryResult = $this->executeResult(
+                $client, static fn () => $client->rawQuery($totalSql, $totalQueryTimeout), null, $totalSql
+            );
+        }
+        $totalResult = $totalQueryResult?->getException() === null ? $totalQueryResult : null;
+        return new QueryResult($startTime, $endTime, $duration, $connectionName, $result, $exception,
+            $affectedRows, $insertId, $sql, $builder, $totalResult);
     }
 
     public function invoke(callable $call): mixed

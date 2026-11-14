@@ -49,7 +49,7 @@ final class RelationTest extends BaseTestCase
         $this->assertSame(SexEnum::MALE, $info->sex);
         $queries = [];
         FastDb::getInstance()->setOnQuery(static function ($result) use (&$queries): void {
-            $queries[] = $result->getQueryBuilder()?->getLastPrepareQuery();
+            $queries[] = $result->getLastPrepareQuery();
         });
         $this->assertTrue($info->update());
         $this->assertSame([], $queries);

@@ -65,7 +65,7 @@ final class InsertStateTest extends TestCase
     {
         $entity = new ConvertedInsertStateRecord(['name'=>'before']);
         $observer = function (QueryResult $result) use ($entity): void {
-            if (!str_starts_with($result->getQueryBuilder()?->getLastPrepareQuery() ?? '', 'INSERT')) { return; }
+            if (!str_starts_with($result->getLastPrepareQuery() ?? '', 'INSERT')) { return; }
             $this->assertInstanceOf(ConvertedKey::class, $entity->id);
             $this->assertSame('1', $entity->id->value);
             $entity->name = 'nested';
@@ -163,7 +163,7 @@ final class InsertStateTest extends TestCase
     {
         $entity = new InsertStateRecord(['name' => 'before']);
         $this->observe($mode, $entity, function (QueryResult $result) use ($entity): void {
-            if (!str_starts_with($result->getQueryBuilder()?->getLastPrepareQuery() ?? '', 'INSERT')) { return; }
+            if (!str_starts_with($result->getLastPrepareQuery() ?? '', 'INSERT')) { return; }
             $this->assertSame(1, $entity->id ?? null, 'The generated key must be available before public observers.');
             $entity->name = 'after';
         });
@@ -182,7 +182,7 @@ final class InsertStateTest extends TestCase
     {
         $entity = new InsertStateRecord(['name' => 'before']);
         $this->observe($mode, $entity, function (QueryResult $result) use ($entity): void {
-            if (!str_starts_with($result->getQueryBuilder()?->getLastPrepareQuery() ?? '', 'INSERT')) { return; }
+            if (!str_starts_with($result->getLastPrepareQuery() ?? '', 'INSERT')) { return; }
             $entity->name = 'nested';
             $this->assertTrue($entity->update());
         });

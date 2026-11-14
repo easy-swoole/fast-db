@@ -207,7 +207,7 @@ final class EntityReentryTest extends TestCase
         $entity->a = 1;
         $entered = false;
         $this->observe($mode, $entity, function (QueryResult $result) use ($entity, &$entered): void {
-            if ($entered || $result->getQueryBuilder() === null) { return; }
+            if ($entered || $result->getRawSql() !== null) { return; }
             $entered = true;
             $this->assertTrue($this->db->rollback());
             $this->assertSame(1, $this->baseline($entity)['a']);
@@ -238,7 +238,7 @@ final class EntityReentryTest extends TestCase
         $entity->a = 1;
         $entered = false;
         $this->observe($mode, $entity, function (QueryResult $result) use (&$entered): void {
-            if ($entered || $result->getQueryBuilder() === null) { return; }
+            if ($entered || $result->getRawSql() !== null) { return; }
             $entered = true;
             $this->assertTrue($this->db->rollback());
         });

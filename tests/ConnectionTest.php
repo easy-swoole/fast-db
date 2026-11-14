@@ -213,7 +213,7 @@ final class ConnectionTest extends TestCase
                     $this->assertSame($error->getPrevious()->getCode(), $error->getCode());
                     $expected = $operation === 'begin' ? $flags->toSql() : strtoupper($operation) . $flags->toSqlSuffix();
                     $this->assertSame($expected, $error->getRawSql());
-                    $this->assertNull($error->getQueryBuilder());
+                    $this->assertSame([], $error->getLastBindParams());
                     $this->assertSame($error->getPrevious()->getMessage(), $error->getMessage());
                     $packet = $peer->recvAll(5 + strlen($expected), 1.0);
                     $this->assertSame("\x03" . $expected, substr($packet, 4));
@@ -311,7 +311,7 @@ final class ConnectionTest extends TestCase
                 $this->fail('Expected timeout');
             } catch (\EasySwoole\FastDb\Exception\TimeoutException $error) {
                 $this->assertSame('SELECT 1', $error->getRawSql());
-                $this->assertNull($error->getQueryBuilder());
+                $this->assertSame([], $error->getLastBindParams());
                 $this->assertSame($error->getPrevious()->getMessage(), $error->getMessage());
                 $this->assertSame($error->getPrevious()->getCode(), $error->getCode());
             } finally { $connection->close(); $peer->close(); }
@@ -323,8 +323,7 @@ final class ConnectionTest extends TestCase
     public function testTimeoutIsCaughtByFastDbBaseException(): void
     {
         $cause = new \EasySwoole\Mysqli\Exception\TimeoutException('query timed out', 110);
-        $error = new \EasySwoole\FastDb\Exception\TimeoutException($cause->getMessage(), 110, $cause);
-        $error->rawSql = 'SELECT 1';
+        $error = new \EasySwoole\FastDb\Exception\TimeoutException($cause->getMessage(), 110, $cause, 'SELECT 1');
         try {
             throw $error;
         } catch (\EasySwoole\FastDb\Exception\Exception $caught) {
@@ -335,17 +334,27 @@ final class ConnectionTest extends TestCase
         }
     }
 
-    public function testTimeoutContextUsesObjectPropertyAssignment(): void
+    public function testTimeoutSqlContextIsReadOnlyAndSurvivesBuilderReuse(): void
     {
-        $error = new \EasySwoole\FastDb\Exception\TimeoutException('query timed out');
-        $this->assertNull($error->getRawSql());
-        $this->assertNull($error->getQueryBuilder());
-        $builder = new \EasySwoole\Mysqli\QueryBuilder();
-        $builder->raw('SELECT ?', [1]);
-        $error->rawSql = 'SELECT ?';
-        $error->queryBuilder = $builder;
+        $empty = new \EasySwoole\FastDb\Exception\TimeoutException('query timed out');
+        $this->assertNull($empty->getRawSql());
+        $this->assertNull($empty->getLastPrepareQuery());
+        $this->assertSame([], $empty->getLastBindParams());
+
+        $builder = (new \EasySwoole\Mysqli\QueryBuilder())->noBackslashEscapes()->raw('SELECT ?', ["a'b"]);
+        $sql = $builder->getLastQuery();
+        $error = new \EasySwoole\FastDb\Exception\TimeoutException('query timed out', rawSql: 'SELECT ?', builder: $builder);
+        $builder->raw('SELECT 2');
+        $params = $error->getLastBindParams();
+        $params[0] = 'changed';
         $this->assertSame('SELECT ?', $error->getRawSql());
-        $this->assertSame($builder, $error->getQueryBuilder());
+        $this->assertSame('SELECT ?', $error->getLastPrepareQuery());
+        $this->assertSame($sql, $error->getLastQuery());
+        $this->assertSame(["a'b"], $error->getLastBindParams());
+        $this->assertFalse(method_exists($error, 'getQueryBuilder'));
+
+        $this->expectException(\Error::class);
+        $error->rawSql = 'SELECT 3';
     }
 
     public static function failedTransactionModes(): array

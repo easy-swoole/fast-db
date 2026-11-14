@@ -60,15 +60,12 @@ final class QueryTimingTest extends TestCase
         $this->assertSame($duration, $stack->duration);
     }
 
-    public function testDurationIsIndependentOfWallClockAndFrozenAfterFinish(): void
+    public function testDurationIsIndependentOfWallClockAndFixedAtConstruction(): void
     {
-        $result = new QueryResult(-1000.0, hrtime(true) - 20_000_000);
-        $result->finishTiming();
+        $result = new QueryResult(1000.0, -1000.0, 0.02, 'default');
         $duration = $result->getDuration();
         $this->assertGreaterThanOrEqual(0.02, $duration);
         $this->assertLessThan(1.0, $duration);
-        $result->setStartTime(1000.0);
-        $result->setEndTime(-1000.0);
         usleep(1000);
         $this->assertSame($duration, $result->getDuration());
     }

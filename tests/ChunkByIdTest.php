@@ -171,7 +171,7 @@ final class ChunkByIdTest extends TestCase
     public static function observerModes(): array { return [['global'], ['entity']]; }
 
     #[DataProvider('observerModes')]
-    public function testObserverChangedIdsAffectOutputButNotTheRawPageCursor(string $mode): void
+    public function testObserverCanReadRowsWithoutChangingDeliveredIdsOrTheCursor(string $mode): void
     {
         $this->seed(5);
         $owner = new KeysetChunkRecord();
@@ -182,42 +182,13 @@ final class ChunkByIdTest extends TestCase
             $rows = $result->getResult();
             foreach ($rows as &$row) { $row['id'] += 100; }
             unset($row);
-            $result->setResult($rows);
         };
         if ($mode === 'global') { $this->db->setOnQuery($observer); }
         else { $owner->setOnQuery($observer); }
         $seen = [];
 
         $this->assertSame(5, $owner->chunkById(static function (KeysetChunkRecord $row) use (&$seen): void { $seen[] = $row->id; }, 2));
-        $this->assertSame([101, 102, 3, 4, 5], $seen);
-        $this->assertCount(3, $this->pages());
-        $this->assertSame([2], $this->pages()[1]['parameters']);
-        $this->assertSame([4], $this->pages()[2]['parameters']);
-        $this->assertClean($owner);
-    }
-
-    public static function observerFilters(): array
-    {
-        return [['global', 0], ['entity', 0], ['global', 1], ['entity', 1]];
-    }
-
-    #[DataProvider('observerFilters')]
-    public function testObserverFilteredRowsDoNotTurnAFullRawPageIntoTheFinalPage(string $mode, int $keep): void
-    {
-        $this->seed(5);
-        $owner = new KeysetChunkRecord();
-        $first = true;
-        $observer = static function (QueryResult $result) use ($keep, &$first): void {
-            if (!$first) { return; }
-            $first = false;
-            $result->setResult(array_slice($result->getResult(), 0, $keep));
-        };
-        if ($mode === 'global') { $this->db->setOnQuery($observer); }
-        else { $owner->setOnQuery($observer); }
-        $seen = [];
-
-        $this->assertSame(3 + $keep, $owner->chunkById(static function (KeysetChunkRecord $row) use (&$seen): void { $seen[] = $row->id; }, 2));
-        $this->assertSame($keep === 0 ? [3, 4, 5] : [1, 3, 4, 5], $seen);
+        $this->assertSame([1, 2, 3, 4, 5], $seen);
         $this->assertCount(3, $this->pages());
         $this->assertSame([2], $this->pages()[1]['parameters']);
         $this->assertSame([4], $this->pages()[2]['parameters']);

@@ -186,42 +186,6 @@ final class ChunkTest extends TestCase
         });
     }
 
-    public static function filteredPageModes(): array
-    {
-        $cases = [];
-        foreach (['global','entity'] as $mode) {
-            foreach ([0,1] as $keep) {
-                foreach ([false,true] as $arrays) { $cases[] = [$mode,$keep,$arrays]; }
-            }
-        }
-        return $cases;
-    }
-
-    #[DataProvider('filteredPageModes')]
-    public function testFilteredFirstPageDoesNotStopOffsetTraversal(string $mode, int $keep, bool $arrays): void
-    {
-        $this->withDatabase([[['id'=>1],['id'=>2]], [['id'=>3],['id'=>4]], [['id'=>5]]],
-            function (array &$queries, array &$rawQueries, FastDb $db) use ($mode,$keep,$arrays): void {
-                $entity = new ChunkEntity();
-                $entity->queryLimit()->orderBy('id','ASC');
-                if ($arrays) { $entity->queryLimit()->returnAsArray(); }
-                $first = true;
-                $observer = static function (QueryResult $result) use (&$first,$keep): void {
-                    if ($first) {
-                        $first = false;
-                        $result->setResult(array_slice($result->getResult(),0,$keep));
-                    }
-                };
-                if ($mode === 'global') { $db->setOnQuery($observer); }
-                else { $entity->setOnQuery($observer); }
-                $seen = [];
-                $entity->chunk(static function ($row) use (&$seen,$arrays): void { $seen[] = $arrays ? $row['id'] : $row->id; },2);
-                $this->assertSame($keep === 0 ? [3,4,5] : [1,3,4,5], $seen);
-                $this->assertCount(3, $queries);
-                $this->assertSame([], $rawQueries);
-            });
-    }
-
     public static function observerModes(): array { return [['global'],['entity']]; }
 
     #[DataProvider('observerModes')]

@@ -43,7 +43,9 @@ final class ConnectionAcquireTimingTest extends TestCase
         $stack = $db->getQueryStack();
         $this->assertSame(['connectionAcquire', 'query', 'query'], array_column($stack, 'type'));
         $this->assertGreaterThanOrEqual(0.012, $stack[0]->duration);
-        $this->assertNull($stack[0]->query);
+        $this->assertNull($stack[0]->getLastPrepareQuery());
+        $this->assertNull($stack[0]->getLastQuery());
+        $this->assertSame([], $stack[0]->getLastBindParams());
         $this->assertNull($stack[0]->rawQuery);
         $this->assertNull($stack[0]->exception);
         $this->assertSame($first->getDuration(), $stack[1]->duration);
@@ -112,7 +114,7 @@ final class ConnectionAcquireTimingTest extends TestCase
         $this->assertSame('default', $stack[0]->connectionName);
         $this->assertSame($caught, $stack[0]->exception);
         $this->assertNull($stack[0]->rawQuery);
-        $this->assertNull($stack[0]->query);
+        $this->assertNull($stack[0]->getLastPrepareQuery());
         $this->assertGreaterThanOrEqual(0.012, $stack[0]->duration);
         $this->assertGreaterThanOrEqual($stack[0]->startTime, $stack[0]->endTime);
         $this->assertNull($db->currentConnection());
@@ -298,7 +300,7 @@ final class ConnectionAcquireTimingTest extends TestCase
         });
         $this->assertSame([$result], $observed);
         $this->assertSame(['query'], array_column($db->getQueryStack(), 'type'));
-        $this->assertSame('SELECT enabled_in_factory', $db->getQueryStack(0)->query->getLastPrepareQuery());
+        $this->assertSame('SELECT enabled_in_factory', $db->getQueryStack(0)->getLastPrepareQuery());
         $this->assertSame(1, $pools['default']->borrows);
     }
 
