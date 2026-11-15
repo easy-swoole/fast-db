@@ -194,6 +194,12 @@ class ReleaseConnection extends Connection
     public int $rollbacks = 0;
     private bool $transactionActive = false;
     public function isInTransaction(): bool { return $this->transactionActive; }
+
+    public function objectRestore(): void
+    {
+        if ($this->transactionActive) { $this->rollbackTransaction(); }
+    }
+
     public function rawQuery(string $query, ?float $timeout = null): bool|array
     {
         $this->lastAffectRows = $this->lastInsertId = 0;

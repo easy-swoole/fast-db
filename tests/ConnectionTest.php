@@ -66,23 +66,12 @@ final class ConnectionTest extends TestCase
     public function testFailedRollbackRejectsRestore(): void
     {
         $connection = $this->getMockBuilder(Connection::class)
-            ->disableOriginalConstructor()->onlyMethods(['rawQuery', 'isInTransaction'])->getMock();
-        $connection->expects($this->once())->method('rawQuery')->willReturn(false);
-        $connection->method('isInTransaction')->willReturn(true);
+            ->setConstructorArgs([new \EasySwoole\Mysqli\Config()])
+            ->onlyMethods(['rollbackTransaction'])->getMock();
+        $connection->expects($this->once())->method('rollbackTransaction')->willReturn(false);
         $this->expectException(RuntimeError::class);
-        $connection->objectRestore();
-    }
-
-    public function testRollbackExceptionIsPropagated(): void
-    {
-        $connection = $this->getMockBuilder(Connection::class)
-            ->disableOriginalConstructor()->onlyMethods(['rawQuery', 'isInTransaction'])->getMock();
-        $connection->expects($this->once())->method('rawQuery')
-            ->willThrowException(new \RuntimeException('rollback failed'));
-        $connection->method('isInTransaction')->willReturn(true);
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('rollback failed');
-        $connection->objectRestore();
+        $this->expectExceptionMessage('Failed to rollback connection during restore');
+        $this->withConnected(static fn (Connection $client) => $client->objectRestore(), true, $connection);
     }
 
     public function testFailedRollbackKeepsSessionForLaterSuccessfulRestore(): void
@@ -91,7 +80,10 @@ final class ConnectionTest extends TestCase
             $payload = "\xff" . pack('v', 1064) . '#42000rollback failed';
             $this->queuePacket($peer, $payload); $this->queueOk($peer);
             try { $connection->objectRestore(); $this->fail('Expected rollback SQL error'); }
-            catch (\EasySwoole\Mysqli\Exception\Exception $error) { $this->assertSame(1064, $error->getCode()); }
+            catch (\EasySwoole\Mysqli\Exception\Exception $error) {
+                $this->assertSame(1064, $error->getCode());
+                $this->assertStringContainsString('rollback failed', $error->getMessage());
+            }
             $this->assertTrue($connection->isInTransaction());
             $connection->objectRestore();
             $this->assertFalse($connection->isInTransaction());
@@ -394,12 +386,12 @@ final class ConnectionTest extends TestCase
 
 
     /** 使用已连接的真实协议 Socket，测试不依赖 MySQL 服务。 */
-    private function withConnected(callable $test, bool $inTransaction = false): void
+    private function withConnected(callable $test, bool $inTransaction = false, ?Connection $connection = null): void
     {
         [$socket, $peer] = swoole_coroutine_socketpair(AF_UNIX, SOCK_STREAM, 0);
         $config = new \EasySwoole\Mysqli\Config(['timeout' => 0.03]);
         $protocol = $this->createConnectedProtocol($config, $socket, $inTransaction);
-        $connection = new Connection($config);
+        $connection ??= new Connection($config);
         (new \ReflectionProperty(\EasySwoole\Mysqli\Client::class, 'mysqlClient'))->setValue($connection, $protocol);
         try { $test($connection, $peer); }
         finally { $connection->close(); $peer->close(); }

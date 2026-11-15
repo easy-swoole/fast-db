@@ -219,6 +219,12 @@ class RecycleContextConnection extends Connection
     public bool $transactionActive = false;
     public array $queries = [];
     public function isInTransaction(): bool { return $this->transactionActive; }
+
+    public function objectRestore(): void
+    {
+        if ($this->transactionActive) { $this->rollbackTransaction(); }
+    }
+
     public function rawQuery(string $query, ?float $timeout = null): bool|array
     {
         $this->queries[] = $query;

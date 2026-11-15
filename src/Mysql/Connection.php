@@ -125,13 +125,13 @@ class Connection extends Client implements ObjectInterface
     function objectRestore(): void
     {
         $protocol = $this->mysqlClient();
-        if ($protocol !== null && !$protocol->isConnected()) {
+        if ($protocol === null) { return; }
+        if (!$protocol->isConnected()) {
             // 会话已断开，直接关闭，由连接池在后续借用时淘汰。
             $this->close();
             return;
         }
-        // 强制回滚只适用于仍持有会话的连接。
-        if ($this->isInTransaction() || ($this->isForceRollback && $protocol !== null)) {
+        if ($protocol->inTransaction() || $this->isForceRollback) {
             // 不能把回滚失败的会话交给下一次借用，让连接池淘汰它。
             if ($this->rollbackTransaction() !== true) {
                 throw new RuntimeError('Failed to rollback connection during restore');
