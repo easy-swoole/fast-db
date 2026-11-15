@@ -11,7 +11,7 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests\Model;
 
-use EasySwoole\FastDb\RelationType;
+use EasySwoole\FastDb\Attributes\RelationType;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Property;

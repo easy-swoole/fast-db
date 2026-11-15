@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests;
 
-use EasySwoole\FastDb\RelationType;
+use EasySwoole\FastDb\Attributes\RelationType;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Property;
@@ -181,7 +181,9 @@ final class RelationPreloadCacheTest extends TestCase
     {
         $query = clone $parent->queryLimit()->__getQueryBuilder();
         $fields = $parent->queryLimit()->getFields()['fields'] ?? null;
-        return RelationPlan::buildLookup($query, (new $relation->targetEntity())->tableName(), $relation, $parent->id, $fields);
+        $plan = new RelationPlan($relation, (new $relation->targetEntity())->tableName(), $query, $fields,
+            false, $this->db->selectConnection(), $parent->id);
+        return $plan->buildLookup($query);
     }
     private function load(RelationLoader $loader, PreloadCacheParent $parent, Relate $relation, ?string $table = null): mixed
     {

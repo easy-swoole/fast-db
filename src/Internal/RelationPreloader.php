@@ -2,8 +2,7 @@
 
 namespace EasySwoole\FastDb\Internal;
 
-use EasySwoole\FastDb\RelationType;
-use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
+use EasySwoole\FastDb\Attributes\RelationType;
 use EasySwoole\FastDb\Beans\ListResult;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\FastDb;
@@ -16,7 +15,7 @@ final class RelationPreloader
 {
     private const BATCH_SIZE = 250;
 
-    public function load(AbstractEntity $source, array $parents, array $rows, array $relations,
+    public function load(string $parentClass, array $parents, array $rows, array $relations,
         bool $asArray, string $connectionName, array $hiddenFields, callable $execute, callable $hydrate, callable $prime): array
     {
         if ($parents === []) { return $parents; }
@@ -26,7 +25,7 @@ final class RelationPreloader
         try {
             return $this->attachResults(
                 $parents,
-                $this->collectPlans($source, $parents, $rows, $relations, $asArray, $connectionName, $hiddenFields),
+                $this->collectPlans($parentClass, $parents, $rows, $relations, $asArray, $connectionName, $hiddenFields),
                 $asArray,
                 $execute,
                 $hydrate,
@@ -38,13 +37,12 @@ final class RelationPreloader
     }
 
     /** 逐父解析显式配置，按实际 SQL 和参数合并可共享的查询。 */
-    private function collectPlans(AbstractEntity $source, array $parentResults, array $parentRows, array $relationMethods,
+    private function collectPlans(string $parentClass, array $parentResults, array $parentRows, array $relationMethods,
         bool $returnAsArray, string $parentQueryConnection, array $hiddenFields): array
     {
         $db = FastDb::getInstance();
         $groups = [];
         $parentPosition = 0;
-        $parentClass = $source::class;
         $metadata = ReflectionCache::getInstance();
         $parentFields = [];
         foreach ($relationMethods as $method) {
@@ -88,7 +86,7 @@ final class RelationPreloader
                 }
                 $tableName = $relationPlan->tableName;
                 $builder = $relationPlan->builder;
-                RelationPlan::checkPagination($builder, $relationPlan->relate->type, preload: true);
+                $relationPlan->checkPagination(preload: true);
                 $columns = $relationPlan->columns;
                 // 先生成不带具体父键的 SQL，配置和参数相同的父记录可共用一条批量查询。
                 $previewQuery = (clone $builder)->get($tableName, null, $columns);
@@ -98,7 +96,7 @@ final class RelationPreloader
                     // 用单个父键的查询计算缓存键，批次只保留键。
                     $cacheKey = RelationLoader::cacheKey(
                         $relationPlan->relate,
-                        RelationPlan::buildLookup(clone $builder, $tableName, $relationPlan->relate, $parentKeyValue, $columns),
+                        $relationPlan->buildLookup(clone $builder),
                         $relationPlan->returnAsArray,
                         $relationPlan->connectionName
                     );
@@ -163,7 +161,7 @@ final class RelationPreloader
     {
         $db = FastDb::getInstance();
         $matches = [];
-        $foreign = RelationPlan::foreignKey($plan->builder, $plan->tableName, $plan->relate->targetProperty);
+        $foreign = $plan->foreignKey();
         // 同一计划的所有批次使用同一连接，外层负责恢复调用前的选库。
         $db->selectConnection($plan->connectionName);
         foreach (array_chunk($values, self::BATCH_SIZE, true) as $batch) {

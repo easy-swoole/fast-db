@@ -2,14 +2,14 @@
 
 namespace EasySwoole\FastDb\Internal;
 
-use EasySwoole\FastDb\RelationType;
+use EasySwoole\FastDb\Attributes\RelationType;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\Mysqli\QueryBuilder\TableReference;
 
-/** @internal 根据显式关联声明生成的查询快照，不执行数据库查询。 */
+/** @internal 保存一次关联查询的配置，负责追加 FastDb 生成的关联条件。 */
 final class RelationPlan
 {
     public function __construct(
@@ -24,25 +24,25 @@ final class RelationPlan
     ) {}
 
     /** 限定 FastDb 自己添加的外键条件，调用方投影和附加条件保持原样。 */
-    public static function foreignKey(QueryBuilder $builder, string $tableName, string $field): string
+    public function foreignKey(): string
     {
-        $target = $builder instanceof EntityQueryBuilder
-            ? $builder->relationTableTarget($tableName)
-            : TableReference::resolve($tableName, '')['target'];
+        $target = $this->builder instanceof EntityQueryBuilder
+            ? $this->builder->relationTableTarget($this->tableName)
+            : TableReference::resolve($this->tableName, '')['target'];
         if ($target === null) {
             throw new \InvalidArgumentException('Relation requires an identifiable target table');
         }
-        return $target . '.' . TableReference::identifier($field);
+        return $target . '.' . TableReference::identifier($this->relate->targetProperty);
     }
 
     /** 只检查 FastDb 自己负责的分页与一对一基数规则。 */
-    public static function checkPagination(QueryBuilder $query, RelationType $type, bool $preload = false): void
+    public function checkPagination(bool $preload = false): void
     {
-        if (in_array('SQL_CALC_FOUND_ROWS', $query->getQueryOptions(), true)) {
+        if (in_array('SQL_CALC_FOUND_ROWS', $this->builder->getQueryOptions(), true)) {
             throw new RuntimeError('Relation does not support withTotalCount()');
         }
-        if ($query instanceof EntityQueryBuilder && $query->getLimitRowCount() !== null
-            && ($preload || $type === RelationType::One)) {
+        if ($this->builder instanceof EntityQueryBuilder && $this->builder->getLimitRowCount() !== null
+            && ($preload || $this->relate->type === RelationType::One)) {
             // 一对一要检测重复记录，批量预加载不能按整批截断。
             throw new RuntimeError($preload
                 ? 'Relation preload does not support limit()'
@@ -50,17 +50,17 @@ final class RelationPlan
         }
     }
 
-    /** 按需加载及预加载的缓存查询共用关联范围、字段和单条限制规则。 */
-    public static function buildLookup(QueryBuilder $query, string $tableName, Relate $relate,
-        mixed $selfValue, ?array $fields): QueryBuilder
+    /** 预加载传入构造器副本，保留原构造器用于生成批量 SQL。 */
+    public function buildLookup(QueryBuilder $query): QueryBuilder
     {
-        $foreignKey = self::foreignKey($query, $tableName, $relate->targetProperty);
+        $foreignKey = $this->foreignKey();
         $query->groupExistingWhere();
-        if ($selfValue === null) {
+        if ($this->selfValue === null) {
             $query->whereNull($foreignKey);
         } else {
-            $query->where($foreignKey, $selfValue);
+            $query->where($foreignKey, $this->selfValue);
         }
-        return $query->get($tableName, $relate->type === RelationType::One ? 2 : null, $fields);
+        $limit = $this->relate->type === RelationType::One ? 2 : null;
+        return $query->get($this->tableName, $limit, $this->columns);
     }
 }

@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests;
 
-use EasySwoole\FastDb\RelationType;
+use EasySwoole\FastDb\Attributes\RelationType;
 use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\FastDb;

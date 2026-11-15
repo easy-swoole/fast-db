@@ -2,8 +2,6 @@
 
 namespace EasySwoole\FastDb\Attributes;
 
-use EasySwoole\FastDb\RelationType;
-
 #[\Attribute(\Attribute::TARGET_METHOD)]
 class Relate
 {

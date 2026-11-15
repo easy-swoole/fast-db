@@ -2,7 +2,7 @@
 
 namespace EasySwoole\FastDb\Internal;
 
-use EasySwoole\FastDb\RelationType;
+use EasySwoole\FastDb\Attributes\RelationType;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Beans\ListResult;
@@ -30,8 +30,8 @@ final class RelationLoader
         $relate = $plan->relate;
         $query = $plan->builder;
         $returnAsArray = $plan->returnAsArray;
-        RelationPlan::checkPagination($query, $relate->type);
-        RelationPlan::buildLookup($query, $plan->tableName, $relate, $plan->selfValue, $plan->columns);
+        $plan->checkPagination();
+        $plan->buildLookup($query);
         $key = $relate->cacheResult || $this->preloaded !== []
             ? self::cacheKey($relate, $query, $returnAsArray, $plan->connectionName) : null;
         if ($key !== null && array_key_exists($key, $this->preloaded)) {

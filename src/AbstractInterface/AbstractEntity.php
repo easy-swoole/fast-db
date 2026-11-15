@@ -2,7 +2,7 @@
 
 namespace EasySwoole\FastDb\AbstractInterface;
 
-use EasySwoole\FastDb\RelationType;
+use EasySwoole\FastDb\Attributes\RelationType;
 use EasySwoole\FastDb\Attributes\Hook\Call;
 use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Beans\EntityReflection;
@@ -602,7 +602,7 @@ abstract class AbstractEntity implements \JsonSerializable
             ? ['fields' => array_keys($rows[array_key_first($rows)]), 'hideFields' => $hideFields] : [];
         $list = self::hydrateRows($rows, $parentQueryConnection, $returnAsArray, $hideFields, $inheritedOutput);
         if ($relations !== []) {
-            $list = (new RelationPreloader())->load($this, $list, $rows, $relations, $returnAsArray,
+            $list = (new RelationPreloader())->load(static::class, $list, $rows, $relations, $returnAsArray,
                 $parentQueryConnection, $hideFields,
                 fn (QueryBuilder $builder, string $connection) => $db->query($builder, connection: $connection, onQuery: $this->onQuery),
                 self::hydrateEntity(...),

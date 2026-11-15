@@ -116,23 +116,6 @@ class Connection extends Client implements ObjectInterface
         return $success;
     }
 
-    /** 断线或事务已丢失时直接关闭会话，后续借用检查会淘汰连接。 */
-    private function discardDisconnectedSession(): bool
-    {
-        $protocol = $this->mysqlClient();
-        if ($protocol !== null && !$protocol->isConnected()) {
-            $this->close();
-            return true;
-        }
-        return false;
-    }
-
-    private function shouldRollback(): bool
-    {
-        // 强制回滚只适用于仍持有会话的连接。
-        return $this->isInTransaction() || ($this->isForceRollback && $this->mysqlClient() !== null);
-    }
-
     function gc(): void
     {
         // 淘汰时直接关闭会话，归还后继续复用的连接才需要先执行回滚。
@@ -141,8 +124,14 @@ class Connection extends Client implements ObjectInterface
 
     function objectRestore(): void
     {
-        if ($this->discardDisconnectedSession()) { return; }
-        if ($this->shouldRollback()) {
+        $protocol = $this->mysqlClient();
+        if ($protocol !== null && !$protocol->isConnected()) {
+            // 会话已断开，直接关闭，由连接池在后续借用时淘汰。
+            $this->close();
+            return;
+        }
+        // 强制回滚只适用于仍持有会话的连接。
+        if ($this->isInTransaction() || ($this->isForceRollback && $protocol !== null)) {
             // 不能把回滚失败的会话交给下一次借用，让连接池淘汰它。
             if ($this->rollbackTransaction() !== true) {
                 throw new RuntimeError('Failed to rollback connection during restore');

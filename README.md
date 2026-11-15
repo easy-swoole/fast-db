@@ -1254,13 +1254,13 @@ class AuditedUser extends User
 
 ### 定义一对一和一对多关联
 
-`type` 使用 `EasySwoole\FastDb\RelationType` 枚举：`RelationType::One` 表示单条关联，`RelationType::Many` 表示多条关联。`type` 必填且为只读属性。构造参数顺序为 `targetEntity`、`targetProperty`、`type`，其余参数可按名称传入。`One` 只能调用 `relateOne()`，`Many` 只能调用 `relateMany()`；类型与调用不一致时，在执行查询和配置方法前直接抛出 `RuntimeError`。
+`type` 使用 `EasySwoole\FastDb\Attributes\RelationType` 枚举：`RelationType::One` 表示单条关联，`RelationType::Many` 表示多条关联。`type` 必填且为只读属性。构造参数顺序为 `targetEntity`、`targetProperty`、`type`，其余参数可按名称传入。`One` 只能调用 `relateOne()`，`Many` 只能调用 `relateMany()`；类型与调用不一致时，在执行查询和配置方法前直接抛出 `RuntimeError`。
 
 例如用户有一条 profile 和多条 order；目标实体要声明 `userId` 属性，数据库中需要对应字段：
 
 ```php
 use EasySwoole\FastDb\Attributes\Relate;
-use EasySwoole\FastDb\RelationType;
+use EasySwoole\FastDb\Attributes\RelationType;
 
 class RelatedUser extends User
 {
@@ -1353,7 +1353,7 @@ foreach ($rows as $row) {
 
 ```php
 use EasySwoole\FastDb\Attributes\Relate;
-use EasySwoole\FastDb\RelationType;
+use EasySwoole\FastDb\Attributes\RelationType;
 use EasySwoole\Mysqli\QueryBuilder;
 
 class PreloadUser extends RelatedUser
@@ -1491,7 +1491,7 @@ if ($user !== null) {
 
 ```php
 use EasySwoole\FastDb\Attributes\Relate;
-use EasySwoole\FastDb\RelationType;
+use EasySwoole\FastDb\Attributes\RelationType;
 
 class RelatedUser extends User
 {
