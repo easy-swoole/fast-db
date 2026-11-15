@@ -4,7 +4,7 @@
 
 FastDb 是面向 Swoole 协程环境的 MySQL 数据访问库，组合连接池、SQL 构建器和基于 PHP Attributes 的实体映射。可以在 EasySwoole 框架内使用，也可以独立使用。
 
-本文面向 `3.x` 分支，使用 `easyswoole/mysqli` ^5.1 和 `easyswoole/pool` 3.x，以当前 `src/` 和 `composer.json` 为准。实体 API 位于 `AbstractEntity`，数据库与连接管理位于 `FastDb`，SQL 构建能力由 `easyswoole/mysqli` 提供。实体查询使用 mysqli 5.1.4 引入的查询状态读取接口，已锁定较早版本的项目需先更新 `easyswoole/mysqli`。
+本文面向 `3.x` 分支，使用 `easyswoole/mysqli` ^5.1 和 `easyswoole/pool` 3.x，以当前 `src/` 和 `composer.json` 为准。实体 API 位于 `AbstractEntity`，数据库与连接管理位于 `FastDb`，SQL 构建能力由 `easyswoole/mysqli` 提供。实体查询使用 mysqli 5.1.6 的查询状态和总数设置接口，已锁定较早版本的项目需先更新 `easyswoole/mysqli`。
 
 ## 内部执行与实体状态
 
@@ -527,7 +527,7 @@ $total = $page->totalCount(); // 请求统计时为总数，否则 null。
 $currentSize = count($page); // 本页返回的数量。
 ```
 
-`page($page, $withTotalCount = false, $pageSize = 10)` 从第 1 页开始；偏移量为 `($page - 1) * $pageSize`。`limit($num, $withTotalCount = false)` 仅限制数量。
+`page($page, $withTotalCount = false, $pageSize = 10)` 从第 1 页开始，偏移量为 `($page - 1) * $pageSize`。`limit($num, $withTotalCount = false)` 只限制数量，不设置偏移量。每次调用都会设置本次查询是否统计总数，传 `false` 或省略该参数会关闭此前开启的统计。
 
 开启总数统计后，实体列表用 `SQL_CALC_FOUND_ROWS` 查询当前页。主查询及其回调正常返回后，列表立即在同一个会话执行 `SELECT FOUND_ROWS()`，再回填实体、预加载关联并通过 `ListResult::totalCount()` 返回总数。即使当前页为空，也会读取总数。
 

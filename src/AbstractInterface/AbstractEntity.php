@@ -20,6 +20,7 @@ use EasySwoole\FastDb\Internal\RelationPreloader;
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\FastDb\Utility\ReflectionCache;
 use EasySwoole\Mysqli\QueryBuilder;
+use EasySwoole\Mysqli\QueryBuilder\Pagination;
 use EasySwoole\Mysqli\QueryBuilder\SelectPlanner;
 use EasySwoole\Mysqli\QueryBuilder\TableReference;
 
@@ -149,7 +150,8 @@ abstract class AbstractEntity implements \JsonSerializable
             $queryTemplate = clone $selection;
             $tableName = $connectionName = null;
             for ($pageNumber = 1; ; $pageNumber++) {
-                $selection->page($pageNumber, false, $chunkSize);
+                // 内部翻页只更新 LIMIT，保留入口处的总数统计选项。
+                $selection->__getQueryBuilder()->limit(Pagination::offset($chunkSize, $pageNumber), $chunkSize);
                 $this->queryBuilder = $selection;
                 $page = $this->selectRows($selection, tableName: $tableName, connectionName: $connectionName);
                 // 回调可以切库或修改实体，后续页继续使用首个查询的数据源。
@@ -339,8 +341,8 @@ abstract class AbstractEntity implements \JsonSerializable
                 throw new \InvalidArgumentException('Entity update() does not support IGNORE; use QueryBuilder directly');
             }
             $properties = $selection->filterProperties($entityRef->allProperties(), builder: $query);
-            $data = $this->entityState->changes($this, $properties);
             [$primaryKeyName, $primaryKey] = $this->requirePrimaryKey($entityRef, 'update');
+            $data = $this->entityState->changes($this, $properties, $primaryKeyName, $primaryKey);
             if ($data === []) { return true; }
             // 将已有条件整体分组，保证调用方的 OR 也受原主键约束。
             $query->groupExistingWhere()->where($primaryKeyName, $primaryKey)->update($tableName, $data);

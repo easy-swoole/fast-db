@@ -226,6 +226,30 @@ final class EntityQueryBoundaryTest extends TestCase
         $this->assertNull(QueryBoundaryRecord::findRecord('trim'));
     }
 
+    public function testUpdateConvertsItsPrimaryKeyOnce(): void
+    {
+        $entity = new ConvertedKeyBoundaryRecord(['id' => 'trim', 'order' => 6]);
+        $key = new class('trim') extends ConvertedKey {
+            public int $conversions = 0;
+
+            public function toValue(): string
+            {
+                $this->conversions++;
+                return parent::toValue();
+            }
+        };
+        $entity->id = $key;
+
+        $this->assertTrue($entity->update());
+        $this->assertSame(1, $key->conversions);
+        $this->assertSame([], $this->client->queries);
+
+        $entity->order = 10;
+        $this->assertTrue($entity->update());
+        $this->assertSame(2, $key->conversions);
+        $this->assertSame([10, 'trim'], $this->client->queries[0]['parameters']);
+    }
+
     public function testAnEqualReplacementKeyCanUpdateAndDeleteWithoutChangingTheKey(): void
     {
         $entity = new ConvertedKeyBoundaryRecord(['id' => 'trim', 'order' => 6]);
@@ -376,6 +400,23 @@ final class EntityQueryBoundaryTest extends TestCase
         $entity->queryLimit()->where('id', 'missing');
         $this->assertSame(0.0, $entity->sum('order'));
         $this->assertSame(3, $entity->count());
+    }
+
+    public function testPageAndLimitCanTurnOffAnEarlierTotalCountRequest(): void
+    {
+        $entity = new QueryBoundaryRecord();
+        $entity->queryLimit()->orderBy('id', 'ASC')->page(1, true, 1)->page(2, false, 1);
+        $page = $entity->all();
+        $this->assertSame('other', $page->first()->id);
+        $this->assertNull($page->totalCount());
+        $this->assertStringEndsWith('LIMIT 1, 1', $this->client->queries[0]['sql']);
+
+        $entity->queryLimit()->orderBy('id', 'ASC')->page(1, true, 1)->limit(2);
+        $list = $entity->all();
+        $this->assertCount(2, $list);
+        $this->assertNull($list->totalCount());
+        $this->assertStringEndsWith('LIMIT 2', $this->client->queries[1]['sql']);
+        $this->assertSame(0, $this->client->countQueries);
     }
 
     public function testEntityListGetsTotalOnlyWhenRequested(): void

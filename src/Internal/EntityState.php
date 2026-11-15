@@ -39,13 +39,15 @@ final class EntityState
     }
 
     /** 数据库写入值与比较基准使用同一份转换结果。 */
-    public function changes(AbstractEntity $entity, array $properties): array
+    public function changes(AbstractEntity $entity, array $properties, ?string $primaryKeyName = null,
+        mixed $primaryKeyValue = null): array
     {
         $data = [];
         foreach ($properties as $property) {
             $key = $property->name;
             $old = $this->baseline[$key];
-            $current = FieldCodec::compare($entity->{$key} ?? null);
+            // 主键校验已经取得数据库值，比较时直接复用，避免重复执行转换器。
+            $current = $key === $primaryKeyName ? $primaryKeyValue : FieldCodec::compare($entity->{$key} ?? null);
             if ($current !== $old) {
                 $data[$key] = $current;
             }

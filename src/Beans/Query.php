@@ -53,9 +53,7 @@ class Query
         } else {
             $builder->limit(Pagination::offset($pageSize, $page), $pageSize);
         }
-        if($withTotalCount){
-            $builder->withTotalCount();
-        }
+        $builder->withTotalCount($withTotalCount);
         return $this;
     }
 

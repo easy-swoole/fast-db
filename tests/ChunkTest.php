@@ -49,6 +49,24 @@ final class ChunkTest extends TestCase
         });
     }
 
+    public function testOffsetPagesKeepTheExplicitTotalCountOption(): void
+    {
+        $this->withDatabase([
+            [['id' => 1], ['id' => 2]],
+            [['id' => 3]],
+        ], function (array &$queries, array &$rawQueries): void {
+            $entity = new ChunkEntity();
+            $entity->queryLimit()->limit(10, true);
+            $entity->chunk(static function (): void {}, 2);
+
+            $this->assertSame(['SELECT FOUND_ROWS() as count', 'SELECT FOUND_ROWS() as count'], $rawQueries);
+            foreach ($queries as $page => [$sql, , $options]) {
+                $this->assertStringContainsString('LIMIT ' . ($page * 2) . ', 2', $sql);
+                $this->assertContains('SQL_CALC_FOUND_ROWS', $options);
+            }
+        });
+    }
+
     public function testExactMultipleStopsAfterTheEmptyPage(): void
     {
         $this->withDatabase([
