@@ -23,7 +23,20 @@ FastDb 是面向 Swoole 协程环境的 MySQL 数据访问库，组合连接池�
 
 `QueryResult` 保存查询执行结果及查询执行阶段耗时；连接获取独立记录为 `QueryStack` 中的 `connectionAcquire` 事件，使用同一个 `duration` 字段表示该事件耗时。查询栈默认每协程只保留最近 256 条事件，可按实例调整；未配置查询回调或查询栈时，不创建诊断组件。
 
-FastDb 通过 `FastDb::getInstance()` 获取固定实例并长期复用。需要其他独立管理器时，由业务定义子类并按需初始化。
+FastDb 通过 `FastDb::getInstance()` 获取固定实例并长期复用。需要通过 `getInstance()` 获取独立的管理器时，在业务子类中重新引入 `Singleton`，让子类单独保存自己的实例。
+
+```php
+use EasySwoole\Component\Singleton;
+use EasySwoole\FastDb\FastDb;
+
+class ReportingDb extends FastDb
+{
+    use Singleton;
+}
+
+$mainDb = FastDb::getInstance();
+$reportingDb = ReportingDb::getInstance();
+```
 
 `Query` 仅在首次添加 SQL 条件或显式读取底层构造器时创建 `QueryBuilder`；只配置输出字段或序列化实体时无需分配 SQL 构造器。序列化保留当前 Query 及其配置；插入结束后消费本次查询配置，只保留 `hideFields()`。需要保留隐藏字段时会创建新的 Query，外部持有的旧 Query 和构造器引用不会被重新绑定。克隆实体时查询所有者和可变配置继续独立。
 

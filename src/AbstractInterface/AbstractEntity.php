@@ -110,11 +110,14 @@ abstract class AbstractEntity implements \JsonSerializable
         }
         // 查询行决定已加载的字段，初始化默认值不能补齐投影中省略的键。
         $properties = ReflectionCache::getInstance()->parseEntity($class)->allProperties();
+        $providedFields = [];
+        foreach ($row as $field => $value) {
+            if (isset($properties[$field])) {
+                $providedFields[$field] = $value !== null;
+            }
+        }
         $entity->entityState->hydrated = true;
-        $entity->entityState->providedFields = array_map(
-            static fn (mixed $value): bool => $value !== null,
-            array_intersect_key($row, $properties)
-        );
+        $entity->entityState->providedFields = $providedFields;
         return $entity;
     }
 
@@ -748,7 +751,7 @@ abstract class AbstractEntity implements \JsonSerializable
                     return [$table, $db->selectConnection()];
                 } finally { $db->selectConnection($visible); }
             },
-            static fn (QueryBuilder $query, string $connection) => FastDb::getInstance()->query($query, onQuery: $onQuery, connection: $connection)->getAffectedRows());
+            static fn (QueryBuilder $query, string $connection) => $db->query($query, onQuery: $onQuery, connection: $connection)->getAffectedRows());
     }
 
     private function resetQueryOptions():void
