@@ -1616,7 +1616,7 @@ flags 不接受整数、枚举的 `value` 或错误的枚举类型；这些输�
 | `ChainNoRelease` | `AND CHAIN NO RELEASE` | 开始新事务并保留连接 |
 | `NoChainNoRelease` | `AND NO CHAIN NO RELEASE` | 不开始新事务，保留连接；FastDb 默认值 |
 
-使用默认 `NoChainNoRelease` 可明确结束事务并保留池内连接。Chain / ChainNoRelease 会开始新事务，`Release` / `NoChainRelease` 成功时会关闭连接。FastDb 先保存事务 SQL 的执行结果和耗时，再淘汰该池连接，最后通知查询观察者。同一协程随后执行独立查询时按需借用新连接。实际事务状态由 Connection 直接读取底层协议。如果会话设置了 `completion_type=2`，请使用显式 `Release` 或 `NoChainRelease` 让 FastDb 清理池内借用，或用默认的 `NoChainNoRelease` 保留连接。使用 `None` 等会继承服务端默认释放行为的选项时，由调用者负责该会话的回收。
+使用默认 `NoChainNoRelease` 可明确结束事务并保留池内连接。Chain / ChainNoRelease 会开始新事务，`Release` / `NoChainRelease` 成功时会关闭连接。FastDb 先保存事务 SQL 的执行结果和耗时。池内连接由池淘汰并关闭，显式传入的独立连接直接关闭，之后通知查询观察者。同一协程随后执行独立查询时按需借用新连接。实际事务状态由 Connection 直接读取底层协议。如果会话设置了 `completion_type=2`，请使用显式 `Release` 或 `NoChainRelease` 让 FastDb 清理池内借用，或用默认的 `NoChainNoRelease` 保留连接。使用 `None` 等会继承服务端默认释放行为的选项时，由调用者负责该会话的回收。
 
 FastDb 查询和事务执行超时抛出 `EasySwoole\FastDb\Exception\TimeoutException`，驱动会关闭失步连接。提交超时可能发生在服务端已提交、客户端尚未收到响应时，结果需要结合业务记录核实，不能直接重试提交。事务日志和查询栈中的 SQL 包含 flags 对应的完整语句，例如 `START TRANSACTION READ ONLY`、`COMMIT AND NO CHAIN NO RELEASE`。
 
@@ -1947,7 +1947,7 @@ $db->setOnQuery(function (QueryResult $result): void {
 });
 ```
 
-查询执行阶段的开始时间在获得连接之后记录，执行耗时不包含获取连接；获取阶段另记为独立查询栈事件。`query()` / `rawQuery()` 结束时间在执行结束或失败后、调用日志回调之前记录，不包含日志回调耗时。begin/commit/rollback 实际执行后，无论成功、SQL 错误或超时，都进入日志回调和查询栈。事务 rawSql 与 flags 生成的执行 SQL 一致。全局 `onQuery` 只接收查询执行结果，连接获取成功或失败均不调用它。
+查询执行阶段的开始时间在获得连接之后记录，执行耗时不包含获取连接；获取阶段另记为独立查询栈事件。`query()` / `rawQuery()` 结束时间在执行结束或失败后、调用日志回调之前记录，不包含日志回调耗时。begin/commit/rollback 实际执行后，无论成功、SQL 错误或超时，都进入日志回调和查询栈。事务日志、查询栈和驱动执行共用由 flags 生成的同一条 SQL。全局 `onQuery` 只接收查询执行结果，连接获取成功或失败均不调用它。
 
 `query()` / `rawQuery()` 和事务执行抛异常时，回调中的 `getException()` 返回本条 SQL 的驱动执行异常，`getResult()` / `getResultOne()` 为 null。成功执行时 getException() 为 null。回调抛出的异常直接向调用方传播，并中止后续通知。SQL 失败的异常保存在该条 SQL 的查询记录中，观察回调正常返回后向调用方抛出。
 

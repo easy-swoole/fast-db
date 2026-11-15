@@ -70,7 +70,7 @@ final class ConnectionNameTest extends TestCase
         $client->method('isInTransaction')->willReturn(in_array($operation, ['commit', 'rollback'], true));
         $db = $this->database($client);
         $failure = new \RuntimeException('SQL error');
-        $method = in_array($operation, ['begin', 'commit', 'rollback'], true) ? $operation . 'Transaction' : $operation;
+        $method = $operation === 'query' ? 'query' : 'rawQuery';
         $client->method($method)->willReturnCallback(static function () use ($db, $fails, $failure): bool {
             $db->selectConnection('other');
             if ($fails) { throw $failure; }

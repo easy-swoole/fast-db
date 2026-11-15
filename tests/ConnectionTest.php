@@ -218,10 +218,8 @@ final class ConnectionTest extends TestCase
     public function testTransactionFlagsRejectIntegersAndWrongEnumTypes(): void
     {
         $connection = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()
-            ->onlyMethods(['beginTransaction', 'commitTransaction', 'rollbackTransaction', 'isInTransaction'])->getMock();
-        foreach (['begin', 'commit', 'rollback'] as $operation) {
-            $connection->expects($this->never())->method($operation . 'Transaction');
-        }
+            ->onlyMethods(['rawQuery', 'isInTransaction'])->getMock();
+        $connection->expects($this->never())->method('rawQuery');
         $connection->method('isInTransaction')->willReturn(true);
         $db = new FastDb();
         foreach (['begin', 'commit', 'rollback'] as $operation) {
@@ -251,7 +249,8 @@ final class ConnectionTest extends TestCase
                     ->onlyMethods(['rawQuery', 'close', 'isInTransaction'])->getMock();
                 $connection->method('isInTransaction')->willReturn($operation !== 'begin');
                 $connection->expects($this->once())->method('rawQuery')->with($expected, 0.05)->willReturn(true);
-                $connection->method('close')->willReturn(true);
+                $releases = $operation !== 'begin' && $flags->releasesConnection();
+                $connection->expects($releases ? $this->once() : $this->never())->method('close')->willReturn(true);
                 $db = (new FastDb())->configureQueryStack(true);
                 $observed = null;
                 $db->setOnQuery(static function (\EasySwoole\FastDb\Mysql\QueryResult $result) use (&$observed): void {
@@ -346,8 +345,8 @@ final class ConnectionTest extends TestCase
         $failure = new \RuntimeException('transaction execution failed');
         $observerFailure = new \RuntimeException('logger failed');
         $connection = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()
-            ->onlyMethods([$operation . 'Transaction', 'isInTransaction'])->getMock();
-        $connection->expects($this->once())->method($operation . 'Transaction')->willThrowException($failure);
+            ->onlyMethods(['rawQuery', 'isInTransaction'])->getMock();
+        $connection->expects($this->once())->method('rawQuery')->willThrowException($failure);
         $connection->method('isInTransaction')->willReturn($operation !== 'begin');
         $db = (new FastDb())->configureQueryStack(true);
         $called = 0;

@@ -163,8 +163,8 @@ class FastDb
 
     private function startTransaction(Connection $client, TransactionStartFlags $flags, ?float $timeout): bool
     {
-        return $this->execute($client, static fn () => $client->beginTransaction($flags, $timeout),
-            null, $flags->toSql())->getResult() === true;
+        $sql = $flags->toSql();
+        return $this->execute($client, static fn () => $client->rawQuery($sql, $timeout), sql: $sql)->getResult() === true;
     }
 
     public function commit(?Connection $client = null,
@@ -194,12 +194,13 @@ class FastDb
         TransactionCompletionFlags $flags, ?float $timeout): bool
     {
         $sql = ($rollback ? 'ROLLBACK' : 'COMMIT') . $flags->toSqlSuffix();
-        $result = $this->executeResult($client, static fn () => $rollback
-            ? $client->rollbackTransaction($flags, $timeout)
-            : $client->commitTransaction($flags, $timeout), null, $sql);
-        if ($result->getResult() === true && $flags->releasesConnection() && isset($client->connectionName)) {
-            // 先保存事务 SQL 的结果和耗时，再淘汰连接，最后通知观察者。
-            $this->recycleConnection(Coroutine::getCid(), $client->connectionName, $client, discard: true);
+        $result = $this->executeResult($client, static fn () => $client->rawQuery($sql, $timeout), null, $sql);
+        if ($result->getResult() === true && $flags->releasesConnection()) {
+            // 先保存 SQL 结果；池内连接由池关闭，独立连接由本次调用关闭。
+            if (!isset($client->connectionName)
+                || !$this->recycleConnection(Coroutine::getCid(), $client->connectionName, $client, discard: true)) {
+                $client->close();
+            }
         }
         return $this->publishQueryResult($result)->getResult() === true;
     }
@@ -296,10 +297,11 @@ class FastDb
         $this->diagnostics?->clear($cid);
     }
 
-    private function recycleConnection(int $cid, string $name, Connection $client, bool $discard = false): void
+    /** 返回连接是否由当前协程登记在池中。 */
+    private function recycleConnection(int $cid, string $name, Connection $client, bool $discard = false): bool
     {
         // 回调可能已经归还连接，只有当前登记的连接才由本次流程归还。
-        if (($this->currentConnection[$cid][$name] ?? null) !== $client) { return; }
+        if (($this->currentConnection[$cid][$name] ?? null) !== $client) { return false; }
         unset($this->currentConnection[$cid][$name]);
         if ($this->currentConnection[$cid] === []) { unset($this->currentConnection[$cid]); }
         $pool = $this->pools[$name];
@@ -312,6 +314,7 @@ class FastDb
         } catch (\Throwable) {
             // 连接池负责处理归还失败。隔离异常，避免清理覆盖业务结果或中断其他连接归还。
         }
+        return true;
     }
 
     private function registerContextCleanup(int $cid): void

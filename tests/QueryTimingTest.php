@@ -75,13 +75,8 @@ final class QueryTimingTest extends TestCase
     {
         $client = $this->createStub(Connection::class);
         $client->method('isInTransaction')->willReturn($operation !== 'begin');
-        $method = match ($operation) {
-            'begin' => 'beginTransaction',
-            'commit' => 'commitTransaction',
-            'rollback' => 'rollbackTransaction',
-        };
         $failure = new \RuntimeException('transaction failure');
-        $client->method($method)->willReturnCallback(function () use ($fails, $failure) {
+        $client->method('rawQuery')->willReturnCallback(function () use ($fails, $failure) {
             usleep(20000);
             if ($fails) {
                 throw $failure;

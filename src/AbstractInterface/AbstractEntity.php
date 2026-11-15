@@ -628,14 +628,10 @@ abstract class AbstractEntity implements \JsonSerializable
     private static function hydrateRows(array $rows, string $queryConnection, bool $returnAsArray = false,
         array $hideFields = [], array $inheritedOutput = []): array
     {
+        if ($returnAsArray && $hideFields === []) { return $rows; }
         if ($rows === []) { return []; }
-        $list = [];
-        if ($returnAsArray && $hideFields === []) {
-            // 按值重建列表，保留重编号、解引用和初始迭代位置的既有语义。
-            foreach ($rows as $item) { $list[] = $item; }
-            return $list;
-        }
 
+        $list = [];
         $db = $returnAsArray ? null : FastDb::getInstance();
         // 回填使用查询连接，避免实体初始化时的选库影响调用方。
         $connectionToRestore = $db?->selectConnection();

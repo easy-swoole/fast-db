@@ -10,7 +10,6 @@ use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\Mysqli\Config;
 use EasySwoole\Mysqli\QueryBuilder;
-use EasySwoole\Mysqli\Transaction\TransactionCompletionFlags;
 use EasySwoole\Mysqli\Transaction\TransactionStartFlags;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -277,9 +276,6 @@ class TransactionScopeSqliteClient extends Connection
         return $this->executeSql($builder->getLastPrepareQuery(), $builder->getLastBindParams(), $timeout);
     }
     public function rawQuery(string $query, ?float $timeout = null): bool|array { return $this->executeSql($query, [], $timeout); }
-    public function beginTransaction(TransactionStartFlags $flags, ?float $timeout = null): bool { return $this->rawQuery($flags->toSql(), $timeout) === true; }
-    public function commitTransaction(TransactionCompletionFlags $flags = TransactionCompletionFlags::NoChainNoRelease, ?float $timeout = null): bool { return $this->rawQuery('COMMIT' . $flags->toSqlSuffix(), $timeout) === true; }
-    public function rollbackTransaction(TransactionCompletionFlags $flags = TransactionCompletionFlags::NoChainNoRelease, ?float $timeout = null): bool { return $this->rawQuery('ROLLBACK' . $flags->toSqlSuffix(), $timeout) === true; }
     public function close(): bool
     {
         if ($this->database->inTransaction()) { $this->database->rollBack(); }

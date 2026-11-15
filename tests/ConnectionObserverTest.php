@@ -337,7 +337,12 @@ final class ConnectionObserverTest extends TestCase
     {
         $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
             $pool = $this->createMock(Pool::class);
-            $pool->expects($this->once())->method('unsetObj')->with($connection)->willReturn(true);
+            $pool->expects($this->once())->method('unsetObj')->with($connection)->willReturnCallback(
+                static function (Connection $client): bool {
+                    $client->gc();
+                    return true;
+                }
+            );
             (new \ReflectionProperty(FastDb::class, 'pools'))->setValue($db, ['default' => $pool]);
             $failure = new \RuntimeException('release observer');
             $db->setOnQuery(function () use ($connection, $failure): void {
@@ -361,6 +366,7 @@ final class ConnectionObserverTest extends TestCase
             $pool->expects($this->once())->method('unsetObj')->with($connection)->willReturnCallback(
                 static function (Connection $client) use (&$discardStarted): bool {
                     $discardStarted = microtime(true);
+                    $client->gc();
                     (new \ReflectionProperty(Client::class, 'lastAffectRows'))->setValue($client, null);
                     return true;
                 }

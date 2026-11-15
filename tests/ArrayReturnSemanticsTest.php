@@ -37,27 +37,14 @@ final class ArrayReturnSemanticsTest extends TestCase
         }
     }
 
-    public function testPackedRowsStartAtTheFirstRowRegardlessOfTheSourcePointer(): void
+    public function testArrayResultPreservesTheDriverRowOrder(): void
     {
-        $rows = [['id' => 1], ['id' => 2], ['id' => 3]];
-        next($rows);
+        $rows = [['id' => 2], ['id' => 1], ['id' => 3]];
         $result = $this->all($rows);
 
-        $iterator = $result->getIterator();
-        $this->assertSame(['id' => 1], $iterator->current());
-        $this->assertSame(0, $iterator->key());
-        $this->assertSame([['id' => 1], ['id' => 2], ['id' => 3]], $result->list());
-        $this->assertSame(1, key($rows));
-    }
-
-    public function testSparseAndNamedRowsAreRenumberedInTheirOriginalOrder(): void
-    {
-        $rows = [10 => ['id' => 2], 'custom' => ['id' => 1], 30 => ['id' => 3]];
-        $result = $this->all($rows, []);
-
-        $this->assertSame([['id' => 2], ['id' => 1], ['id' => 3]], $result->list());
-        $this->assertSame(['id' => 2], $result->getIterator()->current());
-        $this->assertSame([10, 'custom', 30], array_keys($rows));
+        $this->assertSame($rows, $result->list());
+        $this->assertSame($rows[0], $result->getIterator()->current());
+        $this->assertSame([], $this->all([])->list());
     }
 
     public function testNestedIterationUsesIndependentIteratorsAndPreservesKeys(): void
@@ -74,18 +61,6 @@ final class ArrayReturnSemanticsTest extends TestCase
             'second' => [10 => 3, 'second' => 4, 30 => 5],
             30 => [10 => 4, 'second' => 5, 30 => 6],
         ], $pairs);
-    }
-
-    public function testRowReferencesAreDetachedFromTheReturnedList(): void
-    {
-        $row = ['id' => 1];
-        $rows = [&$row, ['id' => 2]];
-        $result = $this->all($rows);
-        $row = ['id' => 99];
-
-        $this->assertSame([['id' => 1], ['id' => 2]], $result->list());
-        $result[1] = ['id' => 3];
-        $this->assertSame(['id' => 2], $rows[1]);
     }
 
     public function testHiddenFieldsAreRemovedWithoutChangingSourceRows(): void
