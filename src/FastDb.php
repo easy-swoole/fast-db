@@ -138,7 +138,9 @@ class FastDb
             $value = $callback($this);
         } catch (\Throwable $error) {
             if ($client->isInTransaction()) {
-                try { $this->completeTransaction(true, $client, TransactionCompletionFlags::NoChainNoRelease, $timeout); } catch (\Throwable) {
+                try {
+                    $this->executeTransactionCompletion(true, $client, TransactionCompletionFlags::NoChainNoRelease, $timeout);
+                } catch (\Throwable) {
                     // 清理失败时保留触发回滚的原异常。
                 }
             }
@@ -185,6 +187,12 @@ class FastDb
         if ($client === null || (!$client->isInTransaction() && !$client->mysqlClient()?->isTransactionLost())) {
             return true;
         }
+        return $this->executeTransactionCompletion($rollback, $client, $flags, $timeout);
+    }
+
+    private function executeTransactionCompletion(bool $rollback, Connection $client,
+        TransactionCompletionFlags $flags, ?float $timeout): bool
+    {
         $sql = ($rollback ? 'ROLLBACK' : 'COMMIT') . $flags->toSqlSuffix();
         $result = $this->executeResult($client, static fn () => $rollback
             ? $client->rollbackTransaction($flags, $timeout)

@@ -161,6 +161,9 @@ final class RelationPreloader
         $db = FastDb::getInstance();
         $matches = [];
         $foreign = $plan->foreignKey();
+        $projection = $plan->columns ?? $plan->builder->getField() ?? ['*'];
+        // 裸 * 已包含派生表的匹配索引，其他投影需要显式追加。
+        $appendParentIndex = !in_array('*', $projection, true);
         // 同一计划的所有批次使用同一连接，外层负责恢复调用前的选库。
         $db->selectConnection($plan->connectionName);
         foreach (array_chunk($values, self::BATCH_SIZE, true) as $batch) {
@@ -181,9 +184,10 @@ final class RelationPreloader
             }
             $keys = QueryBuilder::subQuery($alias)->raw(implode(' UNION ALL ', $sql));
             $builder = clone $plan->builder;
-            // 保留调用方投影或 mysqli 的默认通配符，只追加内部匹配列。
-            $columns = $plan->columns ?? $builder->getField() ?? ['*'];
-            $columns[] = QueryBuilder::rawExpression($parentIndex . ' AS ' . $quotedIndexName);
+            $columns = $projection;
+            if ($appendParentIndex) {
+                $columns[] = QueryBuilder::rawExpression($parentIndex . ' AS ' . $quotedIndexName);
+            }
             // 派生表只承载数字位置；键仍作为常量参数比较，保留类型及 collation 规则。
             $builder->join($keys, QueryBuilder::rawExpression('(' . implode(' OR ', $conditions) . ')', $parameters), 'INNER');
             $builder->groupExistingWhere()->whereGroup(static function (QueryBuilder $query) use ($batch, $foreign): void {

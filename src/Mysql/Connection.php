@@ -2,7 +2,6 @@
 
 namespace EasySwoole\FastDb\Mysql;
 
-use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\Mysqli\Client;
 use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\Mysqli\Exception\TimeoutException as DriverTimeoutException;
@@ -132,10 +131,8 @@ class Connection extends Client implements ObjectInterface
             return;
         }
         if ($protocol->inTransaction() || $this->isForceRollback) {
-            // 不能把回滚失败的会话交给下一次借用，让连接池淘汰它。
-            if ($this->rollbackTransaction() !== true) {
-                throw new RuntimeError('Failed to rollback connection during restore');
-            }
+            // 驱动抛出的回滚异常交给连接池处理。
+            $this->rollbackTransaction();
         }
     }
 

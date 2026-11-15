@@ -539,7 +539,7 @@ final class RelationPreloadTest extends TestCase
     public function testDefaultPreloadProjectionUsesTheWildcardAndOnlyReturnsUserColumns(): void
     {
         $parents = $this->parents('arrayChildren');
-        $this->assertMatchesRegularExpression('/^SELECT\s+\*,\s+/', $this->connection->queries[1]['sql']);
+        $this->assertMatchesRegularExpression('/^SELECT\s+\*\s+FROM\b/', $this->connection->queries[1]['sql']);
         $this->assertSame(['id', 'parent_id', 'group_code', 'name', 'payload'], array_keys($parents[0]->arrayChildren()->first()));
     }
 

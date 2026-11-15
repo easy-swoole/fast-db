@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests;
 
-use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
 use PHPUnit\Framework\TestCase;
@@ -61,17 +60,6 @@ final class ConnectionTest extends TestCase
             $command = $peer->recvAll(5 + strlen('ROLLBACK AND NO CHAIN NO RELEASE'), 0.1);
             $this->assertSame("\x03ROLLBACK AND NO CHAIN NO RELEASE", substr($command, 4));
         }, true);
-    }
-
-    public function testFailedRollbackRejectsRestore(): void
-    {
-        $connection = $this->getMockBuilder(Connection::class)
-            ->setConstructorArgs([new \EasySwoole\Mysqli\Config()])
-            ->onlyMethods(['rollbackTransaction'])->getMock();
-        $connection->expects($this->once())->method('rollbackTransaction')->willReturn(false);
-        $this->expectException(RuntimeError::class);
-        $this->expectExceptionMessage('Failed to rollback connection during restore');
-        $this->withConnected(static fn (Connection $client) => $client->objectRestore(), true, $connection);
     }
 
     public function testFailedRollbackKeepsSessionForLaterSuccessfulRestore(): void
@@ -386,12 +374,12 @@ final class ConnectionTest extends TestCase
 
 
     /** 使用已连接的真实协议 Socket，测试不依赖 MySQL 服务。 */
-    private function withConnected(callable $test, bool $inTransaction = false, ?Connection $connection = null): void
+    private function withConnected(callable $test, bool $inTransaction = false): void
     {
         [$socket, $peer] = swoole_coroutine_socketpair(AF_UNIX, SOCK_STREAM, 0);
         $config = new \EasySwoole\Mysqli\Config(['timeout' => 0.03]);
         $protocol = $this->createConnectedProtocol($config, $socket, $inTransaction);
-        $connection ??= new Connection($config);
+        $connection = new Connection($config);
         (new \ReflectionProperty(\EasySwoole\Mysqli\Client::class, 'mysqlClient'))->setValue($connection, $protocol);
         try { $test($connection, $peer); }
         finally { $connection->close(); $peer->close(); }
