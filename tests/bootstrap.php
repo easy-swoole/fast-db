@@ -12,7 +12,6 @@ define('MYSQL_CONFIG', [
     'database' => getenv('FAST_DB_TEST_DATABASE') ?: 'test',
     'timeout' => 5.0,
     'charset' => 'utf8mb4',
-    'autoPing' => 5,
     'name' => 'default',
     'intervalCheckTime' => 0,
     'maxIdleTime' => 15,

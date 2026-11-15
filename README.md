@@ -257,7 +257,8 @@ use EasySwoole\Mysqli\QueryBuilder;
 | `compress` | bool | `false` | 请求 MySQL 协议压缩，需服务端支持 |
 | `name` | string | `default` | 连接池名称 |
 | `isForceRollback` | bool | `false` | 归还仍有会话的连接时尝试回滚，可用 `setForceRollback()` 设置。配置不会因一次回收被清除 |
-| `autoPing` | int | `5` | 保留字段，不控制当前驱动的自动 ping 周期；连接检查由 `beforeUse()` / `intervalCheck()` 执行 |
+
+建连和 `testDb()` 使用相同的驱动参数，包括数据库地址、账号、连接选项和 TLS。连接池参数直接由连接池读取。
 
 配置类型直接由属性声明处理，例如整数 `timeout => 3` 会保存为 float。`timeout` 和 `maxConnectTime` 在实际操作时必须大于零；类型声明本身不校验正数。使用真正的布尔值设置 `compress`。
 

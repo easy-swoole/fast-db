@@ -10,7 +10,6 @@ use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\Pool;
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\Mysqli\Client;
-use EasySwoole\Mysqli\Config as MysqliConfig;
 use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\Mysqli\Transaction\TransactionCompletionFlags;
 use EasySwoole\Mysqli\Transaction\TransactionStartFlags;
@@ -75,7 +74,7 @@ class FastDb
     {
         $config = $this->getConfig($connectionName);
         if ($config === false) { throw new RuntimeError("connection {$connectionName} no register yet"); }
-        $client = new Client(new MysqliConfig($config->toArray()));
+        $client = new Client($config->toMysqliConfig());
         $connect = static function () use ($client): bool {
             try {
                 return $client->connect();

@@ -148,12 +148,12 @@ final class ConnectionTest extends TestCase
     public function testMysqliConfigReceivesTimeoutSettings(): void
     {
         $config = new \EasySwoole\FastDb\Config(['timeout' => 7, 'maxConnectTime' => 8, 'compress' => true]);
-        $driver = new \EasySwoole\Mysqli\Config($config->toArray());
+        $driver = $config->toMysqliConfig();
         $this->assertSame(7.0, $driver->getTimeout());
         $this->assertSame(8.0, $driver->getMaxConnectTime());
         $this->assertTrue($driver->isCompress());
         $config->setMaxConnectTime(9);
-        $this->assertSame(9.0, (new \EasySwoole\Mysqli\Config($config->toArray()))->getMaxConnectTime());
+        $this->assertSame(9.0, $config->toMysqliConfig()->getMaxConnectTime());
     }
 
     public function testTestDbPreservesConnectionFailure(): void

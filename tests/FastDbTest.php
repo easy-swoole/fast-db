@@ -27,7 +27,6 @@ final class FastDbTest extends BaseTestCase
         'database'          => 'error',
         'timeout'           => 5,
         'charset'           => 'utf8mb4',
-        'autoPing'          => 5,
         'name'              => self::ERROR_NAME,
         'intervalCheckTime' => 0,
         'maxIdleTime'       => 15,
@@ -86,6 +85,22 @@ final class FastDbTest extends BaseTestCase
         } catch (\EasySwoole\Mysqli\Exception\Exception $error) {
             $this->assertSame(1045, $error->getCode());
             $this->assertStringContainsString('Access denied', $error->getMessage());
+        }
+    }
+
+    public function testDriverReceivesOnlyItsConfigFields(): void
+    {
+        $config = new class(MYSQL_CONFIG) extends Config {
+            protected string $poolTag = 'reporting';
+        };
+        $fastDb = (new FastDb())->addDb($config);
+        try {
+            $this->assertSame('reporting', $fastDb->getConfig()->toArray()['poolTag']);
+            $this->assertTrue($fastDb->testDb());
+            $this->assertSame(1, $fastDb->rawQuery('SELECT 1 AS value')->getResultOne()['value']);
+        } finally {
+            $fastDb->recycleContext();
+            $fastDb->reset();
         }
     }
 

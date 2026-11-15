@@ -2,6 +2,7 @@
 
 namespace EasySwoole\FastDb;
 
+use EasySwoole\Mysqli\Config as MysqliConfig;
 use EasySwoole\Mysqli\TlsMode;
 use EasySwoole\Mysqli\TlsVersion;
 
@@ -14,7 +15,6 @@ class Config extends \EasySwoole\Pool\Config
     protected string $database = '';
     protected int $port = 3306;
     protected string $charset = 'utf8mb4';
-    protected int $autoPing = 5;
     protected float $timeout = 3.0;
     protected float $maxConnectTime = 5.0;
     protected bool $compress = false;
@@ -145,22 +145,6 @@ class Config extends \EasySwoole\Pool\Config
         $this->charset = $charset;
     }
 
-    /**
-     * @return int
-     */
-    public function getAutoPing(): int
-    {
-        return $this->autoPing;
-    }
-
-    /**
-     * @param int $autoPing
-     */
-    public function setAutoPing(int $autoPing): void
-    {
-        $this->autoPing = $autoPing;
-    }
-
     public function getTimeout(): float { return $this->timeout; }
     public function setTimeout(float $timeout): void { $this->timeout = $timeout; }
     public function getMaxConnectTime(): float { return $this->maxConnectTime; }
@@ -193,6 +177,30 @@ class Config extends \EasySwoole\Pool\Config
     public function getTlsVersions(): array { return $this->tlsVersions; }
     /** @param array<array-key, TlsVersion|string> $versions */
     public function setTlsVersions(array $versions): void { $this->tlsVersions = $versions; }
+
+    /** @internal 建连时只向 mysqli 传入驱动参数。 */
+    public function toMysqliConfig(): MysqliConfig
+    {
+        return new MysqliConfig([
+            'host' => $this->host,
+            'user' => $this->user,
+            'password' => $this->password,
+            'database' => $this->database,
+            'port' => $this->port,
+            'charset' => $this->charset,
+            'timeout' => $this->timeout,
+            'maxConnectTime' => $this->maxConnectTime,
+            'compress' => $this->compress,
+            'tlsMode' => $this->tlsMode,
+            'tlsCaFile' => $this->tlsCaFile,
+            'tlsCaPath' => $this->tlsCaPath,
+            'tlsCertFile' => $this->tlsCertFile,
+            'tlsKeyFile' => $this->tlsKeyFile,
+            'tlsKeyPassphrase' => $this->tlsKeyPassphrase,
+            'tlsServerName' => $this->tlsServerName,
+            'tlsVersions' => $this->tlsVersions,
+        ]);
+    }
 
     public function isForceRollback(): bool
     {

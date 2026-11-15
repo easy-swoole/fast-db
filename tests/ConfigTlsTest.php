@@ -4,7 +4,6 @@ declare(strict_types=1);
 namespace EasySwoole\FastDb\Tests;
 
 use EasySwoole\FastDb\Config;
-use EasySwoole\Mysqli\Config as DriverConfig;
 use EasySwoole\Mysqli\TlsMode;
 use EasySwoole\Mysqli\TlsVersion;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -15,7 +14,7 @@ final class ConfigTlsTest extends TestCase
     public function testDefaultConfigurationKeepsTlsDisabled(): void
     {
         $config = new Config();
-        $driver = new DriverConfig($config->toArray());
+        $driver = $config->toMysqliConfig();
         $this->assertSame('disabled', $config->getTlsMode());
         $this->assertSame(TlsMode::Disabled, $driver->getTlsMode());
         $this->assertSame(['TLSv1.2','TLSv1.3'], $driver->getTlsVersions());
@@ -48,7 +47,7 @@ final class ConfigTlsTest extends TestCase
         $this->assertSame('secured', $exported['name']);
         $this->assertSame(32, $exported['maxObjectNum']);
         // 连接池和 testDb 都通过这条配置转换路径创建驱动配置，无需重复 TLS 解析。
-        $driver = new DriverConfig($exported);
+        $driver = $config->toMysqliConfig();
         $this->assertSame($expected, $driver->getTlsMode());
         $this->assertSame('/certs/ca.pem', $driver->getTlsCaFile());
         $this->assertSame('/certs/ca', $driver->getTlsCaPath());
@@ -78,11 +77,11 @@ final class ConfigTlsTest extends TestCase
         $this->assertSame('/certs/client.key', $config->getTlsKeyFile());
         $this->assertSame('test-only-passphrase', $config->getTlsKeyPassphrase());
         $this->assertSame('mysql.internal.example', $config->getTlsServerName());
-        $driver = new DriverConfig($config->toArray());
+        $driver = $config->toMysqliConfig();
         $this->assertSame(TlsMode::VerifyIdentity, $driver->getTlsMode());
         $this->assertSame(['TLSv1.3'], $driver->getTlsVersions());
         $config->restore(['tlsMode'=>'verify_ca', 'tlsServerName'=>'replica.internal.example']);
-        $driver = new DriverConfig($config->toArray());
+        $driver = $config->toMysqliConfig();
         $this->assertSame(TlsMode::VerifyCA, $driver->getTlsMode());
         $this->assertSame('replica.internal.example', $driver->getTlsServerName());
         $this->assertSame('/certs/ca.pem', $driver->getTlsCaFile());
