@@ -7,12 +7,12 @@ namespace EasySwoole\FastDb\Tests;
 use EasySwoole\FastDb\Config;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
+use EasySwoole\FastDb\Mysql\Pool;
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\FastDb\Tests\Model\User;
 use EasySwoole\Mysqli\QueryBuilder;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
-use Swoole\Coroutine;
 
 final class ConnectionNameTest extends TestCase
 {
@@ -68,9 +68,7 @@ final class ConnectionNameTest extends TestCase
         $client = $this->createStub(Connection::class);
         $client->connectionName = 'actual';
         $client->method('isInTransaction')->willReturn(in_array($operation, ['commit', 'rollback'], true));
-        $db = (new FastDb())->addDb(new Config(), 'other')->configureQueryStack(true);
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($db,
-            [Coroutine::getCid() => ['default' => $client]]);
+        $db = $this->database($client);
         $failure = new \RuntimeException('SQL error');
         $method = in_array($operation, ['begin', 'commit', 'rollback'], true) ? $operation . 'Transaction' : $operation;
         $client->method($method)->willReturnCallback(static function () use ($db, $fails, $failure): bool {
@@ -113,13 +111,10 @@ final class ConnectionNameTest extends TestCase
     {
         $instance = new \ReflectionProperty(FastDb::class, 'instance');
         $original = $instance->getValue();
-        $db = (new FastDb())->addDb(new Config(), 'other')->configureQueryStack(true);
         $client = $this->createStub(Connection::class);
-        $client->connectionName = 'actual';
+        $db = $this->database($client);
         $failure = new \RuntimeException('original SQL failure');
         $client->method('query')->willThrowException($failure);
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($db,
-            [Coroutine::getCid() => ['default' => $client]]);
         $instance->setValue(null, $db);
         $entityResult = null;
         try {
@@ -138,5 +133,16 @@ final class ConnectionNameTest extends TestCase
             $this->assertSame('actual', $db->getQueryStack(-1)->connectionName);
             $this->assertSame($failure, $entityResult->getException());
         } finally { $instance->setValue(null, $original); }
+    }
+
+    private function database(Connection $client): FastDb
+    {
+        $db = (new FastDb())->addDb(new Config(), 'actual')->addDb(new Config(), 'other')
+            ->selectConnection('actual')->configureQueryStack(true);
+        $pool = $this->createStub(Pool::class);
+        $pool->method('getObj')->willReturn($client);
+        $pool->method('recycleObj')->willReturn(true);
+        (new \ReflectionProperty(FastDb::class, 'pools'))->setValue($db, ['actual' => $pool]);
+        return $db;
     }
 }

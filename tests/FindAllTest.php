@@ -31,7 +31,8 @@ final class FindAllTest extends TestCase
                 return true;
             }))->willReturn([]);
         $db = new FastDb();
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $client]]);
+        $connections = new \ReflectionProperty(FastDb::class, 'currentConnection');
+        $connections->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $client]]);
 
         $instance = new \ReflectionProperty(FastDb::class, 'instance');
         $original = $instance->getValue();
@@ -39,6 +40,7 @@ final class FindAllTest extends TestCase
         try {
             $this->assertSame([], User::findAll($primaryKeys, null, true));
         } finally {
+            $connections->setValue($db, []);
             $instance->setValue(null, $original);
         }
     }
@@ -57,9 +59,8 @@ final class FindAllTest extends TestCase
             }))
             ->willReturnOnConsecutiveCalls(true, true, $rows, $rows);
         $db = new FastDb();
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue(
-            $db, [\Swoole\Coroutine::getCid() => ['default' => $client]]
-        );
+        $connections = new \ReflectionProperty(FastDb::class, 'currentConnection');
+        $connections->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $client]]);
         $instance = new \ReflectionProperty(FastDb::class, 'instance');
         $original = $instance->getValue();
         $instance->setValue(null, $db);
@@ -75,6 +76,7 @@ final class FindAllTest extends TestCase
             $this->assertSame(1, $user->id);
             $this->assertSame(1, ExplicitTableUser::$constructed);
         } finally {
+            $connections->setValue($db, []);
             $instance->setValue(null, $original);
         }
     }

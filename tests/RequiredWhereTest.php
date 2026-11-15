@@ -63,7 +63,11 @@ final class RequiredWhereTest extends TestCase
 
     protected function tearDown(): void
     {
-        $this->singleton?->setValue(null, $this->originalInstance);
+        if ($this->singleton !== null) {
+            $connections = new \ReflectionProperty(FastDb::class, 'currentConnection');
+            $connections->setValue($this->singleton->getValue(), []);
+            $this->singleton->setValue(null, $this->originalInstance);
+        }
     }
 
     public static function orSources(): array

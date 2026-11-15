@@ -20,7 +20,8 @@ final class SerializationTest extends TestCase
         $client->expects($this->once())->method('query')->willReturn([['id' => 1, 'name' => 'secret', 'email' => 'public@example.com']]);
         $client->expects($this->once())->method('rawQuery')->with('SELECT FOUND_ROWS() as count')->willReturn([['count' => 1]]);
         $db = new FastDb();
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $client]]);
+        $connections = new \ReflectionProperty(FastDb::class, 'currentConnection');
+        $connections->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $client]]);
         $instance = new \ReflectionProperty(FastDb::class, 'instance');
         $original = $instance->getValue();
         $instance->setValue(null, $db);
@@ -41,6 +42,7 @@ final class SerializationTest extends TestCase
                 $this->assertSame(1, $data['total']);
             }
         } finally {
+            $connections->setValue($db, []);
             $instance->setValue(null, $original);
         }
     }

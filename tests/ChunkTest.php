@@ -247,14 +247,15 @@ final class ChunkTest extends TestCase
         $client->method('getLastAffectRows')->willReturn(0);
         $client->method('getLastInsertId')->willReturn(0);
         $db = new FastDb();
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($db,
-            [\Swoole\Coroutine::getCid() => ['default' => $client]]);
+        $connections = new \ReflectionProperty(FastDb::class, 'currentConnection');
+        $connections->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $client]]);
         $instance = new \ReflectionProperty(FastDb::class, 'instance');
         $original = $instance->getValue();
         $instance->setValue(null, $db);
         try {
             $test($queries, $rawQueries, $db);
         } finally {
+            $connections->setValue($db, []);
             $instance->setValue(null, $original);
         }
     }

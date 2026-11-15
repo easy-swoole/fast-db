@@ -185,37 +185,32 @@ final class ConnectionScopeTest extends TestCase
         $this->assertSame([], $this->events);
     }
 
-    public function testAnAlreadyBorrowedClientCanBeScopedWithoutARegisteredPoolConfig(): void
-    {
-        $this->connections['c']->database->exec("UPDATE scope_marker SET value='borrowed'");
-        $this->connections['c']->connectionName = 'borrowed';
-        $contexts = $this->connections;
-        $contexts['borrowed'] = $this->connections['c'];
-        unset($contexts['c']);
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db, [Coroutine::getCid() => $contexts]);
-        $this->assertSame('borrowed', $this->db->withConnection('borrowed', function (): string { return $this->marker(); }));
-        $this->assertSame('a', $this->db->selectConnection());
-    }
-
     public function testCoroutineScopesDoNotOverwriteOtherCoroutinesSelectedConnections(): void
     {
+        $pools = [];
+        foreach (['b', 'c'] as $name) {
+            $pool = $this->createMock(Pool::class);
+            $pool->expects($this->once())->method('getObj')->willReturn($this->connections[$name]);
+            $pool->expects($this->once())->method('recycleObj')->with($this->connections[$name])->willReturn(true);
+            $pools[$name] = $pool;
+        }
+        (new \ReflectionProperty(FastDb::class, 'pools'))->setValue($this->db, $pools);
         $check = function (): void {
             $this->db->selectConnection('a');
             $channel = new Coroutine\Channel(2);
             foreach (['b' => 0.005, 'c' => 0.001] as $name => $delay) {
                 Coroutine::create(function () use ($name, $delay, $channel): void {
+                    $result = null;
+                    // 先登记通知，让后登记的连接归还先执行。
+                    Coroutine::defer(static function () use ($channel, &$result): void { $channel->push($result); });
                     try {
-                        $property = new \ReflectionProperty(FastDb::class, 'currentConnection');
-                        $contexts = $property->getValue($this->db);
-                        $contexts[Coroutine::getCid()] = $this->connections;
-                        $property->setValue($this->db, $contexts);
                         $this->db->selectConnection('a');
                         $inside = $this->db->withConnection($name, function () use ($delay): string {
                             Coroutine::sleep($delay);
                             return $this->marker();
                         });
-                        $channel->push([$inside, $this->db->selectConnection()]);
-                    } catch (\Throwable $error) { $channel->push($error); }
+                        $result = [$inside, $this->db->selectConnection()];
+                    } catch (\Throwable $error) { $result = $error; }
                 });
             }
             $results = [$channel->pop(1), $channel->pop(1)];

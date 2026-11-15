@@ -113,8 +113,7 @@ class FastDb
 
     public function withConnection(string $name, callable $callback): mixed
     {
-        $cid = Coroutine::getCid();
-        if (!isset($this->configs[$name]) && !isset($this->currentConnection[$cid][$name])) {
+        if (!isset($this->configs[$name])) {
             throw new RuntimeError('connection ' . $name . ' not register yet');
         }
         $previous = $this->selectConnection();
@@ -295,9 +294,7 @@ class FastDb
         if (($this->currentConnection[$cid][$name] ?? null) !== $client) { return; }
         unset($this->currentConnection[$cid][$name]);
         if ($this->currentConnection[$cid] === []) { unset($this->currentConnection[$cid]); }
-        // 没有对应池的外部连接只解除当前协程的引用。
-        $pool = $this->pools[$name] ?? null;
-        if ($pool === null) { return; }
+        $pool = $this->pools[$name];
         try {
             if ($discard) {
                 $pool->unsetObj($client);

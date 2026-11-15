@@ -336,6 +336,9 @@ final class ConnectionObserverTest extends TestCase
     public function testReleaseCommitsAndClosesBeforeAGlobalObserverThrows(): void
     {
         $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
+            $pool = $this->createMock(Pool::class);
+            $pool->expects($this->once())->method('unsetObj')->with($connection)->willReturn(true);
+            (new \ReflectionProperty(FastDb::class, 'pools'))->setValue($db, ['default' => $pool]);
             $failure = new \RuntimeException('release observer');
             $db->setOnQuery(function () use ($connection, $failure): void {
                 $this->assertFalse($connection->isInTransaction());
