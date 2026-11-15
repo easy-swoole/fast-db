@@ -91,16 +91,6 @@ final class RelationPreloader
                 // 先生成不带具体父键的 SQL，配置和参数相同的父记录可共用一条批量查询。
                 $previewQuery = (clone $builder)->get($tableName, null, $columns);
                 $queryOptions = $previewQuery->getLastQueryOptions();
-                $cacheKey = null;
-                if (!$returnAsArray) {
-                    // 用单个父键的查询计算缓存键，批次只保留键。
-                    $cacheKey = RelationLoader::cacheKey(
-                        $relationPlan->relate,
-                        $relationPlan->buildLookup(clone $builder),
-                        $relationPlan->returnAsArray,
-                        $relationPlan->connectionName
-                    );
-                }
                 $groupKey = hash('sha256', serialize([
                     $relationPlan->connectionName, $relationPlan->relate->type, $relationPlan->relate->targetEntity,
                     $relationPlan->relate->targetProperty, $tableName, $relationPlan->returnAsArray,
@@ -110,11 +100,19 @@ final class RelationPreloader
                 $serializedParentKey = serialize($parentKeyValue);
                 $groups[$groupKey]['batchPlan'] ??= $relationPlan;
                 $groups[$groupKey]['parentKeyValues'][$serializedParentKey] = $parentKeyValue;
+                if (!$returnAsArray) {
+                    // 配置和父键相同时只生成一次用于匹配按需查询的缓存键。
+                    $groups[$groupKey]['cacheKeys'][$serializedParentKey] ??= RelationLoader::cacheKey(
+                        $relationPlan->relate,
+                        $relationPlan->buildLookup(clone $builder),
+                        $relationPlan->returnAsArray,
+                        $relationPlan->connectionName
+                    );
+                }
                 $groups[$groupKey]['parentEntries'][] = [
                     'parentPosition' => $parentPosition,
                     'relationMethod' => $relationMethod,
                     'serializedParentKey' => $serializedParentKey,
-                    'cacheKey' => $cacheKey,
                     // 同一组共用 SQL，每个父对象的目标实例各自回填。
                     'target' => $returnAsArray ? null : $relationPlan->target,
                 ];
@@ -137,7 +135,8 @@ final class RelationPreloader
             $rowsByParentKey = $this->fetch($batchPlan, $group['parentKeyValues'], $execute);
             foreach ($group['parentEntries'] as $parentEntry) {
                 $parentPosition = $parentEntry['parentPosition'];
-                $matchedRows = $rowsByParentKey[$parentEntry['serializedParentKey']] ?? [];
+                $serializedParentKey = $parentEntry['serializedParentKey'];
+                $matchedRows = $rowsByParentKey[$serializedParentKey] ?? [];
                 $relationData = RelationLoader::materialize(
                     $batchPlan->relate, $matchedRows, $returnAsArray || $batchPlan->returnAsArray,
                     $batchPlan->connectionName, $hydrate, $parentEntry['target']
@@ -148,7 +147,7 @@ final class RelationPreloader
                 if ($returnAsArray) {
                     $parentResults[$parentPosition][$parentEntry['relationMethod']] = $relationData;
                 } else {
-                    $prime($parentResults[$parentPosition], $parentEntry['cacheKey'], $relationData);
+                    $prime($parentResults[$parentPosition], $group['cacheKeys'][$serializedParentKey], $relationData);
                 }
             }
             unset($group, $parentEntry, $rowsByParentKey, $matchedRows);

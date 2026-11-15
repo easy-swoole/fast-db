@@ -31,7 +31,7 @@ final class RelationDeclarationTest extends TestCase
         $cache = ReflectionCache::getInstance();
         $relate = $cache->parseRelation(DeclarationParent::class, 'plain');
         $this->assertSame('id', $relate->selfProperty);
-        $this->assertSame($relate, $cache->parseRelation(DeclarationParent::class, 'plain'));
+        $this->assertSame($relate, $cache->parseRelation(DeclarationParent::class, 'PLAIN'));
 
         $this->expectException(\Error::class);
         $relate->targetProperty = 'another_field';

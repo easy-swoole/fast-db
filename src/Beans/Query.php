@@ -4,6 +4,7 @@ namespace EasySwoole\FastDb\Beans;
 
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Internal\FieldSelection;
+use EasySwoole\FastDb\Utility\ReflectionCache;
 use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\Mysqli\QueryBuilder\Pagination;
 
@@ -130,11 +131,13 @@ class Query
     public function withRelations(string|array $relations): Query
     {
         $names = is_string($relations) ? [$relations] : $relations;
-        foreach ($names as &$name) {
-            $name = (new \ReflectionMethod($this->entity, $name))->getName();
+        $metadata = ReflectionCache::getInstance();
+        $entityClass = $this->entity::class;
+        $methods = [];
+        foreach ($names as $name) {
+            $methods[$metadata->relationMethodName($entityClass, $name)] = true;
         }
-        unset($name);
-        $this->relations = array_values(array_unique($names));
+        $this->relations = array_keys($methods);
         return $this;
     }
 

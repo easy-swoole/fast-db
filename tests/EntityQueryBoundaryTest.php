@@ -108,6 +108,16 @@ final class EntityQueryBoundaryTest extends TestCase
         }
     }
 
+    public function testUnchangedUpdateDoesNotAppendThePrimaryKeyToTheHeldBuilder(): void
+    {
+        $entity = new QueryBoundaryRecord(['id' => 'trim']);
+        $builder = $entity->queryLimit()->where('grp', 1)->orWhere('order', 6)->__getQueryBuilder();
+
+        $this->assertTrue($entity->update());
+        $this->assertSame([], $this->client->queries);
+        $this->assertSame([1, 6], $builder->get($entity->tableName())->getLastBindParams());
+    }
+
     public static function zeroKeys(): array { return [['integer', 0], ['string', '0']]; }
 
     #[DataProvider('zeroKeys')]

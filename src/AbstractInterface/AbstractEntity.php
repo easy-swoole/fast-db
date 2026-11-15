@@ -299,8 +299,8 @@ abstract class AbstractEntity implements \JsonSerializable
             }
             $query = $this->queryLimit()->__getQueryBuilder();
             $tableName = $this->tableName();
-            $this->requirePrimaryKey($query, $entityRef, 'delete');
-            $query->delete($tableName);
+            [$primaryKeyName, $primaryKey] = $this->requirePrimaryKey($entityRef, 'delete');
+            $query->groupExistingWhere()->where($primaryKeyName, $primaryKey)->delete($tableName);
             return FastDb::getInstance()->query($query, onQuery: $this->onQuery)->getAffectedRows() >= 1;
         } finally {
             // 成功、失败或提前返回均消费本次查询配置，实体数据及比较基准不受影响。
@@ -340,9 +340,10 @@ abstract class AbstractEntity implements \JsonSerializable
             }
             $properties = $selection->filterProperties($entityRef->allProperties(), builder: $query);
             $data = $this->entityState->changes($this, $properties);
-            $this->requirePrimaryKey($query, $entityRef, 'update');
+            [$primaryKeyName, $primaryKey] = $this->requirePrimaryKey($entityRef, 'update');
             if ($data === []) { return true; }
-            $query->update($tableName, $data);
+            // 将已有条件整体分组，保证调用方的 OR 也受原主键约束。
+            $query->groupExistingWhere()->where($primaryKeyName, $primaryKey)->update($tableName, $data);
             $result = FastDb::getInstance()->query($query, onQuery: $this->onQuery);
             if ($result->getAffectedRows() <= 0) { return false; }
             $this->entityState->accept($data);
@@ -776,8 +777,11 @@ abstract class AbstractEntity implements \JsonSerializable
         $this->queryBuilder = $hideFields === null ? null : (new Query($this))->hideFields($hideFields);
     }
 
-    /** 实例写入统一使用原主键约束查询范围。 */
-    private function requirePrimaryKey(QueryBuilder $query, EntityReflection $entityRef, string $operation): void
+    /**
+     * 校验实例写入使用的原主键。
+     * @return array{string, mixed}
+     */
+    private function requirePrimaryKey(EntityReflection $entityRef, string $operation): array
     {
         $key = $entityRef->getPrimaryKey()
             ?? throw new RuntimeError("can not {$operation} entity without primary key set");
@@ -786,9 +790,7 @@ abstract class AbstractEntity implements \JsonSerializable
             || !isset($this->{$key}) || $this->{$key} === '') {
             throw new RuntimeError("can not {$operation} entity without primary key value");
         }
-        $primaryKey = $this->entityState->primaryKey($this, $key);
-        // 在真正执行的构建器上最后追加主键，防止后续追加的 OR 落到主键约束之外。
-        $query->groupExistingWhere()->where($key, $primaryKey);
+        return [$key, $this->entityState->primaryKey($this, $key)];
     }
 
     /** 按需加载和预加载都在确定目标表和连接后转换父键。 */

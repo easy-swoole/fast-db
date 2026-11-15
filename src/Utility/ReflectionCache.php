@@ -22,6 +22,7 @@ class ReflectionCache
 
     private array $entityData = [];
     private array $relationData = [];
+    private array $relationMethodNames = [];
 
     /**
      * @throws \ReflectionException
@@ -91,18 +92,28 @@ class ReflectionCache
         );
     }
 
+    /** @internal 取得声明时的方法名，关联注解留到解析声明时读取。 */
+    public function relationMethodName(string $entityClass, string $method): string
+    {
+        $cacheKey = strtolower($method);
+        return $this->relationMethodNames[$entityClass][$cacheKey]
+            ??= (new \ReflectionMethod($entityClass, $method))->getName();
+    }
+
     /** 关联声明解析后为只读，按实体类和方法共享同一份定义。 */
     public function parseRelation(string $entityClass, string $method): Relate
     {
-        if (!isset($this->relationData[$entityClass][$method])) {
+        $cacheKey = strtolower($method);
+        if (!isset($this->relationData[$entityClass][$cacheKey])) {
             $reflection = new \ReflectionMethod($entityClass, $method);
+            $this->relationMethodNames[$entityClass][$cacheKey] = $reflection->getName();
             $attributes = $reflection->getAttributes(Relate::class);
             if ($attributes === []) {
                 throw new RuntimeError("{$method} did not define Relate attribute in {$entityClass}");
             }
-            $this->relationData[$entityClass][$method] = $this->resolveRelation($entityClass, $attributes[0]->newInstance());
+            $this->relationData[$entityClass][$cacheKey] = $this->resolveRelation($entityClass, $attributes[0]->newInstance());
         }
-        return $this->relationData[$entityClass][$method];
+        return $this->relationData[$entityClass][$cacheKey];
     }
 
     /** @internal 补全并校验显式传入的关联定义。 */
