@@ -63,6 +63,17 @@ final class RelationDeclarationTest extends TestCase
         }
     }
 
+    public function testLookupUsesTheDriverTablePrefixForItsForeignKey(): void
+    {
+        $plan = (new DeclarationParent(['id' => 1]))->__relationPlan('plain');
+        $plan->builder->setPrefix('app_');
+        $query = $plan->buildLookup(clone $plan->builder);
+
+        $this->assertStringContainsString('FROM `app_children`', $query->getLastPrepareQuery());
+        $this->assertStringContainsString('`app_children`.`parent_id` = ?', $query->getLastPrepareQuery());
+        $this->assertSame([1], $query->getLastBindParams());
+    }
+
     public function testInheritedPublicConfigurationAndArrayMode(): void
     {
         $plan = (new DeclarationChildParent(['id'=>1]))->__relationPlan('publicConfigured');
@@ -112,6 +123,19 @@ final class RelationDeclarationTest extends TestCase
     {
         $this->expectException(\ArgumentCountError::class);
         new Relate(DeclarationTarget::class, 'parent_id');
+    }
+
+    public function testMissingAttributeConsumesTheLazyRelationQueryOptions(): void
+    {
+        $parent = new DeclarationParent(['id' => 1]);
+        $parent->queryLimit()->fields(['id']);
+        $this->expectException(RuntimeError::class);
+        $this->expectExceptionMessage('missingAttribute did not define Relate attribute');
+        try {
+            $parent->missingAttribute();
+        } finally {
+            $this->assertNull($parent->queryLimit()->getFields());
+        }
     }
 
     public static function mismatchedGetters(): array
@@ -175,6 +199,7 @@ class DeclarationParent extends AbstractEntity
     public function mismatchMany() { return $this->relateMany(); }
     #[Relate(DeclarationTarget::class,'parent_id',type:RelationType::Many,configure:'rejectMismatchedGetter')]
     public function mismatchOne() { return $this->relateOne(); }
+    public function missingAttribute() { return $this->relateOne(); }
     protected function rejectMismatchedGetter(QueryBuilder $query): void
     {
         throw new \LogicException('Mismatched getter must fail before configuration');

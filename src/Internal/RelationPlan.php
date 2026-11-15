@@ -26,9 +26,7 @@ final class RelationPlan
     /** 限定 FastDb 自己添加的外键条件，调用方投影和附加条件保持原样。 */
     public function foreignKey(): string
     {
-        $target = $this->builder instanceof EntityQueryBuilder
-            ? $this->builder->relationTableTarget($this->tableName)
-            : TableReference::resolve($this->tableName, '')['target'];
+        $target = $this->builder->resolveTableTarget($this->tableName);
         if ($target === null) {
             throw new \InvalidArgumentException('Relation requires an identifiable target table');
         }
@@ -41,8 +39,7 @@ final class RelationPlan
         if (in_array('SQL_CALC_FOUND_ROWS', $this->builder->getQueryOptions(), true)) {
             throw new RuntimeError('Relation does not support withTotalCount()');
         }
-        if ($this->builder instanceof EntityQueryBuilder && $this->builder->getLimitRowCount() !== null
-            && ($preload || $this->relate->type === RelationType::One)) {
+        if ($this->builder->getLimitRowCount() !== null && ($preload || $this->relate->type === RelationType::One)) {
             // 一对一要检测重复记录，批量预加载不能按整批截断。
             throw new RuntimeError($preload
                 ? 'Relation preload does not support limit()'

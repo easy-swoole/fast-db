@@ -3,7 +3,6 @@
 namespace EasySwoole\FastDb\Beans;
 
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
-use EasySwoole\FastDb\Internal\EntityQueryBuilder;
 use EasySwoole\FastDb\Internal\FieldSelection;
 use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\Mysqli\QueryBuilder\Pagination;
@@ -24,7 +23,7 @@ class Query
     /** 字段输出配置不需要 SQL 构造器，首次添加 SQL 条件或显式访问时再创建。 */
     private function builder(): QueryBuilder
     {
-        return $this->queryBuilder ??= new EntityQueryBuilder();
+        return $this->queryBuilder ??= new QueryBuilder();
     }
 
     function limit(int $num,bool $withTotalCount = false):Query

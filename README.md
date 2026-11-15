@@ -4,7 +4,7 @@
 
 FastDb 是面向 Swoole 协程环境的 MySQL 数据访问库，组合连接池、SQL 构建器和基于 PHP Attributes 的实体映射。可以在 EasySwoole 框架内使用，也可以独立使用。
 
-本文面向 `3.x` 分支，使用 `easyswoole/mysqli` ^5.1 和 `easyswoole/pool` 3.x，以当前 `src/` 和 `composer.json` 为准。实体 API 位于 `AbstractEntity`，数据库与连接管理位于 `FastDb`，SQL 构建能力由 `easyswoole/mysqli` 提供。
+本文面向 `3.x` 分支，使用 `easyswoole/mysqli` ^5.1 和 `easyswoole/pool` 3.x，以当前 `src/` 和 `composer.json` 为准。实体 API 位于 `AbstractEntity`，数据库与连接管理位于 `FastDb`，SQL 构建能力由 `easyswoole/mysqli` 提供。实体查询使用 mysqli 5.1.4 引入的查询状态读取接口，已锁定较早版本的项目需先更新 `easyswoole/mysqli`。
 
 ## 内部执行与实体状态
 
@@ -1303,7 +1303,7 @@ if ($user !== null) {
 
 一对一未命中时返回 `null`；一对多未命中时返回包含空列表的 `ListResult`。一对多按需加载支持 `limit()` 和 `page()` 限制明细条数，`totalCount()` 返回 `null`，设置 `withTotalCount()` 会抛出异常。一对一拒绝显式 `LIMIT`，匹配多条时抛出 `RuntimeError`。取最新一条或第 N 条时请使用 `QueryBuilder`。
 
-关联查询正常执行后会清理当前实体的查询配置。下一次关联查询需要重新设置过滤、排序、分页和字段限制。
+按需关联查询结束时会清理当前实体的查询配置，包括声明解析失败的情况。下一次关联查询需要重新设置过滤、排序、分页和字段限制。
 
 ### 批量预加载关联
 
