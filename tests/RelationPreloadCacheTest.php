@@ -201,7 +201,7 @@ final class RelationPreloadCacheTest extends TestCase
                     $this->queries++;
                     return new QueryResult(0.0, 0.0, 0.0, 'default',
                         [['id' => 99, 'parent_id' => $parent->id, 'label' => 'database']]);
-                }, $reset, \Closure::bind(static fn (string $class, array $row, ?AbstractEntity $target = null) =>
+                }, \Closure::bind(static fn (string $class, array $row, ?AbstractEntity $target = null) =>
                     AbstractEntity::hydrateEntity($class, $row, $target), null, AbstractEntity::class));
         } finally {
             $this->resets++;

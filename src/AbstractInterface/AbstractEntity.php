@@ -226,9 +226,9 @@ abstract class AbstractEntity implements \JsonSerializable
     {
         $entityRef = ReflectionCache::getInstance()->parseEntity(static::class);
         $properties = $entityRef->allProperties();
-        // 标准实体没有输出配置时直接转换；子类覆写 queryLimit 的行为仍然生效。
-        if ($this->queryBuilder !== null || $entityRef->hasCustomQueryLimit) {
-            $properties = $this->queryLimit()->filterProperties($properties, true, inheritedOutput: $this->inheritedOutput);
+        // 序列化只读取已有的输出配置，避免触发用于构建查询的逻辑。
+        if ($this->queryBuilder !== null) {
+            $properties = $this->queryBuilder->filterProperties($properties, true, inheritedOutput: $this->inheritedOutput);
         } elseif ($this->inheritedOutput !== []) {
             $properties = FieldSelection::filterProperties($properties,
                 $this->inheritedOutput['fields'], $this->inheritedOutput['hideFields']);
@@ -802,8 +802,9 @@ abstract class AbstractEntity implements \JsonSerializable
             throw new RuntimeError('Relation requires a loaded or explicitly assigned parent field: ' . $parentField);
         }
         if ($relate->returnAsArray) { $query->returnAsArray(); }
+        $builder = $query->__getQueryBuilder();
         if ($relate->configure !== null) {
-            $this->{$relate->configure}($query->__getQueryBuilder());
+            $this->{$relate->configure}($builder);
         }
         $target = new $relate->targetEntity();
         $tableName ??= $target->tableName();
@@ -812,7 +813,7 @@ abstract class AbstractEntity implements \JsonSerializable
         $fields = $query->getFields();
         $returnAsArray = $fields['returnAsArray'] ?? false;
         // 一对一实体直接填充已构造的目标实例。
-        return new RelationPlan($relate, $tableName, $query->__getQueryBuilder(), $fields['fields'] ?? null,
+        return new RelationPlan($relate, $tableName, $builder, $fields['fields'] ?? null,
             $returnAsArray, $connectionName, $parentValue,
             $relate->type === RelationType::One && !$returnAsArray ? $target : null);
     }
@@ -834,9 +835,12 @@ abstract class AbstractEntity implements \JsonSerializable
             }
             $plan = $this->prepareRelation($relate, $this->queryLimit(), $tableName);
             $this->relationLoader ??= new RelationLoader();
-            return $this->relationLoader->load($plan,
-                fn ($query) => FastDb::getInstance()->query($query, onQuery: $this->onQuery, connection: $plan->connectionName),
-                fn () => $this->resetQueryOptions(), self::hydrateEntity(...));
+            return $this->relationLoader->load($plan, function (QueryBuilder $query) use ($plan): QueryResult {
+                $result = FastDb::getInstance()->query($query, onQuery: $this->onQuery, connection: $plan->connectionName);
+                // SQL 已执行，当前查询配置在回填结果前就可以释放。
+                $this->resetQueryOptions();
+                return $result;
+            }, self::hydrateEntity(...));
         } finally {
             $this->resetQueryOptions();
         }

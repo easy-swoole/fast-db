@@ -114,7 +114,7 @@ class Query
             return FieldSelection::filterProperties($properties, $fields, $hideFields);
         }
         $properties = FieldSelection::filterProperties($properties, $fields);
-        return self::filterWriteFields($properties, $builder ?? $this->__getQueryBuilder());
+        return self::filterWriteFields($properties, $builder ?? $this->builder());
     }
 
     /** @internal 在转换前按底层构建器的写入白名单筛选字段。 */

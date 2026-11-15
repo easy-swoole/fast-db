@@ -13,7 +13,6 @@ final class EntityReflection
 {
     public function __construct(
         public readonly string $entityClass,
-        public readonly bool $hasCustomQueryLimit = false,
         private readonly array $properties = [],
         private readonly ?string $primaryKey = null,
         private readonly ?Property $autoIncrementProperty = null,

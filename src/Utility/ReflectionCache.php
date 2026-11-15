@@ -81,7 +81,6 @@ class ReflectionCache
 
         return $this->entityData[$entityClass] = new EntityReflection(
             entityClass: $entityClass,
-            hasCustomQueryLimit: $reflection->getMethod('queryLimit')->getDeclaringClass()->getName() !== AbstractEntity::class,
             properties: $properties,
             primaryKey: $primaryKeyName,
             autoIncrementProperty: $autoIncrementProperty ?? ($primaryKeyName === null ? null : $properties[$primaryKeyName]),

@@ -135,18 +135,20 @@ class FastDb
         // 已有事务由原调用层负责结束，加入层只执行自己的业务回调。
         if ($client->isInTransaction()) { return $callback($this); }
         try {
-            if (!$this->begin($client, $flags, $timeout)) { throw new RuntimeError('Failed to begin transaction'); }
+            if (!$this->startTransaction($client, $flags, $timeout)) { throw new RuntimeError('Failed to begin transaction'); }
             $value = $callback($this);
         } catch (\Throwable $error) {
             if ($client->isInTransaction()) {
-                try { $this->rollback($client, timeout: $timeout); } catch (\Throwable) {
+                try { $this->completeTransaction(true, $client, TransactionCompletionFlags::NoChainNoRelease, $timeout); } catch (\Throwable) {
                     // 清理失败时保留触发回滚的原异常。
                 }
             }
             throw $error;
         }
         // 提交失败交给调用者处理，也不把提交后的日志异常当成业务回调失败。
-        if (!$this->commit($client, timeout: $timeout)) { throw new RuntimeError('Failed to commit transaction'); }
+        if (!$this->completeTransaction(false, $client, TransactionCompletionFlags::NoChainNoRelease, $timeout)) {
+            throw new RuntimeError('Failed to commit transaction');
+        }
         return $value;
     }
 
@@ -155,6 +157,11 @@ class FastDb
     {
         $client ??= $this->getOrBorrowConnection();
         if ($client->isInTransaction()) { return true; }
+        return $this->startTransaction($client, $flags, $timeout);
+    }
+
+    private function startTransaction(Connection $client, TransactionStartFlags $flags, ?float $timeout): bool
+    {
         return $this->execute($client, static fn () => $client->beginTransaction($flags, $timeout),
             null, $flags->toSql())->getResult() === true;
     }

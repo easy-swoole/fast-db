@@ -40,14 +40,16 @@ final class QueryLazyBuilderTest extends TestCase
     }
 
     #[DataProvider('outputOverrides')]
-    public function testSerializationStillCallsDirectAndInheritedQueryLimitOverrides(string $class): void
+    public function testSerializationOnlyUsesOutputOptionsTheCallerHasSet(string $class): void
     {
         LazyCustomOutputOwner::$calls = 0;
         $entity = new $class(['id' => 1, 'secret' => 'private']);
+        $this->assertSame(['id' => 1, 'secret' => 'private'], $entity->toArray());
+        $this->assertSame(0, LazyCustomOutputOwner::$calls);
+
+        $entity->queryLimit();
         $this->assertSame(['id' => 1], $entity->toArray());
         $this->assertSame(1, LazyCustomOutputOwner::$calls);
-        $this->assertSame(['id' => 1], $entity->toArray());
-        $this->assertSame(2, LazyCustomOutputOwner::$calls);
     }
 
     public function testOutputOptionsDoNotAllocateASqlBuilder(): void
@@ -129,6 +131,13 @@ final class QueryLazyBuilderTest extends TestCase
         $this->assertNull($this->builderState($query));
         $this->assertSame($query, $operation($query));
         $this->assertInstanceOf(QueryBuilder::class, $this->builderState($query));
+    }
+
+    public function testWriteFieldFilteringUsesItsOwnBuilderByDefault(): void
+    {
+        $query = new LazyGetterOverrideQuery(new LazyQueryOwner());
+        $query->func(static fn (QueryBuilder $builder) => $builder->fields(['name']));
+        $this->assertSame(['name' => true], $query->filterProperties(['id' => true, 'name' => true]));
     }
 
     public function testInvalidPageIsNotInterpretedAsLimit(): void

@@ -12,6 +12,7 @@ use EasySwoole\FastDb\Mysql\Pool;
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\Mysqli\Config as ClientConfig;
 use EasySwoole\Mysqli\QueryBuilder;
+use EasySwoole\Mysqli\Transaction\TransactionCompletionFlags;
 use EasySwoole\Mysqli\Transaction\TransactionStartFlags;
 use EasySwoole\Pool\Exception\PoolEmpty;
 use EasySwoole\Pool\ObjectInterface;
@@ -184,14 +185,26 @@ final class ConnectionAcquireTimingTest extends TestCase
         $this->assertSame(1, $pools['default']->borrows);
     }
 
-    public function testManagedTransactionPreservesTheVirtualBeginCall(): void
+    public function testManagedTransactionUsesItsOwnLifecycle(): void
     {
-        $custom = new AcquireTimingBeginOverrideDb();
+        $custom = new AcquireTimingManualTransactionDb();
         [$db, $pools] = $this->database(db: $custom);
         $db->transaction(static function (): void {});
-        $this->assertSame(1, $custom->begins);
-        $this->assertSame(['connectionAcquire', 'query', 'query'], array_column($db->getQueryStack(), 'type'));
+        $failure = new \LogicException('business failed');
+        try {
+            $db->transaction(static function () use ($failure): void { throw $failure; });
+            $this->fail('Expected business failure');
+        } catch (\LogicException $error) {
+            $this->assertSame($failure, $error);
+        }
+        $this->assertSame([], $custom->manualCalls);
+        $this->assertSame(['connectionAcquire', 'query', 'query', 'query', 'query'],
+            array_column($db->getQueryStack(), 'type'));
         $this->assertSame(1, $pools['default']->borrows);
+        $this->assertTrue($db->begin());
+        $this->assertTrue($db->commit());
+        $this->assertTrue($db->rollback());
+        $this->assertSame(['begin', 'commit', 'rollback'], $custom->manualCalls);
     }
 
     public function testManualBeginUsesTheSameEventModelAndAnExplicitClientDoesNotBorrow(): void
@@ -467,12 +480,27 @@ class AcquireTimingRetryPool extends Pool
     }
 }
 
-class AcquireTimingBeginOverrideDb extends FastDb
+class AcquireTimingManualTransactionDb extends FastDb
 {
-    public int $begins = 0;
+    public array $manualCalls = [];
+
     public function begin(?Connection $client = null, TransactionStartFlags $flags = TransactionStartFlags::None, ?float $timeout = null): bool
     {
-        $this->begins++;
+        $this->manualCalls[] = 'begin';
         return parent::begin($client, $flags, $timeout);
+    }
+
+    public function commit(?Connection $client = null,
+        TransactionCompletionFlags $flags = TransactionCompletionFlags::NoChainNoRelease, ?float $timeout = null): bool
+    {
+        $this->manualCalls[] = 'commit';
+        return parent::commit($client, $flags, $timeout);
+    }
+
+    public function rollback(?Connection $client = null,
+        TransactionCompletionFlags $flags = TransactionCompletionFlags::NoChainNoRelease, ?float $timeout = null): bool
+    {
+        $this->manualCalls[] = 'rollback';
+        return parent::rollback($client, $flags, $timeout);
     }
 }

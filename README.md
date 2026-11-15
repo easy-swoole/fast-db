@@ -915,7 +915,7 @@ if ($user !== null) {
 }
 ```
 
-`toArray($filterNull = false)` / `jsonSerialize()` 只输出实体映射字段、调用转换逻辑并应用输出字段限制，不消费查询配置。此前设置的 WHERE、排序、分页和预加载声明均保留，记录模型日志不会改变下一次数据库操作。
+`toArray($filterNull = false)` / `jsonSerialize()` 只读取实体字段、已有的输出配置和查询结果继承的输出限制。业务如需固定的序列化规则，可覆写 `toArray()`。序列化不调用 `queryLimit()`，也不消费查询配置。此前设置的 WHERE、排序、分页和预加载声明均保留，记录模型日志不会改变下一次数据库操作。
 
 ```php
 $user = User::findRecord(1);
@@ -1651,7 +1651,7 @@ $updated = $db->transaction(function (FastDb $db): bool {
 }, flags: TransactionStartFlags::ReadWrite, timeout: 1.0);
 ```
 
-入口连接没有事务时，本层先开始事务，回调正常返回后提交；开始或业务回调抛异常时，入口连接仍有活动事务才尝试回滚，随后抛出原异常。开始失败不会执行回调。返回严格的 `false` 也是正常返回，会提交；需要让拥有层回滚时应抛出异常。
+`transaction()` 使用自身的事务生命周期。子类覆写 `begin()`、`commit()` 或 `rollback()` 时，覆写只作用于显式调用这些入口。入口连接没有事务时，本层先开始事务，回调正常返回后提交；开始或业务回调抛异常时，入口连接仍有活动事务才尝试回滚，随后抛出原异常。开始失败不会执行回调。返回严格的 `false` 也是正常返回，会提交；需要让拥有层回滚时应抛出异常。
 
 #### 同连接嵌套与已有手动事务
 

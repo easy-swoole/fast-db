@@ -25,7 +25,7 @@ final class RelationLoader
     }
 
     /** 两种关联共用构建、缓存查找和写回流程，结果组装分别处理。 */
-    public function load(RelationPlan $plan, callable $execute, callable $beforeHydration, callable $hydrate): mixed
+    public function load(RelationPlan $plan, callable $execute, callable $hydrate): mixed
     {
         $relate = $plan->relate;
         $query = $plan->builder;
@@ -46,10 +46,6 @@ final class RelationLoader
         $db = !$returnAsArray && $rows !== [] ? FastDb::getInstance() : null;
         $connectionToRestore = $db?->selectConnection();
         try {
-            if ($db !== null) {
-                // 子模型初始化或赋值可能重入父模型，回填前结束本次关联的查询配置。
-                $beforeHydration();
-            }
             $data = self::materialize($relate, $rows, $returnAsArray, $result->getConnectionName(), $hydrate, $plan->target);
         } finally {
             if ($db !== null) { $db->selectConnection($connectionToRestore); }
