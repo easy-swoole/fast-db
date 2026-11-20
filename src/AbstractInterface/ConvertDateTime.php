@@ -23,14 +23,15 @@ class ConvertDateTime extends \DateTime implements ConvertObjectInterface
             throw new \InvalidArgumentException('ConvertDateTime expects a date/time string, DateTimeInterface, integer timestamp or null');
         }
 
-                // DateTime 会自动纠正不存在的日期，因此先校验 MySQL 日期各字段。
+        // 按 MySQL 格式解析并检查日期纠正警告，校验成功后直接复用解析实例。
         if(preg_match('/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?$/D', $data, $matches)){
             $format = isset($matches[2]) ? '!Y-m-d H:i:s.u' : '!Y-m-d H:i:s';
-            $parsed = \DateTimeImmutable::createFromFormat($format, $data);
-            $errors = \DateTimeImmutable::getLastErrors();
+            $parsed = static::createFromFormat($format, $data);
+            $errors = static::getLastErrors();
             if($parsed === false || ($errors !== false && ($errors['warning_count'] || $errors['error_count']))){
                 throw new \InvalidArgumentException('Invalid MySQL DATETIME value: '.$data);
             }
+            return $parsed;
         }
         return new static($data);
     }

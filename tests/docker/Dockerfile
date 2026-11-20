@@ -12,9 +12,12 @@ RUN set -eux; \
         $PHPIZE_DEPS ca-certificates curl git unzip libssl-dev zlib1g-dev; \
     docker-php-ext-install -j"$(nproc)" sockets mysqli bcmath; \
     mkdir -p /usr/src/swoole; \
-    curl --fail --show-error --location --retry 3 \
-        "https://github.com/swoole/swoole-src/archive/refs/tags/v${SWOOLE_VERSION}.tar.gz" \
-        | tar -xz --strip-components=1 -C /usr/src/swoole; \
+    curl --fail --show-error --location --retry 5 --retry-max-time 180 \
+        --connect-timeout 15 --max-time 120 \
+        "https://codeload.github.com/swoole/swoole-src/tar.gz/refs/tags/v${SWOOLE_VERSION}" \
+        --output /tmp/swoole.tar.gz; \
+    tar -xzf /tmp/swoole.tar.gz --strip-components=1 -C /usr/src/swoole; \
+    rm /tmp/swoole.tar.gz; \
     cd /usr/src/swoole; \
     phpize; \
     set -- --with-openssl-dir=/usr --enable-sockets --disable-brotli; \

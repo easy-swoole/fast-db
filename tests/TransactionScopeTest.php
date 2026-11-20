@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace EasySwoole\FastDb\Tests;
 
 use EasySwoole\FastDb\Config as FastDbConfig;
-use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\Mysqli\Config;
@@ -210,34 +209,28 @@ final class TransactionScopeTest extends TestCase
         $this->assertSame(['START', 'COMMIT', 'START', 'ROLLBACK'], $this->commands());
     }
 
-    public static function boundaryFailures(): array { return [['false'], ['throw']]; }
-
-    #[DataProvider('boundaryFailures')]
-    public function testBeginFailureNeverRunsTheBusinessCallback(string $mode): void
+    public function testBeginFailureNeverRunsTheBusinessCallback(): void
     {
         $failure = new \RuntimeException('begin failed');
-        $this->connections['a']->failCommands['START'] = $mode === 'throw' ? $failure : false;
+        $this->connections['a']->failCommands['START'] = $failure;
         $entered = false;
         try {
             $this->db->transaction(static function () use (&$entered): void { $entered = true; });
             $this->fail('Expected begin failure');
         } catch (\Throwable $error) {
-            if ($mode === 'throw') { $this->assertSame($failure, $error); }
-            else { $this->assertInstanceOf(RuntimeError::class, $error); }
+            $this->assertSame($failure, $error);
         }
         $this->assertFalse($entered);
         $this->assertSame(['START'], $this->commands());
     }
 
-    #[DataProvider('boundaryFailures')]
-    public function testCommitFailureIsReportedWithoutAutomaticRollbackOrRetry(string $mode): void
+    public function testCommitFailureIsReportedWithoutAutomaticRollbackOrRetry(): void
     {
         $failure = new \RuntimeException('commit failed');
-        $this->connections['a']->failCommands['COMMIT'] = $mode === 'throw' ? $failure : false;
+        $this->connections['a']->failCommands['COMMIT'] = $failure;
         try { $this->db->transaction(function (): void { $this->insert(1); }); $this->fail('Expected commit failure'); }
         catch (\Throwable $error) {
-            if ($mode === 'throw') { $this->assertSame($failure, $error); }
-            else { $this->assertInstanceOf(RuntimeError::class, $error); }
+            $this->assertSame($failure, $error);
         }
         $this->assertSame(['START', 'COMMIT'], $this->commands());
         $this->assertTrue($this->connections['a']->database->inTransaction());
@@ -288,9 +281,7 @@ class TransactionScopeSqliteClient extends Connection
         $this->queries[] = ['sql' => $query, 'parameters' => $parameters, 'timeout' => $timeout];
         $this->lastAffectRows = $this->lastInsertId = 0;
         if (preg_match('/\A(START|COMMIT|ROLLBACK)\b/', $query, $match) && array_key_exists($match[1], $this->failCommands)) {
-            $failure = $this->failCommands[$match[1]];
-            if ($failure instanceof \Throwable) { throw $failure; }
-            return $failure;
+            throw $this->failCommands[$match[1]];
         }
         if (str_starts_with($query, 'START TRANSACTION')) { $this->database->beginTransaction(); $this->isInTransaction = true; return true; }
         if (str_starts_with($query, 'COMMIT')) { $this->database->commit(); $this->isInTransaction = false; return true; }

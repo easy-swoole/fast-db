@@ -1146,7 +1146,7 @@ $user->update(); // nullable 字段清空为 SQL NULL。
 
 `toValue()` 和实体序列化输出对象所在时区的本地时间，格式为 `Y-m-d H:i:s`。微秒非零时输出 `Y-m-d H:i:s.u`，可用 `DATETIME(6)` 保留完整精度。`DATETIME` 只保存日期和时间字段。应用应统一写入所用的时区与 PHP 读取普通数据库字符串时的默认时区，并负责提供该时区中有效的本地时间。
 
-转换器拒绝空字符串、不支持的输入类型和标准 MySQL 格式中的无效日期，例如零日期。其他日期字符串及夏令时的本地时间解释沿用 PHP `DateTime` 规则。
+转换器拒绝空字符串、不支持的输入类型和标准 MySQL 格式中的无效日期，例如零日期。标准 MySQL 字符串在校验后直接返回解析实例，保留默认时区与微秒。其他日期字符串及夏令时的本地时间解释沿用 PHP `DateTime` 规则。
 
 ### ConvertBean
 
@@ -1353,7 +1353,7 @@ foreach ($users as $user) {
 
 `withRelations(string|array $relations)` 接受单个方法名或方法名列表，不接受闭包配置或点分嵌套路径。方法名按声明大小写规范化并去重。再次调用会替换本次声明，`withRelations([])` 清除声明。关系方法须标注 `#[Relate]`，并显式声明 `type: RelationType::One` 或 `type: RelationType::Many`。预加载根据声明和 `configure` 构建查询，业务 getter 在应用实际调用时执行。
 
-实体模式会把结果注入各父实体的关联缓存，之后相同查询形状的关系 getter 可直接命中，即使 `Relate::cacheResult` 为 false 也有效。一对一仍返回实体或 null，匹配多条仍抛出 `RuntimeError`；一对多仍返回 `ListResult`。关系声明设置 `returnAsArray: true` 时，按需加载和预加载均返回数组或包含数组的 `ListResult`。父实体的 `toArray()` 不会自动把关系变成字段，需要输出时显式调用 getter。
+实体模式会把结果注入各父实体的关联缓存，之后相同查询形状的关系 getter 可直接命中，即使 `Relate::cacheResult` 为 false 也有效。一对一仍返回实体或 null，匹配多条仍抛出 `RuntimeError`；一对多仍返回 `ListResult`。关系声明设置 `returnAsArray: true` 时，按需加载和预加载均返回数组或包含数组的 `ListResult`。数组模式在一对一数量检查后直接使用原始行。父实体的 `toArray()` 不会自动把关系变成字段，需要输出时显式调用 getter。
 
 #### 返回数组并附加关联
 
@@ -1749,7 +1749,7 @@ $db->withConnection('A', function (FastDb $db): void {
 
 拥有层使用 flags 开始事务，timeout 分别传给本层实际发送的 BEGIN、COMMIT、ROLLBACK。每条控制 SQL 都有独立的单次预算；这不是 PHP 回调或整个事务的累计期限，业务 SQL 仍使用各自查询参数或连接配置。连接池等待也不包含在控制 SQL 超时内。
 
-开始或业务回调抛出的异常优先于回滚清理异常，回滚失败不会替换原异常。提交发生在业务回调正常返回之后：提交返回 false 会抛出 `RuntimeError`，提交本身或其日志回调抛出的异常直接向外传播，不自动重试，也不自动追加 ROLLBACK。尤其 COMMIT 已成功后的日志异常不能视为数据库未提交；提交超时、断线等结果不明时，由业务核实最终状态并处理。
+开始或业务回调抛出的异常优先于回滚清理异常，回滚失败不会替换原异常。提交发生在业务回调正常返回之后：提交本身或其日志回调抛出的异常直接向外传播，不自动重试，也不自动追加 ROLLBACK。尤其 COMMIT 已成功后的日志异常不能视为数据库未提交；提交超时、断线等结果不明时，由业务核实最终状态并处理。
 
 helper 不解析 SQL 白名单，不管理 savepoint，不跟踪事务代次，也不阻止回调手工开始、提交、回滚或执行会隐式提交的 SQL。这些操作对事务边界及业务原子性的影响由调用方负责。
 

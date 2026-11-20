@@ -63,16 +63,14 @@ final class RelationLoader
         if ($single && count($rows) > 1) {
             throw new RuntimeError('more than one record hit is no allow in relateOne method');
         }
+        if ($returnAsArray) { return $single ? ($rows[0] ?? null) : $rows; }
 
-        $db = $returnAsArray ? null : FastDb::getInstance();
+        $db = FastDb::getInstance();
         $result = [];
         foreach ($rows as $row) {
-            if ($db !== null) {
-                // 上一条记录的构造器可能切库，每条都从查询连接开始回填。
-                $db->selectConnection($connectionName);
-                $row = $hydrate($relate->targetEntity, $row, $single ? $target : null);
-            }
-            $result[] = $row;
+            // 上一条记录的构造器可能切库，每条都从查询连接开始回填。
+            $db->selectConnection($connectionName);
+            $result[] = $hydrate($relate->targetEntity, $row, $single ? $target : null);
         }
         return $single ? ($result[0] ?? null) : $result;
     }

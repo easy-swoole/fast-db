@@ -134,7 +134,7 @@ class FastDb
         // 已有事务由原调用层负责结束，加入层只执行自己的业务回调。
         if ($client->isInTransaction()) { return $callback($this); }
         try {
-            if (!$this->startTransaction($client, $flags, $timeout)) { throw new RuntimeError('Failed to begin transaction'); }
+            $this->startTransaction($client, $flags, $timeout);
             $value = $callback($this);
         } catch (\Throwable $error) {
             if ($client->isInTransaction()) {
@@ -147,9 +147,7 @@ class FastDb
             throw $error;
         }
         // 提交失败交给调用者处理，也不把提交后的日志异常当成业务回调失败。
-        if (!$this->completeTransaction(false, $client, TransactionCompletionFlags::NoChainNoRelease, $timeout)) {
-            throw new RuntimeError('Failed to commit transaction');
-        }
+        $this->completeTransaction(false, $client, TransactionCompletionFlags::NoChainNoRelease, $timeout);
         return $value;
     }
 

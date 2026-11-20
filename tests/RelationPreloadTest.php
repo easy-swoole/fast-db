@@ -536,6 +536,21 @@ final class RelationPreloadTest extends TestCase
         $this->assertCount(3, $this->connection->queries);
     }
 
+    public function testArrayOneRelationRejectsDuplicatesInBothLoadingPaths(): void
+    {
+        $this->connection->database->exec("INSERT INTO preload_profiles VALUES (22,1,'duplicate')");
+        $parent = new PreloadFixtureParent(['id' => 1]);
+        try {
+            $parent->arrayProfile();
+            $this->fail('Expected duplicate one relation to be rejected');
+        } catch (RuntimeError $error) {
+            $this->assertStringContainsString('more than one record', $error->getMessage());
+        }
+        $this->expectException(RuntimeError::class);
+        $this->expectExceptionMessage('more than one record');
+        $this->parents('arrayProfile');
+    }
+
     public function testDefaultPreloadProjectionUsesTheWildcardAndOnlyReturnsUserColumns(): void
     {
         $parents = $this->parents('arrayChildren');
