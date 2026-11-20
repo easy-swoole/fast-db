@@ -81,7 +81,7 @@ $reportingDb = ReportingDb::getInstance();
 
 - 每个数据库配置维护独立连接池，同一协程、同一连接名复用当前连接。
 - 协程结束后自动归还连接，也可通过 `invoke()` 或 `recycleContext()` 提前归还。
-- 连接归还时回滚未提交的数据库事务；回滚失败的连接由连接池丢弃。
+- 连接归还时按配置提交、回滚或保留事务，默认回滚；处理失败的连接由连接池丢弃。
 - `#[Property]` 映射属性，支持默认值、nullable 属性和自定义转换。使用 `#[PrimaryKey]` 声明主键，使用 `#[AutoIncrement]` 指定独立自增列。
 - 查询结果可返回实体、原始数组或支持遍历/计数/数组访问的 `ListResult`。
 - 条件、排序、连接、分组、分页、分块、聚合与 `FOR UPDATE`。
@@ -256,7 +256,7 @@ use EasySwoole\Mysqli\QueryBuilder;
 | `maxConnectTime` | float | `5.0` | 完整连接过程的超时上限，秒 |
 | `compress` | bool | `false` | 请求 MySQL 协议压缩，需服务端支持 |
 | `name` | string | `default` | 连接池名称 |
-| `isForceRollback` | bool | `false` | 归还仍有会话的连接时尝试回滚，可用 `setForceRollback()` 设置。配置不会因一次回收被清除 |
+| `transactionRecycleAction` | TransactionRecycleAction | `Rollback` | 归还连接时对未结束事务的处理策略，通过 `setTransactionRecycleAction()` 设置 |
 
 建连和 `testDb()` 使用相同的驱动参数，包括数据库地址、账号、连接选项和 TLS。连接池参数直接由连接池读取。
 
@@ -355,6 +355,35 @@ $db->preConnect(); // 对已注册的连接池预热到最小连接数。
 ```
 
 连接池在首次使用时创建，由池显式调用 `connect()` 建立会话。借用时由池淘汰已断开的连接并补充新连接。池满、建连等异常保留原类型。池未提供可用连接且返回 null 时，FastDb 抛出 RuntimeError。SQL 发出后若断线或超时，FastDb 将异常交给调用方。持有失效会话的协程应先回收上下文，业务需要继续时再发起独立操作。事务丢失后的提交与回滚报告事务丢失，回收后失效会话由池淘汰。连接池创建后，`addDb()` 会拒绝覆盖同名连接的配置。请在首次查询或预热前完成注册。`addDb()` 保存配置副本，`getConfig()` 返回副本。
+
+### 归还连接时的事务处理
+
+`transactionRecycleAction` 使用 `EasySwoole\FastDb\Mysql\TransactionRecycleAction` 枚举，只在归还的连接仍有事务时执行。
+
+| 枚举值 | 归还时的行为 |
+| --- | --- |
+| `Rollback` | 回滚未提交事务，默认策略 |
+| `Commit` | 提交未提交事务 |
+| `None` | 保留现有事务，直接归还连接 |
+
+```php
+use EasySwoole\FastDb\Config;
+use EasySwoole\FastDb\Mysql\TransactionRecycleAction;
+
+$config = new Config([
+    'transactionRecycleAction' => TransactionRecycleAction::Rollback,
+]);
+$config->setTransactionRecycleAction(TransactionRecycleAction::Commit);
+$action = $config->getTransactionRecycleAction();
+```
+
+请在注册连接前设置策略。`recycleContext()`、`invoke()` 自己借用的连接和协程退出时归还的连接都使用同一策略。策略只接受枚举值。连接没有事务时不发送 COMMIT 或 ROLLBACK，策略也不会在归还后重置。
+
+该策略按归还时的事务状态执行。选择 `Commit` 后，即使 `invoke()` 的业务回调抛出异常，finally 中归还连接也会提交仍未结束的事务。`transaction()` 会先按自身回调结果提交或回滚自己开启的事务，归还策略只处理届时仍未结束的事务。
+
+`Commit` 和 `Rollback` 使用 `AND NO CHAIN NO RELEASE` 明确结束事务并保留会话。`None` 会让下一次借用继续持有该事务及其未提交修改和锁，事务边界由调用方管理。淘汰或关闭连接时直接关闭会话，MySQL 会回滚尚未提交的事务。
+
+归还阶段的提交或回滚由连接池执行，不进入 FastDb 的查询回调和查询栈。执行失败时原异常交给连接池处理，FastDb 的逐连接异常隔离沿用现有流程。
 
 ## 实体与属性映射
 
@@ -1622,11 +1651,11 @@ FastDb 查询和事务执行超时抛出 `EasySwoole\FastDb\Exception\TimeoutExc
 
 `queryLimit()->selectForUpdate()` 或 `all(true)` 也可生成锁定查询。锁应配合事务使用，并保持查询、更新、提交在同一协程和同一连接名内。
 
-连接被回收时，未提交事务会被回滚。`invoke()` 只归还本次调用新获取的连接；复用已有连接或嵌套调用时，连接继续由外层作用域管理。
+连接归还时对未结束事务应用 `transactionRecycleAction`，默认回滚。`invoke()` 只归还本次调用新获取的连接；复用已有连接或嵌套调用时，连接继续由外层作用域管理。
 
 事务内成功执行 `update()` 后，模型立即接受本次写入字段的比较基准。之后提交、回滚、连接回收或服务端回滚，都不会自动修改模型当前属性、比较基准或已经返回的更新结果。回滚后直接对同一个未修改对象再次 `update()`，可能没有变化可写；应按业务需要重新查询、重建对象，或显式修改字段。
 
-Connection 直接读取底层协议，不维护额外的本地事务标记，也不保存模型事务快照、归属代次或回滚标记。同一 FastDb 实例在每个协程内只登记一次连接退出清理；归还连接时清理未结束的数据库会话，避免下一次借用继承事务。此资源清理不负责恢复业务对象。
+Connection 直接读取底层协议，不维护额外的本地事务标记，也不保存模型事务快照、归属代次或回滚标记。同一 FastDb 实例在每个协程内只登记一次连接退出清理；归还连接时按 `transactionRecycleAction` 处理未结束事务。此资源清理不负责恢复业务对象。
 
 死锁、断线等对事务状态的影响以底层协议为准；异常继续向调用方抛出，不自动重试。普通 SQL 错误也不会自动撤销模型状态；需要回滚和重试哪些操作，由业务决定。
 
@@ -1803,11 +1832,11 @@ $rows = $db->invoke(function (Connection $connection): array {
 
 ```php
 $db->currentConnection(); // 当前选中连接的 Connection|null，不主动创建连接。
-$db->recycleContext(); // 归还当前协程的全部连接，未结束会话由连接池清理。
+$db->recycleContext(); // 归还当前协程的全部连接，按配置处理未结束事务。
 $db->reset(); // 重置连接池和定时器，用于生命周期管理。
 ```
 
-`recycleContext(): void` 直接归还当前协程持有的全部连接，并清理其查询栈。连接池在归还时回滚未结束的事务，淘汰连接时直接关闭会话。FastDb 在单条归还处隔离异常，使批量归还能继续，并保留 `invoke()` 回调的返回值或原始异常。模型属性及比较基准不因此改变。
+`recycleContext(): void` 直接归还当前协程持有的全部连接，并清理其查询栈。连接池在归还时按 `transactionRecycleAction` 处理未结束事务，默认回滚；淘汰连接时直接关闭会话。FastDb 在单条归还处隔离异常，使批量归还能继续，并保留 `invoke()` 回调的返回值或原始异常。模型属性及比较基准不因此改变。
 
 `reset()` 重置全部连接池和定时器，用于关闭、测试或重新初始化阶段。调用前应先归还上下文连接，并避免其他协程仍在使用连接池。
 

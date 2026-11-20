@@ -2,6 +2,7 @@
 
 namespace EasySwoole\FastDb;
 
+use EasySwoole\FastDb\Mysql\TransactionRecycleAction;
 use EasySwoole\Mysqli\Config as MysqliConfig;
 use EasySwoole\Mysqli\TlsMode;
 use EasySwoole\Mysqli\TlsVersion;
@@ -31,7 +32,7 @@ class Config extends \EasySwoole\Pool\Config
 
     protected string $name = "default";
 
-    protected bool $isForceRollback = false;
+    protected TransactionRecycleAction $transactionRecycleAction = TransactionRecycleAction::Rollback;
 
     /**
      * @return string
@@ -202,13 +203,13 @@ class Config extends \EasySwoole\Pool\Config
         ]);
     }
 
-    public function isForceRollback(): bool
+    public function getTransactionRecycleAction(): TransactionRecycleAction
     {
-        return $this->isForceRollback;
+        return $this->transactionRecycleAction;
     }
 
-    public function setForceRollback(bool $enabled): void
+    public function setTransactionRecycleAction(TransactionRecycleAction $action): void
     {
-        $this->isForceRollback = $enabled;
+        $this->transactionRecycleAction = $action;
     }
 }

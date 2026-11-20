@@ -14,6 +14,7 @@ use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Config;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
+use EasySwoole\FastDb\Mysql\TransactionRecycleAction;
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\FastDb\Tests\Model\ConvertedKey;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -647,6 +648,69 @@ final class TransactionTest extends TestCase
         $this->write(2);
         $this->assertTrue($this->db->commit());
         $this->assertSame(2, $this->value());
+    }
+
+    public static function recycleActions(): array
+    {
+        return array_map(static fn (TransactionRecycleAction $action) => [$action], TransactionRecycleAction::cases());
+    }
+
+    #[DataProvider('recycleActions')]
+    public function testPoolAppliesItsTransactionRecycleAction(TransactionRecycleAction $action): void
+    {
+        $config = new Config(MYSQL_CONFIG);
+        $config->setTransactionRecycleAction($action);
+        $config->setMaxObjectNum(1);
+        $this->db->addDb($config);
+        $this->db->begin();
+        $this->write(7);
+        $client = $this->db->currentConnection();
+        $this->assertSame($action, $client->transactionRecycleAction);
+        $this->assertSame(0, $this->value());
+
+        $this->db->recycleContext();
+
+        $this->assertNull($this->db->currentConnection());
+        $this->assertSame($action === TransactionRecycleAction::None, $client->isInTransaction());
+        $this->assertSame($action === TransactionRecycleAction::Commit ? 7 : 0, $this->value());
+        // 池大小为一，验证再次借到同一连接时的会话和未提交数据。
+        $row = $this->db->rawQuery("SELECT value FROM {$this->table} WHERE id=1")->getResultOne();
+        $this->assertSame($client, $this->db->currentConnection());
+        $this->assertSame($action === TransactionRecycleAction::Rollback ? 0 : 7, $row['value']);
+        if ($action === TransactionRecycleAction::None) {
+            $this->assertTrue($this->db->rollback());
+            $this->assertSame(0, $this->value());
+        }
+    }
+
+    #[DataProvider('recycleActions')]
+    public function testInvokeAppliesTheRecycleActionWhilePreservingTheBusinessError(TransactionRecycleAction $action): void
+    {
+        $config = new Config(MYSQL_CONFIG);
+        $config->setTransactionRecycleAction($action);
+        $config->setMaxObjectNum(1);
+        $this->db->addDb($config);
+        $failure = new \RuntimeException('business failed');
+        $returnedClient = null;
+        try {
+            $this->db->invoke(function (Connection $client) use ($failure, &$returnedClient): void {
+                $returnedClient = $client;
+                $this->db->begin($client);
+                $this->write(9);
+                throw $failure;
+            });
+            $this->fail('Expected the business error');
+        } catch (\RuntimeException $error) {
+            $this->assertSame($failure, $error);
+        }
+        $this->assertNull($this->db->currentConnection());
+        $this->assertSame($action === TransactionRecycleAction::Commit ? 9 : 0, $this->value());
+        $this->assertSame($action === TransactionRecycleAction::None, $returnedClient->isInTransaction());
+        if ($action === TransactionRecycleAction::None) {
+            $this->db->rawQuery('SELECT 1');
+            $this->assertSame($returnedClient, $this->db->currentConnection());
+            $this->assertTrue($this->db->rollback());
+        }
     }
 
     public function testInsertIdSnapshotSurvivesSqlInGlobalLogCallback(): void

@@ -12,7 +12,7 @@ class Pool extends AbstractPool
         /** @var \EasySwoole\FastDb\Config $poolConfig */
         $poolConfig = $this->getConfig();
         $con = new Connection($poolConfig->toMysqliConfig());
-        $con->isForceRollback = $poolConfig->isForceRollback();
+        $con->transactionRecycleAction = $poolConfig->getTransactionRecycleAction();
         $con->connect();
         return $con;
     }

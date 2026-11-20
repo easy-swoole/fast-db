@@ -13,7 +13,7 @@ use EasySwoole\Pool\ObjectInterface;
 class Connection extends Client implements ObjectInterface
 {
     public string $connectionName;
-    public bool $isForceRollback = false;
+    public TransactionRecycleAction $transactionRecycleAction = TransactionRecycleAction::Rollback;
 
     /** @internal FastDb 用借用次数区分同一个连接对象的多次借出。 */
     public int $poolBorrowNumber = 0;
@@ -117,7 +117,7 @@ class Connection extends Client implements ObjectInterface
 
     function gc(): void
     {
-        // 淘汰时直接关闭会话，归还后继续复用的连接才需要先执行回滚。
+        // 淘汰时直接关闭会话，归还池中继续复用时才应用事务处理策略。
         $this->close();
     }
 
@@ -130,10 +130,14 @@ class Connection extends Client implements ObjectInterface
             $this->close();
             return;
         }
-        if ($protocol->inTransaction() || $this->isForceRollback) {
-            // 驱动抛出的回滚异常交给连接池处理。
-            $this->rollbackTransaction();
-        }
+        if (!$protocol->inTransaction()) { return; }
+        // 明确结束事务且保留连接，避免服务端 completion_type 再开事务或释放会话。
+        // 执行失败的原异常交给连接池处理，None 按配置保留现有事务。
+        match ($this->transactionRecycleAction) {
+            TransactionRecycleAction::Commit => $this->commitTransaction(TransactionCompletionFlags::NoChainNoRelease),
+            TransactionRecycleAction::Rollback => $this->rollbackTransaction(TransactionCompletionFlags::NoChainNoRelease),
+            TransactionRecycleAction::None => null,
+        };
     }
 
     function beforeUse(): bool

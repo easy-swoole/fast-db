@@ -6,6 +6,7 @@ namespace EasySwoole\FastDb\Tests;
 
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
+use EasySwoole\FastDb\Mysql\TransactionRecycleAction;
 use PHPUnit\Framework\TestCase;
 
 final class ConnectionTest extends TestCase
@@ -22,55 +23,99 @@ final class ConnectionTest extends TestCase
         }, true);
     }
 
-    public function testForceRollbackRemainsEnabledAcrossRestores(): void
+    public static function recycleActions(): array
     {
-        $this->withConnected(function (Connection $connection, \Swoole\Coroutine\Socket $peer): void {
-            $connection->isForceRollback = true;
-            $this->queueOk($peer); $this->queueOk($peer);
-            $connection->objectRestore(); $connection->objectRestore();
-            $this->assertFalse($connection->isInTransaction());
-            $this->assertTrue($connection->isForceRollback);
+        return array_map(static fn (TransactionRecycleAction $action) => [$action], TransactionRecycleAction::cases());
+    }
+
+    public static function recycleStates(): array
+    {
+        $cases = [];
+        foreach (TransactionRecycleAction::cases() as $action) {
+            $cases[$action->value . '-active'] = [$action, true];
+            $cases[$action->value . '-idle'] = [$action, false];
+        }
+        return $cases;
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('recycleStates')]
+    public function testRestoreAppliesTheConfiguredActionOnlyToAnActiveTransaction(
+        TransactionRecycleAction $action, bool $active
+    ): void {
+        $this->withConnected(function (Connection $connection, \Swoole\Coroutine\Socket $peer) use ($action, $active): void {
+            $connection->transactionRecycleAction = $action;
+            $sendsCommand = $active && $action !== TransactionRecycleAction::None;
+            if ($sendsCommand) { $this->queueOk($peer); }
+
+            $connection->objectRestore();
+
+            $this->assertSame($active && $action === TransactionRecycleAction::None, $connection->isInTransaction());
+            $this->assertSame($action, $connection->transactionRecycleAction);
+            $this->assertNotNull($connection->mysqlClient());
+            if ($sendsCommand) {
+                $sql = strtoupper($action->value) . ' AND NO CHAIN NO RELEASE';
+                $command = $peer->recvAll(5 + strlen($sql), 0.1);
+                $this->assertSame("\x03" . $sql, substr($command, 4));
+            } else {
+                $this->assertFalse($peer->recv(1, 0.001));
+            }
+        }, $active);
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('recycleActions')]
+    public function testRecycleActionPersistsAcrossRestores(TransactionRecycleAction $action): void
+    {
+        $this->withConnected(function (Connection $connection, \Swoole\Coroutine\Socket $peer) use ($action): void {
+            $connection->transactionRecycleAction = $action;
+            if ($action !== TransactionRecycleAction::None) { $this->queueOk($peer); }
+            $connection->objectRestore();
+            $connection->objectRestore();
+            $this->assertSame($action, $connection->transactionRecycleAction);
+            $this->assertSame($action === TransactionRecycleAction::None, $connection->isInTransaction());
         }, true);
     }
 
-    public static function cleanupMethods(): array { return [['objectRestore'], ['gc']]; }
+    public static function cleanupModes(): array
+    {
+        $cases = [];
+        foreach (TransactionRecycleAction::cases() as $action) {
+            foreach (['objectRestore', 'gc'] as $method) {
+                $cases[] = [$action, $method];
+            }
+        }
+        return $cases;
+    }
 
-    #[\PHPUnit\Framework\Attributes\DataProvider('cleanupMethods')]
-    public function testForceRollbackDoesNotOpenAClosedSession(string $method): void
+    #[\PHPUnit\Framework\Attributes\DataProvider('cleanupModes')]
+    public function testRecycleActionDoesNotOpenAClosedSession(TransactionRecycleAction $action, string $method): void
     {
         $connection = $this->getMockBuilder(Connection::class)
             ->setConstructorArgs([new \EasySwoole\Mysqli\Config()])
             ->onlyMethods(['rawQuery'])->getMock();
-        $connection->isForceRollback = true;
+        $connection->transactionRecycleAction = $action;
         $connection->close();
         $connection->expects($this->never())->method('rawQuery');
-
         $connection->$method();
-
         $this->assertNull($connection->mysqlClient());
     }
 
-    public function testRestoreRollsBackTheActiveSession(): void
+    public static function transactionCompletionActions(): array
     {
-        $this->withConnected(function (Connection $connection, \Swoole\Coroutine\Socket $peer): void {
-            $this->queueOk($peer);
-            $connection->objectRestore();
-            $this->assertFalse($connection->isInTransaction());
-            $this->assertNotNull($connection->mysqlClient());
-            $command = $peer->recvAll(5 + strlen('ROLLBACK AND NO CHAIN NO RELEASE'), 0.1);
-            $this->assertSame("\x03ROLLBACK AND NO CHAIN NO RELEASE", substr($command, 4));
-        }, true);
+        return [[TransactionRecycleAction::Commit], [TransactionRecycleAction::Rollback]];
     }
 
-    public function testFailedRollbackKeepsSessionForLaterSuccessfulRestore(): void
+    #[\PHPUnit\Framework\Attributes\DataProvider('transactionCompletionActions')]
+    public function testFailedRestorePreservesTheOriginalSqlError(TransactionRecycleAction $action): void
     {
-        $this->withConnected(function (Connection $connection, \Swoole\Coroutine\Socket $peer): void {
-            $payload = "\xff" . pack('v', 1064) . '#42000rollback failed';
-            $this->queuePacket($peer, $payload); $this->queueOk($peer);
-            try { $connection->objectRestore(); $this->fail('Expected rollback SQL error'); }
+        $this->withConnected(function (Connection $connection, \Swoole\Coroutine\Socket $peer) use ($action): void {
+            $connection->transactionRecycleAction = $action;
+            $payload = "\xff" . pack('v', 1064) . '#42000completion failed';
+            $this->queuePacket($peer, $payload);
+            $this->queueOk($peer);
+            try { $connection->objectRestore(); $this->fail('Expected transaction SQL error'); }
             catch (\EasySwoole\Mysqli\Exception\Exception $error) {
                 $this->assertSame(1064, $error->getCode());
-                $this->assertStringContainsString('rollback failed', $error->getMessage());
+                $this->assertStringContainsString('completion failed', $error->getMessage());
             }
             $this->assertTrue($connection->isInTransaction());
             $connection->objectRestore();
@@ -78,10 +123,11 @@ final class ConnectionTest extends TestCase
         }, true);
     }
 
-    public function testDiscardedConnectionClosesWithoutSendingRollback(): void
+    #[\PHPUnit\Framework\Attributes\DataProvider('recycleActions')]
+    public function testDiscardedConnectionClosesWithoutCompletingTheTransaction(TransactionRecycleAction $action): void
     {
-        $this->withConnected(function (Connection $connection, \Swoole\Coroutine\Socket $peer): void {
-            $connection->isForceRollback = true;
+        $this->withConnected(function (Connection $connection, \Swoole\Coroutine\Socket $peer) use ($action): void {
+            $connection->transactionRecycleAction = $action;
             $connection->gc();
             $this->assertFalse($connection->isInTransaction());
             $this->assertNull($connection->mysqlClient());
@@ -89,12 +135,20 @@ final class ConnectionTest extends TestCase
         }, true);
     }
 
-    public function testForceRollbackAccessorUsesTheExistingConfigurationKey(): void
+    public function testTransactionRecycleActionConfiguration(): void
     {
-        $config = new \EasySwoole\FastDb\Config(['isForceRollback' => true]);
-        $this->assertTrue($config->isForceRollback());
-        $config->setForceRollback(false);
-        $this->assertFalse($config->toArray()['isForceRollback']);
+        $config = new \EasySwoole\FastDb\Config();
+        $this->assertSame(TransactionRecycleAction::Rollback, $config->getTransactionRecycleAction());
+        foreach (TransactionRecycleAction::cases() as $action) {
+            $config = new \EasySwoole\FastDb\Config(['transactionRecycleAction' => $action]);
+            $this->assertSame($action, $config->getTransactionRecycleAction());
+            $this->assertSame($action, $config->toArray()['transactionRecycleAction']);
+        }
+        $config->setTransactionRecycleAction(TransactionRecycleAction::Commit);
+        $this->assertSame(TransactionRecycleAction::Commit, $config->getTransactionRecycleAction());
+        $config->restore(['transactionRecycleAction' => TransactionRecycleAction::None]);
+        $this->assertSame(TransactionRecycleAction::None, $config->getTransactionRecycleAction());
+        $this->assertArrayNotHasKey('transactionRecycleAction', $config->toMysqliConfig()->toArray());
     }
 
     public function testQueryTimeoutReachesMysqliClient(): void
