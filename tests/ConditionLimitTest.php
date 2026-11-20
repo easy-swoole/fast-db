@@ -4,14 +4,18 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests;
 
+use Closure;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\Mysqli\QueryBuilder;
+use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
+use Swoole\Coroutine;
 
 final class ConditionLimitTest extends TestCase
 {
@@ -29,7 +33,7 @@ final class ConditionLimitTest extends TestCase
             yield "$operation static callback" => [$operation, ConditionCallbacks::filter(...), [10], '`value` >= ?'];
             yield "$operation instance callback" => [$operation, (new ConditionCallbacks())->filterInstance(...), [10], '`value` >= ?'];
             yield "$operation invokable" => [$operation, new ConditionCallbacks(), [10], '`value` >= ?'];
-            yield "$operation converted string callback" => [$operation, \Closure::fromCallable(ConditionCallbacks::class . '::filter'), [10], '`value` >= ?'];
+            yield "$operation converted string callback" => [$operation, Closure::fromCallable(ConditionCallbacks::class . '::filter'), [10], '`value` >= ?'];
             yield "$operation equality" => [$operation, ['value' => 10], [10], '`value` = ?'];
             yield "$operation operator" => [$operation, ['value' => [10, '>']], [10], '`value` > ?'];
             yield "$operation IN" => [$operation, ['id' => [['01', 'a'], 'IN']], ['01', 'a'], '`id` IN'];
@@ -55,9 +59,9 @@ final class ConditionLimitTest extends TestCase
                 return $write ? true : [];
             });
         $db = new FastDb();
-        $current = new \ReflectionProperty(FastDb::class, 'currentConnection');
-        $current->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $client]]);
-        $singleton = new \ReflectionProperty(FastDb::class, 'instance');
+        $current = new ReflectionProperty(FastDb::class, 'currentConnection');
+        $current->setValue($db, [Coroutine::getCid() => ['default' => $client]]);
+        $singleton = new ReflectionProperty(FastDb::class, 'instance');
         $original = $singleton->getValue();
         $singleton->setValue(null, $db);
         try {
@@ -73,14 +77,14 @@ final class ConditionLimitTest extends TestCase
 
     public function testArrayWithCallableShapeIsRejectedAsAnInvalidCondition(): void
     {
-        $this->expectException(\InvalidArgumentException::class);
+        $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('Query conditions require column names as array keys');
         ConditionRecord::findAll([ConditionCallbacks::class, 'filter']);
     }
 
     public function testArrayConditionRequiresAnExplicitOperator(): void
     {
-        $this->expectException(\InvalidArgumentException::class);
+        $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('Array conditions require');
         ConditionRecord::findAll(['value' => []]);
     }

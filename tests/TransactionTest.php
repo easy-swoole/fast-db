@@ -4,37 +4,56 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests;
 
-use EasySwoole\FastDb\Attributes\RelationType;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\AbstractInterface\ConvertList;
 use EasySwoole\FastDb\Attributes\AutoIncrement;
 use EasySwoole\FastDb\Attributes\PrimaryKey;
-use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Attributes\Property;
+use EasySwoole\FastDb\Attributes\Relate;
+use EasySwoole\FastDb\Attributes\RelationType;
+use EasySwoole\FastDb\Beans\ListResult;
+use EasySwoole\FastDb\Beans\Query;
 use EasySwoole\FastDb\Config;
+use EasySwoole\FastDb\Exception\RuntimeError;
+use EasySwoole\FastDb\Exception\TimeoutException;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
-use EasySwoole\FastDb\Mysql\TransactionRecycleAction;
 use EasySwoole\FastDb\Mysql\QueryResult;
+use EasySwoole\FastDb\Mysql\TransactionRecycleAction;
 use EasySwoole\FastDb\Tests\Model\ConvertedKey;
+use EasySwoole\Mysqli\Exception\Exception;
+use EasySwoole\Mysqli\Exception\TimeoutException as DriverTimeoutException;
+use EasySwoole\Mysqli\Exception\TransactionLostException;
+use EasySwoole\Mysqli\QueryBuilder;
+use EasySwoole\Mysqli\Transaction\TransactionCompletionFlags;
+use EasySwoole\Pool\Exception\PoolEmpty;
+use JsonException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
+use RuntimeException;
+use Swoole\Coroutine;
+use Swoole\Coroutine\Channel;
+use Swoole\Coroutine\Socket;
+use Throwable;
+use WeakReference;
+use mysqli;
 
 final class TransactionTest extends TestCase
 {
     private FastDb $db;
-    private \mysqli $observer;
+    private mysqli $observer;
     private string $table;
-    private \ReflectionProperty $instance;
+    private ReflectionProperty $instance;
     private mixed $original;
 
     protected function setUp(): void
     {
-        $this->instance = new \ReflectionProperty(FastDb::class, 'instance');
+        $this->instance = new ReflectionProperty(FastDb::class, 'instance');
         $this->original = $this->instance->getValue();
         $this->db = (new FastDb())->addDb(new Config(MYSQL_CONFIG));
         $this->instance->setValue(null, $this->db);
-        $this->observer = new \mysqli(MYSQL_CONFIG['host'], MYSQL_CONFIG['user'], MYSQL_CONFIG['password'],
+        $this->observer = new mysqli(MYSQL_CONFIG['host'], MYSQL_CONFIG['user'], MYSQL_CONFIG['password'],
             MYSQL_CONFIG['database'], MYSQL_CONFIG['port']);
         $this->table = 'fastdb_tx_' . bin2hex(random_bytes(8));
         TransactionEntity::$table = $this->table;
@@ -76,18 +95,18 @@ final class TransactionTest extends TestCase
             try {
                 $entity->$operation();
                 $this->fail('A partially loaded primary key cannot locate a write');
-            } catch (\EasySwoole\FastDb\Exception\RuntimeError $error) {
+            } catch (RuntimeError $error) {
                 $this->assertStringContainsString('without primary key value', $error->getMessage());
             }
         }
-        $selection = static fn (\EasySwoole\Mysqli\QueryBuilder $query) => $query->fields(['value'])->where('id', 1);
+        $selection = static fn (QueryBuilder $query) => $query->fields(['value'])->where('id', 1);
         $owner->queryLimit()->where('id', 1)->hideFields('id');
         foreach ([$owner->all()->first(), PartialKeyMysqlEntity::findRecord($selection),
             PartialKeyMysqlEntity::findAll($selection)[0]] as $partial) {
             try {
                 $partial->update();
                 $this->fail('Expected the write to reject a missing row key');
-            } catch (\EasySwoole\FastDb\Exception\RuntimeError $error) {
+            } catch (RuntimeError $error) {
                 $this->assertStringContainsString('without primary key value', $error->getMessage());
             }
         }
@@ -184,7 +203,7 @@ final class TransactionTest extends TestCase
         try {
             $this->db->addDb(new Config(array_replace(MYSQL_CONFIG, ['database' => 'replacement'])));
             $this->fail('A configured pool cannot be replaced');
-        } catch (\EasySwoole\FastDb\Exception\RuntimeError $error) {
+        } catch (RuntimeError $error) {
             $this->assertStringContainsString('after its pool has been created', $error->getMessage());
         }
         $this->assertSame(MYSQL_CONFIG['database'], $this->db->getConfig()->getDatabase());
@@ -477,7 +496,7 @@ final class TransactionTest extends TestCase
         $this->assertSame(0, TextKeyMysqlEntity::findRecord('1')->value);
         $this->assertSame(20, TextKeyMysqlEntity::findRecord('trim')->value);
         $filter = new class {
-            public function onlyOriginal(\EasySwoole\Mysqli\QueryBuilder $query): void { $query->where('id', '1'); }
+            public function onlyOriginal(QueryBuilder $query): void { $query->where('id', '1'); }
         };
         $this->assertSame(1, TextKeyMysqlEntity::fastUpdate($filter->onlyOriginal(...), ['value' => 7]));
         $this->assertSame(7, TextKeyMysqlEntity::findRecord('1')->value);
@@ -565,7 +584,7 @@ final class TransactionTest extends TestCase
             $entity->id->value = 'uuid-b';
             $entity->value = 12;
             try { $entity->$operation(); $this->fail('Changed primary key must be rejected'); }
-            catch (\EasySwoole\FastDb\Exception\RuntimeError $error) {
+            catch (RuntimeError $error) {
                 $this->assertSame('Cannot change entity primary key: id', $error->getMessage());
             }
             $this->assertSame(11, TextKeyMysqlEntity::findRecord('uuid-a')->value);
@@ -620,7 +639,7 @@ final class TransactionTest extends TestCase
         $queries = 0;
         $this->db->setOnQuery(static function () use (&$queries): void { $queries++; });
         try { $entity->update(); $this->fail('Invalid JSON must fail before SQL'); }
-        catch (\JsonException) {}
+        catch (JsonException) {}
         $this->assertSame(0, $queries);
         $this->assertSame('[1]', $this->observer->query("SELECT items FROM `{$this->table}` WHERE id=1")->fetch_assoc()['items']);
         $this->assertTrue(is_nan($entity->items->toArray()[1]));
@@ -690,7 +709,7 @@ final class TransactionTest extends TestCase
         $config->setTransactionRecycleAction($action);
         $config->setMaxObjectNum(1);
         $this->db->addDb($config);
-        $failure = new \RuntimeException('business failed');
+        $failure = new RuntimeException('business failed');
         $returnedClient = null;
         try {
             $this->db->invoke(function (Connection $client) use ($failure, &$returnedClient): void {
@@ -700,7 +719,7 @@ final class TransactionTest extends TestCase
                 throw $failure;
             });
             $this->fail('Expected the business error');
-        } catch (\RuntimeException $error) {
+        } catch (RuntimeException $error) {
             $this->assertSame($failure, $error);
         }
         $this->assertNull($this->db->currentConnection());
@@ -771,18 +790,18 @@ final class TransactionTest extends TestCase
     {
         $db = (new FastDb())->addDb(new Config(MYSQL_CONFIG));
         $weak = $message = null;
-        $finished = new \Swoole\Coroutine\Channel(1);
+        $finished = new Channel(1);
         try {
-            \Swoole\Coroutine::create(function () use ($db, &$weak, &$message, $finished): void {
+            Coroutine::create(function () use ($db, &$weak, &$message, $finished): void {
                 // 退出通知最后执行，观察者读到结果时会话已归还并回滚未提交写入。
-                \Swoole\Coroutine::defer(static fn() => $finished->push(true));
+                Coroutine::defer(static fn() => $finished->push(true));
                 try {
                     $db->begin();
                     $result = $db->rawQuery("UPDATE `{$this->table}` SET value=7 WHERE id=1");
-                    $weak = \WeakReference::create($result);
+                    $weak = WeakReference::create($result);
                     unset($result);
-                    throw new \RuntimeException('business failure');
-                } catch (\Throwable $error) { $message = $error->getMessage(); }
+                    throw new RuntimeException('business failure');
+                } catch (Throwable $error) { $message = $error->getMessage(); }
             });
             $this->assertTrue($finished->pop(5));
             $this->assertSame('business failure', $message);
@@ -804,7 +823,7 @@ final class TransactionTest extends TestCase
         $entity->id = 2;
         $entity->value = 9;
         try { $entity->update(); $this->fail('Expected primary key guard'); }
-        catch (\EasySwoole\FastDb\Exception\RuntimeError $error) {
+        catch (RuntimeError $error) {
             $this->assertStringContainsString('primary key', $error->getMessage());
         }
         $this->assertSame(0, $this->value());
@@ -911,13 +930,13 @@ final class TransactionTest extends TestCase
         }
         $this->db->setOnQuery(static function (QueryResult $result) use ($sql): void {
             if($result->getRawSql() === $sql){
-                throw new \RuntimeException('transaction logger error');
+                throw new RuntimeException('transaction logger error');
             }
         });
         try {
             $this->db->{$operation}();
             $this->fail('Expected the logger exception');
-        } catch (\RuntimeException $error) {
+        } catch (RuntimeException $error) {
             $this->assertSame('transaction logger error', $error->getMessage());
         }
         $this->assertSame($active, $this->db->isInTransaction());
@@ -955,10 +974,10 @@ final class TransactionTest extends TestCase
                     $this->assertSame($outer, $inner);
                 });
                 $this->write(2);
-                throw new \RuntimeException('outer error');
+                throw new RuntimeException('outer error');
             });
             $this->fail('Expected business exception');
-        } catch (\RuntimeException $error) {
+        } catch (RuntimeException $error) {
             $this->assertSame('outer error', $error->getMessage());
         }
         $this->assertNull($this->db->currentConnection());
@@ -1022,9 +1041,9 @@ final class TransactionTest extends TestCase
             try {
                 $this->db->invoke(static function () use ($updates): void {
                     $updates();
-                    throw new \RuntimeException('business error');
+                    throw new RuntimeException('business error');
                 });
-            } catch (\RuntimeException $error) {
+            } catch (RuntimeException $error) {
                 $this->assertSame('business error', $error->getMessage());
             }
         } else {
@@ -1082,7 +1101,7 @@ final class TransactionTest extends TestCase
         try {
             $this->db->rawQuery('SELECT fastdb_missing_tx_column');
             $this->fail('Expected SQL error');
-        } catch (\EasySwoole\Mysqli\Exception\Exception $error) {
+        } catch (Exception $error) {
             $this->assertStringContainsString('fastdb_missing_tx_column', $error->getMessage());
         }
         $this->assertTrue($this->db->rollback());
@@ -1099,15 +1118,15 @@ final class TransactionTest extends TestCase
                 if ($mode === 'raw') {
                     $this->db->rawQuery('SELECT SLEEP(1)', 0.05);
                 } else {
-                    $query = new \EasySwoole\Mysqli\QueryBuilder();
+                    $query = new QueryBuilder();
                     $query->raw('SELECT SLEEP(?)', [1]);
                     $this->db->query($query, 0.05);
                 }
                 $this->fail('Expected query timeout');
-            } catch (\EasySwoole\FastDb\Exception\TimeoutException $error) {
+            } catch (TimeoutException $error) {
                 $this->assertLessThan(0.5, microtime(true) - $started);
                 $this->assertFalse($client->mysqlClient()->isConnected());
-                $this->assertInstanceOf(\EasySwoole\Mysqli\Exception\TimeoutException::class, $error->getPrevious());
+                $this->assertInstanceOf(DriverTimeoutException::class, $error->getPrevious());
                 $this->assertSame($error->getPrevious()->getCode(), $error->getCode());
                 $this->assertSame($mode === 'raw' ? 'SELECT SLEEP(1)' : 'SELECT SLEEP(?)', $error->getRawSql());
                 $this->assertSame($error->getPrevious()->getMessage(), $error->getMessage());
@@ -1124,7 +1143,7 @@ final class TransactionTest extends TestCase
             try {
                 $this->db->rawQuery('SELECT 1 AS value');
                 $this->fail('A held, disconnected session must not reconnect');
-            } catch (\EasySwoole\Mysqli\Exception\Exception $error) {
+            } catch (Exception $error) {
                 $this->assertStringContainsString('connection is not open', $error->getMessage());
             }
             $this->db->recycleContext();
@@ -1143,20 +1162,20 @@ final class TransactionTest extends TestCase
         try {
             $this->db->rawQuery('SELECT SLEEP(1)', 0.05);
             $this->fail('Expected timeout');
-        } catch (\EasySwoole\FastDb\Exception\TimeoutException $error) {
+        } catch (TimeoutException $error) {
             $this->assertTrue($client->mysqlClient()->isTransactionLost());
         }
         try {
             $this->write(2);
             $this->fail('Lost transaction must not reconnect and write');
-        } catch (\EasySwoole\Mysqli\Exception\TransactionLostException $error) {
+        } catch (TransactionLostException $error) {
             $this->assertSame(0, $error->getCode());
         }
         foreach (['commit', 'rollback'] as $operation) {
             try {
                 $this->db->$operation();
                 $this->fail('A lost connection must not report transaction completion');
-            } catch (\EasySwoole\Mysqli\Exception\TransactionLostException $error) {
+            } catch (TransactionLostException $error) {
                 $this->assertSame(0, $error->getCode());
             }
         }
@@ -1193,7 +1212,7 @@ final class TransactionTest extends TestCase
     {
         // 容量为 1 时，旧对象必须退出池登记，回调才能借到新连接。
         $this->db->addDb(new Config(array_replace(MYSQL_CONFIG, ['maxObjectNum' => 1])));
-        $flags = \EasySwoole\Mysqli\Transaction\TransactionCompletionFlags::ChainNoRelease;
+        $flags = TransactionCompletionFlags::ChainNoRelease;
         $this->db->begin();
         $this->write(1);
         $this->assertTrue($this->db->commit(null, $flags, 1.0));
@@ -1217,7 +1236,7 @@ final class TransactionTest extends TestCase
                 $this->assertNull($this->db->currentConnection());
                 $newSession = $this->db->rawQuery('SELECT CONNECTION_ID() AS id')->getResultOne()['id'];
             });
-            $this->assertTrue($this->db->$operation($client, \EasySwoole\Mysqli\Transaction\TransactionCompletionFlags::NoChainRelease, 1.0));
+            $this->assertTrue($this->db->$operation($client, TransactionCompletionFlags::NoChainRelease, 1.0));
             $this->assertNull($client->mysqlClient());
             $this->assertFalse($client->isInTransaction());
             $this->assertNotSame($client, $this->db->currentConnection());
@@ -1238,7 +1257,7 @@ final class TransactionTest extends TestCase
             try {
                 $other->rawQuery("UPDATE `{$this->table}` SET value = 2 WHERE id = 1", 0.05);
                 $this->fail('Expected lock wait client timeout');
-            } catch (\EasySwoole\FastDb\Exception\TimeoutException $error) {
+            } catch (TimeoutException $error) {
                 $this->assertLessThan(0.5, microtime(true) - $started);
                 $this->assertTrue($other->currentConnection()->mysqlClient()->isTransactionLost());
             }
@@ -1258,11 +1277,11 @@ final class TransactionTest extends TestCase
     public function testRealDeadlockRestoresFastDbTransactionState(): void
     {
         $this->observer->query("INSERT INTO `{$this->table}` VALUES (2, 0)");
-        $ready = new \Swoole\Coroutine\Channel(2);
-        $go = new \Swoole\Coroutine\Channel(2);
-        $done = new \Swoole\Coroutine\Channel(2);
+        $ready = new Channel(2);
+        $go = new Channel(2);
+        $done = new Channel(2);
         foreach ([[1, 2, 10], [2, 1, 20]] as [$first, $second, $value]) {
-            \Swoole\Coroutine::create(function () use ($ready, $go, $done, $first, $second, $value): void {
+            Coroutine::create(function () use ($ready, $go, $done, $first, $second, $value): void {
                 $db = (new FastDb())->addDb(new Config(MYSQL_CONFIG));
                 $result = [];
                 try {
@@ -1273,7 +1292,7 @@ final class TransactionTest extends TestCase
                     $db->rawQuery("UPDATE `{$this->table}` SET value = {$value} WHERE id = {$second}", 3.0);
                     $db->commit();
                     $result = ['code' => 0, 'active' => $db->isInTransaction(), 'value' => $value];
-                } catch (\Throwable $error) {
+                } catch (Throwable $error) {
                     $result = ['code' => $error->getCode(), 'active' => $db->isInTransaction(), 'value' => $value];
                 } finally {
                     $db->recycleContext();
@@ -1302,10 +1321,10 @@ final class TransactionTest extends TestCase
     {
         $db = (new FastDb())->addDb(new Config(array_replace(MYSQL_CONFIG,
             ['minObjectNum' => 0, 'maxObjectNum' => 1, 'getObjectTimeout' => 0.05])));
-        $ready = new \Swoole\Coroutine\Channel(1);
-        $release = new \Swoole\Coroutine\Channel(1);
-        $done = new \Swoole\Coroutine\Channel(1);
-        \Swoole\Coroutine::create(function () use ($db, $ready, $release, $done): void {
+        $ready = new Channel(1);
+        $release = new Channel(1);
+        $done = new Channel(1);
+        Coroutine::create(function () use ($db, $ready, $release, $done): void {
             try {
                 $db->rawQuery('SELECT 1');
                 $ready->push(true);
@@ -1318,7 +1337,7 @@ final class TransactionTest extends TestCase
             try {
                 $db->rawQuery('SELECT 1');
                 $this->fail('Expected exhausted pool');
-            } catch (\EasySwoole\Pool\Exception\PoolEmpty) {
+            } catch (PoolEmpty) {
                 $this->assertGreaterThanOrEqual(0.03, microtime(true) - $started);
                 $this->assertLessThan(0.5, microtime(true) - $started);
             }
@@ -1343,7 +1362,7 @@ final class TransactionTest extends TestCase
             try {
                 $other->rawQuery("UPDATE `{$this->table}` SET value = 2 WHERE id = 1", 2.0);
                 $this->fail('Expected server lock wait timeout');
-            } catch (\EasySwoole\Mysqli\Exception\Exception $error) {
+            } catch (Exception $error) {
                 $this->assertSame(1205, $error->getCode());
                 $this->assertGreaterThan(0.8, microtime(true) - $started);
                 $this->assertLessThan(2.0, microtime(true) - $started);
@@ -1360,26 +1379,26 @@ final class TransactionTest extends TestCase
     {
         foreach (['begin', 'commit', 'rollback'] as $operation) {
             $this->observer->query("UPDATE `{$this->table}` SET value = 0");
-            $listener = new \Swoole\Coroutine\Socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
+            $listener = new Socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
             $this->assertTrue($listener->bind('127.0.0.1', 0));
             $this->assertTrue($listener->listen());
             $port = $listener->getsockname()['port'];
-            $finished = new \Swoole\Coroutine\Channel(1);
-            \Swoole\Coroutine::create(function () use ($listener, $finished, $operation): void {
+            $finished = new Channel(1);
+            Coroutine::create(function () use ($listener, $finished, $operation): void {
                 $peer = null; $upstream = null;
-                $readerDone = new \Swoole\Coroutine\Channel(1);
+                $readerDone = new Channel(1);
                 $delay = false;
                 try {
                     $peer = $listener->accept(3.0);
                     $listener->close();
-                    $upstream = new \Swoole\Coroutine\Socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
+                    $upstream = new Socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
                     if (!$upstream->connect(MYSQL_CONFIG['host'], MYSQL_CONFIG['port'], 3.0)) {
-                        throw new \RuntimeException('Proxy upstream connection failed');
+                        throw new RuntimeException('Proxy upstream connection failed');
                     }
-                    \Swoole\Coroutine::create(function () use ($peer, $upstream, &$delay, $readerDone): void {
+                    Coroutine::create(function () use ($peer, $upstream, &$delay, $readerDone): void {
                         try {
                             while (($data = $upstream->recv(65536, 3.0)) !== false && $data !== '') {
-                                if ($delay) { $delay = false; \Swoole\Coroutine::sleep(0.2); }
+                                if ($delay) { $delay = false; Coroutine::sleep(0.2); }
                                 if ($peer->sendAll($data, 1.0) === false) { break; }
                             }
                         } finally { $readerDone->push(true); }
@@ -1403,7 +1422,7 @@ final class TransactionTest extends TestCase
             $db = (new FastDb())->addDb(new Config(array_replace(MYSQL_CONFIG,
                 ['host' => '127.0.0.1', 'port' => $port, 'minObjectNum' => 0])));
             $loggedFailure = null;
-            $observerFailure = new \RuntimeException('timeout logger failed');
+            $observerFailure = new RuntimeException('timeout logger failed');
             $db->configureQueryStack(true)->setOnQuery(static function (QueryResult $result) use (&$loggedFailure, $observerFailure): void {
                 if ($result->getException() !== null) {
                     $loggedFailure = $result;
@@ -1420,10 +1439,10 @@ final class TransactionTest extends TestCase
                 try {
                     $db->$operation(timeout: 0.05);
                     $this->fail('Expected transaction command timeout');
-                } catch (\RuntimeException $callbackError) {
+                } catch (RuntimeException $callbackError) {
                     $this->assertSame($observerFailure, $callbackError);
                     $error = $loggedFailure->getException();
-                    $this->assertInstanceOf(\EasySwoole\FastDb\Exception\TimeoutException::class, $error);
+                    $this->assertInstanceOf(TimeoutException::class, $error);
                     $this->assertGreaterThanOrEqual(0.03, microtime(true) - $started);
                     $this->assertLessThan(0.15, microtime(true) - $started);
                     $this->assertFalse($db->currentConnection()->mysqlClient()->isConnected());
@@ -1477,13 +1496,13 @@ class DeclaredMysqlEntity extends AbstractEntity
     public int $id;
     #[Property] public int $value;
     public function tableName(): string { return TransactionEntity::$table; }
-    #[\EasySwoole\FastDb\Attributes\Relate(self::class,'value',type:RelationType::Many,configure:'configureChildren')]
-    public function children(): \EasySwoole\FastDb\Beans\ListResult
+    #[Relate(self::class,'value',type:RelationType::Many,configure:'configureChildren')]
+    public function children(): ListResult
     {
         self::$getterCalls++;
         return $this->relateMany();
     }
-    protected function configureChildren(\EasySwoole\Mysqli\QueryBuilder $query): void
+    protected function configureChildren(QueryBuilder $query): void
     {
         $query->where('id', $this->id === 1 ? 3 : 4, '>=')->orderBy('id','ASC');
     }
@@ -1549,22 +1568,22 @@ class CursorMysqlEntity extends DeclaredMysqlEntity
 
 class ScopedMysqlEntity extends AbstractEntity
 {
-    private ?\WeakReference $scopedQuery = null;
+    private ?WeakReference $scopedQuery = null;
     #[Property]
     #[PrimaryKey]
     public int $id;
     #[Property] public int $value;
     public function tableName(): string { return TransactionEntity::$table; }
-    public function queryLimit(): \EasySwoole\FastDb\Beans\Query
+    public function queryLimit(): Query
     {
         $query = parent::queryLimit();
         if ($this->scopedQuery?->get() !== $query) {
-            $this->scopedQuery = \WeakReference::create($query);
+            $this->scopedQuery = WeakReference::create($query);
             $query->where('active',1);
         }
         return $query;
     }
     #[Relate(self::class,'value',type:RelationType::Many,configure:'configureChildren')]
     public function children() { return $this->relateMany(); }
-    protected function configureChildren(\EasySwoole\Mysqli\QueryBuilder $query): void { $query->orderBy('id','ASC'); }
+    protected function configureChildren(QueryBuilder $query): void { $query->orderBy('id','ASC'); }
 }

@@ -11,6 +11,8 @@ use EasySwoole\Mysqli\Client;
 use EasySwoole\Mysqli\Config;
 use EasySwoole\Mysqli\Protocol\Connection as ProtocolConnection;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
+use RuntimeException;
 use Swoole\Coroutine;
 use Swoole\Coroutine\Socket;
 
@@ -19,13 +21,13 @@ final class TransactionScopeObserverTest extends TestCase
     public function testCommitObserverFailureDoesNotSendRollbackAfterACompletedCommit(): void
     {
         $this->connected(function (FastDb $db, Connection $connection, Socket $peer): void {
-            $failure = new \RuntimeException('commit logger');
+            $failure = new RuntimeException('commit logger');
             $db->setOnQuery(static function ($result) use ($failure): void {
                 if (str_starts_with($result->getRawSql() ?? '', 'COMMIT')) { throw $failure; }
             });
             $this->reply($peer, 1); $this->reply($peer, 2);
             try { $db->transaction(static fn () => 'done'); $this->fail('Expected observer error'); }
-            catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
+            catch (RuntimeException $error) { $this->assertSame($failure, $error); }
             $this->assertFalse($connection->isInTransaction());
             $this->assertCommands($peer, ['START TRANSACTION', 'COMMIT']);
         });
@@ -34,7 +36,7 @@ final class TransactionScopeObserverTest extends TestCase
     public function testCommitObserverMayStartAnotherTransactionWithoutCleanupRollingItBack(): void
     {
         $this->connected(function (FastDb $db, Connection $connection, Socket $peer): void {
-            $failure = new \RuntimeException('observer after new begin'); $once = false;
+            $failure = new RuntimeException('observer after new begin'); $once = false;
             $db->setOnQuery(static function ($result) use ($db, $connection, $failure, &$once): void {
                 if (!$once && str_starts_with($result->getRawSql() ?? '', 'COMMIT')) {
                     $once = true;
@@ -44,7 +46,7 @@ final class TransactionScopeObserverTest extends TestCase
             });
             $this->reply($peer, 1); $this->reply($peer, 2); $this->reply($peer, 1);
             try { $db->transaction(static fn () => 'done'); $this->fail('Expected observer error'); }
-            catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
+            catch (RuntimeException $error) { $this->assertSame($failure, $error); }
             $this->assertTrue($connection->isInTransaction());
             $this->assertCommands($peer, ['START TRANSACTION', 'COMMIT', 'START TRANSACTION']);
         });
@@ -53,13 +55,13 @@ final class TransactionScopeObserverTest extends TestCase
     public function testRollbackObserverFailureKeepsTheOriginalBusinessException(): void
     {
         $this->connected(function (FastDb $db, Connection $connection, Socket $peer): void {
-            $failure = new \RuntimeException('business failure');
+            $failure = new RuntimeException('business failure');
             $db->setOnQuery(static function ($result): void {
-                if (str_starts_with($result->getRawSql() ?? '', 'ROLLBACK')) { throw new \RuntimeException('rollback logger'); }
+                if (str_starts_with($result->getRawSql() ?? '', 'ROLLBACK')) { throw new RuntimeException('rollback logger'); }
             });
             $this->reply($peer, 1); $this->reply($peer, 2);
             try { $db->transaction(static function () use ($failure): void { throw $failure; }); $this->fail('Expected business error'); }
-            catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
+            catch (RuntimeException $error) { $this->assertSame($failure, $error); }
             $this->assertFalse($connection->isInTransaction());
             $this->assertCommands($peer, ['START TRANSACTION', 'ROLLBACK']);
         });
@@ -68,13 +70,13 @@ final class TransactionScopeObserverTest extends TestCase
     public function testBeginObserverFailureRollsBackTheStartedConnectionAndSkipsTheCallback(): void
     {
         $this->connected(function (FastDb $db, Connection $connection, Socket $peer): void {
-            $failure = new \RuntimeException('begin logger'); $entered = false;
+            $failure = new RuntimeException('begin logger'); $entered = false;
             $db->setOnQuery(static function ($result) use ($failure): void {
                 if (str_starts_with($result->getRawSql() ?? '', 'START TRANSACTION')) { throw $failure; }
             });
             $this->reply($peer, 1); $this->reply($peer, 2);
             try { $db->transaction(static function () use (&$entered): void { $entered = true; }); $this->fail('Expected begin error'); }
-            catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
+            catch (RuntimeException $error) { $this->assertSame($failure, $error); }
             $this->assertFalse($entered);
             $this->assertFalse($connection->isInTransaction());
             $this->assertCommands($peer, ['START TRANSACTION', 'ROLLBACK']);
@@ -99,14 +101,14 @@ final class TransactionScopeObserverTest extends TestCase
         [$socket, $peer] = swoole_coroutine_socketpair(AF_UNIX, SOCK_STREAM, 0);
         $config = new Config(['timeout' => 0.03]);
         $protocol = new ProtocolConnection($config);
-        $stream = (new \ReflectionProperty($protocol, 'stream'))->getValue($protocol);
-        (new \ReflectionProperty($stream, 'socket'))->setValue($stream, $socket);
-        $state = (new \ReflectionProperty($protocol, 'state'))->getValue($protocol);
+        $stream = (new ReflectionProperty($protocol, 'stream'))->getValue($protocol);
+        (new ReflectionProperty($stream, 'socket'))->setValue($stream, $socket);
+        $state = (new ReflectionProperty($protocol, 'state'))->getValue($protocol);
         $state->established(); $state->applyServerStatus(2);
         $connection = new Connection($config); $connection->connectionName = 'default';
-        (new \ReflectionProperty(Client::class, 'mysqlClient'))->setValue($connection, $protocol);
+        (new ReflectionProperty(Client::class, 'mysqlClient'))->setValue($connection, $protocol);
         $db = new FastDb();
-        $current = new \ReflectionProperty(FastDb::class, 'currentConnection');
+        $current = new ReflectionProperty(FastDb::class, 'currentConnection');
         $current->setValue($db, [Coroutine::getCid() => ['default' => $connection]]);
         try { $test($db, $connection, $peer, $protocol); }
         finally { $current->setValue($db, []); $connection->close(); $peer->close(); }

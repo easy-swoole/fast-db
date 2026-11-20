@@ -3,6 +3,7 @@
 namespace EasySwoole\FastDb\AbstractInterface;
 
 use EasySwoole\Spl\SplBean;
+use InvalidArgumentException;
 
 class ConvertBean extends SplBean implements ConvertObjectInterface
 {
@@ -16,7 +17,7 @@ class ConvertBean extends SplBean implements ConvertObjectInterface
             $data = json_decode($data, true, 512, JSON_THROW_ON_ERROR);
         }
         if (!is_array($data)) {
-            throw new \InvalidArgumentException('ConvertBean expects an array or JSON decoding to an array');
+            throw new InvalidArgumentException('ConvertBean expects an array or JSON decoding to an array');
         }
         // 构造时即提供数据，使必填嵌套 Bean 校验和 initialize() 都能读取输入。
         return new static($data);

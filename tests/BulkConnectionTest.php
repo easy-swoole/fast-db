@@ -14,8 +14,11 @@ use EasySwoole\FastDb\Mysql\Pool;
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\Mysqli\Client;
 use EasySwoole\Mysqli\QueryBuilder;
+use Generator;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
+use RuntimeException;
 use Swoole\Coroutine;
 
 final class BulkConnectionTest extends TestCase
@@ -28,19 +31,19 @@ final class BulkConnectionTest extends TestCase
 
     protected function setUp(): void
     {
-        $singleton = new \ReflectionProperty(FastDb::class, 'instance');
+        $singleton = new ReflectionProperty(FastDb::class, 'instance');
         $this->previousDb = $singleton->getValue(); $this->db = new FastDb(); $singleton->setValue(null, $this->db);
         BulkPinnedRecord::$constructions = 0;
         foreach (['default', 'other'] as $name) {
             $client = $this->createStub(BulkPinnedConnection::class); $client->connectionName = $name;
             $client->method('isInTransaction')->willReturnCallback(static fn(): bool => $client->transactionActive);
-            $client->method('getLastAffectRows')->willReturnCallback(static fn () => (new \ReflectionProperty(Client::class, 'lastAffectRows'))->getValue($client));
-            $client->method('getLastInsertId')->willReturnCallback(static fn () => (new \ReflectionProperty(Client::class, 'lastInsertId'))->getValue($client));
+            $client->method('getLastAffectRows')->willReturnCallback(static fn () => (new ReflectionProperty(Client::class, 'lastAffectRows'))->getValue($client));
+            $client->method('getLastInsertId')->willReturnCallback(static fn () => (new ReflectionProperty(Client::class, 'lastInsertId'))->getValue($client));
             $client->method('query')->willReturnCallback(function (QueryBuilder $query) use ($client, $name): bool {
                 $this->writes[$name][] = $query->getLastBindParams();
                 $this->visibleAtExecution[] = $this->db->selectConnection();
-                (new \ReflectionProperty(Client::class, 'lastAffectRows'))->setValue($client, count($query->getLastBindParams()));
-                (new \ReflectionProperty(Client::class, 'lastInsertId'))->setValue($client, 0);
+                (new ReflectionProperty(Client::class, 'lastAffectRows'))->setValue($client, count($query->getLastBindParams()));
+                (new ReflectionProperty(Client::class, 'lastInsertId'))->setValue($client, 0);
                 return true;
             });
             $this->clients[$name] = $client;
@@ -52,7 +55,7 @@ final class BulkConnectionTest extends TestCase
     {
         foreach ($this->clients as $client) { $client->transactionActive = false; }
         $this->db->setOnQuery(static function (): void {}); $this->bind([]);
-        (new \ReflectionProperty(FastDb::class, 'instance'))->setValue(null, $this->previousDb);
+        (new ReflectionProperty(FastDb::class, 'instance'))->setValue(null, $this->previousDb);
     }
 
     public static function methods(): array { return [['insert'], ['upsert']]; }
@@ -79,7 +82,7 @@ final class BulkConnectionTest extends TestCase
     public function testGeneratorAndCallbackSelectionEffectsRemainVisibleWhileAllWritesStayAtTheEntry(string $method): void
     {
         $producer = []; $callbacks = [];
-        $rows = (function () use (&$producer): \Generator {
+        $rows = (function () use (&$producer): Generator {
             $this->db->selectConnection('other'); yield ['id' => 1];
             $producer[] = $this->db->selectConnection(); yield ['id' => 2];
             $producer[] = $this->db->selectConnection(); yield ['id' => 3];
@@ -101,7 +104,7 @@ final class BulkConnectionTest extends TestCase
     #[DataProvider('methods')]
     public function testModelInitializationCanChooseThePinnedConnectionWithoutOverwritingTheProducerSelection(string $method): void
     {
-        $rows = (function (): \Generator { $this->db->selectConnection('producer'); yield ['id' => 1]; yield ['id' => 2]; yield ['id' => 3]; })();
+        $rows = (function (): Generator { $this->db->selectConnection('producer'); yield ['id' => 1]; yield ['id' => 2]; yield ['id' => 3]; })();
         $this->assertSame(3, $this->write($method, $rows, model: BulkRoutedRecord::class));
         $this->assertSame([[1, 2], [3]], $this->writes['other']);
         $this->assertArrayNotHasKey('default', $this->writes);
@@ -114,16 +117,16 @@ final class BulkConnectionTest extends TestCase
     public function testPoolFailureOnThePinnedConnectionSkipsQueryCallbacks(string $method): void
     {
         $this->bind([]); $this->db->addDb(new Config());
-        $failure = new \RuntimeException('pool unavailable');
+        $failure = new RuntimeException('pool unavailable');
         $pool = $this->getMockBuilder(Pool::class)->disableOriginalConstructor()->onlyMethods(['getObj'])->getMock();
         $pool->expects($this->once())->method('getObj')->willThrowException($failure);
-        (new \ReflectionProperty(FastDb::class, 'pools'))->setValue($this->db, ['default' => $pool]);
-        $rows = (function (): \Generator { $this->db->selectConnection('other'); yield ['id' => 1]; })();
+        (new ReflectionProperty(FastDb::class, 'pools'))->setValue($this->db, ['default' => $pool]);
+        $rows = (function (): Generator { $this->db->selectConnection('other'); yield ['id' => 1]; })();
         try {
             $this->write($method, $rows, 'bulk_pinned',
                 static function (): void { self::fail('No query was sent'); });
             $this->fail('Expected pool error');
-        } catch (\RuntimeException $error) {
+        } catch (RuntimeException $error) {
             $this->assertSame($failure, $error);
         }
         $this->assertSame('other', $this->db->selectConnection());
@@ -133,12 +136,12 @@ final class BulkConnectionTest extends TestCase
     #[DataProvider('methods')]
     public function testThrowingGlobalObserverStopsNotificationsAndPropagates(string $method): void
     {
-        $failure = new \RuntimeException('SQL rejected');
-        $observerFailure = new \RuntimeException('global logger');
+        $failure = new RuntimeException('SQL rejected');
+        $observerFailure = new RuntimeException('global logger');
         $client = $this->createStub(BulkPinnedConnection::class); $client->connectionName = 'default';
         $client->method('query')->willThrowException($failure);
         $this->clients['default'] = $client; $this->bind($this->clients);
-        $rows = (function (): \Generator { $this->db->selectConnection('producer'); yield ['id' => 1]; })();
+        $rows = (function (): Generator { $this->db->selectConnection('producer'); yield ['id' => 1]; })();
         $seen = [];
         $this->db->setOnQuery(function (QueryResult $result) use (&$seen, $failure, $observerFailure): void {
             $this->assertSame($failure, $result->getException());
@@ -149,7 +152,7 @@ final class BulkConnectionTest extends TestCase
             $this->write($method, $rows, 'bulk_pinned',
                 static function (): void { self::fail('Global observer already threw'); });
             $this->fail('Expected observer error');
-        } catch (\RuntimeException $error) { $this->assertSame($observerFailure, $error); }
+        } catch (RuntimeException $error) { $this->assertSame($observerFailure, $error); }
         $this->assertSame([['global', 'default', 'producer']], $seen);
     }
 
@@ -159,7 +162,7 @@ final class BulkConnectionTest extends TestCase
             ? $model::fastInsertAll($rows, tableName: $table, onQuery: $onQuery, batchSize: 2)
             : $model::fastUpsert($rows, updateColumns: ['id'], tableName: $table, onQuery: $onQuery, batchSize: 2);
     }
-    private function bind(array $connections): void { (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db, $connections === [] ? [] : [Coroutine::getCid() => $connections]); }
+    private function bind(array $connections): void { (new ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db, $connections === [] ? [] : [Coroutine::getCid() => $connections]); }
 }
 
 class BulkPinnedRecord extends AbstractEntity

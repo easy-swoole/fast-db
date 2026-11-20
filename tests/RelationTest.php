@@ -4,14 +4,14 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests;
 
-use EasySwoole\FastDb\Attributes\RelationType;
 use EasySwoole\FastDb\Attributes\Relate;
+use EasySwoole\FastDb\Attributes\RelationType;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\FastDb;
-use EasySwoole\FastDb\Tests\Model\StudentModel;
-use EasySwoole\FastDb\Tests\Model\StudentInfoModel;
-use EasySwoole\FastDb\Tests\Model\StudentScoreModel;
 use EasySwoole\FastDb\Tests\Model\SexEnum;
+use EasySwoole\FastDb\Tests\Model\StudentInfoModel;
+use EasySwoole\FastDb\Tests\Model\StudentModel;
+use EasySwoole\FastDb\Tests\Model\StudentScoreModel;
 
 final class RelationTest extends BaseTestCase
 {

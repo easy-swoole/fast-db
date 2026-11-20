@@ -15,13 +15,20 @@ use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\Mysqli\Config;
 use EasySwoole\Mysqli\QueryBuilder;
+use Generator;
+use InvalidArgumentException;
+use PDO;
+use PDOException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
+use RuntimeException;
 use Swoole\Coroutine;
+use Throwable;
 
 final class BulkWriteTest extends TestCase
 {
-    private ?\ReflectionProperty $singleton = null;
+    private ?ReflectionProperty $singleton = null;
     private mixed $originalInstance = null;
     private FastDb $db;
     private BulkWriteFixtureConnection $connection;
@@ -35,7 +42,7 @@ final class BulkWriteTest extends TestCase
         $this->db = new FastDb();
         $this->registerConnections(['default' => $this->connection]);
         $this->db->setOnQuery(function (QueryResult $result): void { $this->events[] = $result; });
-        $this->singleton = new \ReflectionProperty(FastDb::class, 'instance');
+        $this->singleton = new ReflectionProperty(FastDb::class, 'instance');
         $this->originalInstance = $this->singleton->getValue();
         $this->singleton->setValue(null, $this->db);
     }
@@ -45,13 +52,13 @@ final class BulkWriteTest extends TestCase
         if ($this->singleton === null) { return; }
         if ($this->connection->database->inTransaction()) { $this->connection->database->rollBack(); }
         $this->db->setOnQuery(static function (): void {});
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db, []);
+        (new ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db, []);
         $this->singleton->setValue(null, $this->originalInstance);
     }
 
     private function newConnection(string $name): BulkWriteFixtureConnection
     {
-        $database = new \PDO('sqlite::memory:', options: [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
+        $database = new PDO('sqlite::memory:', options: [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
         foreach (['bulk_write_records', 'bulk_write_explicit'] as $table) {
             $database->exec('CREATE TABLE ' . $table . ' (id INTEGER PRIMARY KEY, name TEXT, count INTEGER, payload TEXT)');
         }
@@ -62,14 +69,14 @@ final class BulkWriteTest extends TestCase
 
     private function registerConnections(array $connections): void
     {
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db, [Coroutine::getCid() => $connections]);
+        (new ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db, [Coroutine::getCid() => $connections]);
     }
 
     private function row(int $id): array { return ['id' => $id, 'name' => 'raw-' . $id, 'count' => $id * 10, 'payload' => '[' . $id . ']']; }
     private function rows(int $count): array { $rows = []; for ($id = 1; $id <= $count; $id++) { $rows[] = $this->row($id); } return $rows; }
     private function stored(string $table = 'bulk_write_records'): array
     {
-        return $this->connection->database->query('SELECT * FROM ' . $table . ' ORDER BY id')->fetchAll(\PDO::FETCH_ASSOC);
+        return $this->connection->database->query('SELECT * FROM ' . $table . ' ORDER BY id')->fetchAll(PDO::FETCH_ASSOC);
     }
     private function assertNoRowLifecycle(): void
     {
@@ -112,7 +119,7 @@ final class BulkWriteTest extends TestCase
 
     public function testEmptyArraysAndGeneratorsReturnZeroWithoutModelOrQueries(): void
     {
-        $empty = static function (): \Generator { if (false) { yield []; } };
+        $empty = static function (): Generator { if (false) { yield []; } };
         $this->assertSame(0, BulkWriteFixtureSwitchingRecord::fastInsertAll([]));
         $this->assertSame(0, BulkWriteFixtureSwitchingRecord::fastInsertAll($empty()));
         $this->assertSame(0, BulkWriteFixtureSwitchingRecord::fastUpsert([], ['name']));
@@ -127,7 +134,7 @@ final class BulkWriteTest extends TestCase
     {
         $yielded = 0;
         $starts = 0;
-        $source = function () use (&$yielded, &$starts): \Generator {
+        $source = function () use (&$yielded, &$starts): Generator {
             $starts++;
             for ($id = 1; $id <= 7; $id++) { $yielded++; yield 'same-key' => $this->row($id); }
         };
@@ -146,7 +153,7 @@ final class BulkWriteTest extends TestCase
     #[DataProvider('referenceColumnOrders')]
     public function testYieldedScalarReferencesAreSnapshottedRegardlessOfColumnOrder(bool $reordered): void
     {
-        $source = function () use ($reordered): \Generator {
+        $source = function () use ($reordered): Generator {
             $shared = 'at-first-yield';
             $first = $this->row(1); $first['name'] = &$shared;
             yield $first;
@@ -231,7 +238,7 @@ final class BulkWriteTest extends TestCase
     {
         $this->connection->database->exec("INSERT INTO bulk_write_records VALUES (1,'old',5,'[99]')");
         $yielded = 0;
-        $source = function () use (&$yielded): \Generator {
+        $source = function () use (&$yielded): Generator {
             for ($id = 1; $id <= 501; $id++) {
                 $yielded++;
                 $row = $this->row($id);
@@ -266,7 +273,7 @@ final class BulkWriteTest extends TestCase
 
     public function testUnknownUpsertColumnFailsAtTheDatabase(): void
     {
-        $this->expectException(\PDOException::class);
+        $this->expectException(PDOException::class);
         BulkWriteFixtureRecord::fastUpsert($this->rows(1), ['missing_column']);
     }
 
@@ -294,8 +301,8 @@ final class BulkWriteTest extends TestCase
 
     public function testSecondBatchFailurePreservesTheFirstBatchAndPropagatesTheObserverException(): void
     {
-        $failure = new \RuntimeException('second batch failed');
-        $observerFailure = new \RuntimeException('local logger failed');
+        $failure = new RuntimeException('second batch failed');
+        $observerFailure = new RuntimeException('local logger failed');
         $this->connection->failAt = 2;
         $this->connection->failure = $failure;
         $localEvents = [];
@@ -308,7 +315,7 @@ final class BulkWriteTest extends TestCase
                 if ($result->getException() !== null) { throw $observerFailure; }
             }, batchSize: 2);
             $this->fail('The observer error must propagate');
-        } catch (\RuntimeException $error) { $this->assertSame($observerFailure, $error); }
+        } catch (RuntimeException $error) { $this->assertSame($observerFailure, $error); }
         $this->assertSame($this->rows(2), $this->stored());
         $this->assertCount(2, $this->connection->queries);
         $this->assertCount(2, $this->events);
@@ -322,11 +329,11 @@ final class BulkWriteTest extends TestCase
     public function testExternalTransactionCanRollBackEarlierSuccessfulBatches(): void
     {
         $this->assertTrue($this->db->begin());
-        $failure = new \RuntimeException('second batch failed');
+        $failure = new RuntimeException('second batch failed');
         $this->connection->failAt = 2;
         $this->connection->failure = $failure;
         try { BulkWriteFixtureRecord::fastInsertAll($this->rows(5), batchSize: 2); $this->fail('The second batch must fail'); }
-        catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
+        catch (RuntimeException $error) { $this->assertSame($failure, $error); }
         $this->assertSame($this->rows(2), $this->stored());
         $this->assertTrue($this->connection->database->inTransaction());
         $this->assertTrue($this->db->rollback());
@@ -338,11 +345,11 @@ final class BulkWriteTest extends TestCase
 
     public function testSuccessfulObserverExceptionStopsWithoutRetryingTheCommittedBatch(): void
     {
-        $failure = new \RuntimeException('observer failed after success');
+        $failure = new RuntimeException('observer failed after success');
         try {
             BulkWriteFixtureRecord::fastInsertAll($this->rows(5), onQuery: static function () use ($failure): void { throw $failure; }, batchSize: 2);
             $this->fail('Successful observer exception must propagate');
-        } catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
+        } catch (RuntimeException $error) { $this->assertSame($failure, $error); }
         $this->assertSame($this->rows(2), $this->stored());
         $this->assertCount(1, $this->connection->queries);
         $this->assertSame([], $this->connection->rawQueries);
@@ -363,10 +370,10 @@ final class BulkWriteTest extends TestCase
 
     public function testGeneratorExceptionDoesNotSilentlyRollBackOrRetryItsPreviousBatch(): void
     {
-        $failure = new \RuntimeException('generator failed');
-        $source = function () use ($failure): \Generator { yield $this->row(1); yield $this->row(2); throw $failure; };
+        $failure = new RuntimeException('generator failed');
+        $source = function () use ($failure): Generator { yield $this->row(1); yield $this->row(2); throw $failure; };
         try { BulkWriteFixtureRecord::fastInsertAll($source(), batchSize: 2); $this->fail('Generator exception must propagate'); }
-        catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
+        catch (RuntimeException $error) { $this->assertSame($failure, $error); }
         $this->assertSame($this->rows(2), $this->stored());
         $this->assertCount(1, $this->connection->queries);
         $this->assertSame([], $this->connection->rawQueries);
@@ -376,7 +383,7 @@ final class BulkWriteTest extends TestCase
     {
         $other = $this->newConnection('other');
         $this->registerConnections(['default' => $this->connection, 'other' => $other]);
-        $source = function (): \Generator {
+        $source = function (): Generator {
             for ($id = 1; $id <= 3; $id++) { $this->db->selectConnection('other'); yield $this->row($id); }
         };
         $this->assertSame(3, BulkWriteFixtureRecord::fastInsertAll($source(), 'bulk_write_records', function (): void {
@@ -393,14 +400,14 @@ final class BulkWriteTest extends TestCase
     {
         $other = $this->newConnection('other');
         $this->registerConnections(['default' => $this->connection, 'other' => $other]);
-        $source = function (): \Generator {
+        $source = function (): Generator {
             yield $this->row(1);
             $this->db->selectConnection('default');
             yield $this->row(2);
         };
         $this->assertSame(2, BulkWriteFixtureSwitchingRecord::fastInsertAll($source(), batchSize: 1));
         $this->assertSame([], $this->connection->queries);
-        $this->assertSame($this->rows(2), $other->database->query('SELECT * FROM bulk_write_records ORDER BY id')->fetchAll(\PDO::FETCH_ASSOC));
+        $this->assertSame($this->rows(2), $other->database->query('SELECT * FROM bulk_write_records ORDER BY id')->fetchAll(PDO::FETCH_ASSOC));
         $this->assertCount(2, $other->queries);
         $this->assertSame('default', $this->db->selectConnection());
         $this->assertSame(1, BulkWriteFixtureRecord::$constructed);
@@ -413,7 +420,7 @@ final class BulkWriteTest extends TestCase
     public function testInvalidBatchSizeFailsImmediatelyEvenForEmptyInput(int $size): void
     {
         try { BulkWriteFixtureRecord::fastInsertAll([], batchSize: $size); $this->fail('Batch size must be positive'); }
-        catch (\InvalidArgumentException) { $this->addToAssertionCount(1); }
+        catch (InvalidArgumentException) { $this->addToAssertionCount(1); }
         $this->assertSame(0, BulkWriteFixtureRecord::$constructed);
         $this->assertSame([], $this->connection->queries);
     }
@@ -430,7 +437,7 @@ final class BulkWriteTest extends TestCase
     #[DataProvider('invalidRows')]
     public function testDriverRejectsInvalidRowsBeforeWriting(mixed $invalid): void
     {
-        $this->expectException(\InvalidArgumentException::class);
+        $this->expectException(InvalidArgumentException::class);
         try { BulkWriteFixtureRecord::fastInsertAll([$invalid]); }
         finally { $this->assertSame([], $this->connection->queries); }
     }
@@ -457,7 +464,7 @@ final class BulkWriteTest extends TestCase
         try {
             BulkWriteFixtureRecord::fastInsertAll([$this->row(1), $invalid, $this->row(3)], batchSize: 3);
             $this->fail('A batch must not silently lose or shift fields');
-        } catch (\InvalidArgumentException) { $this->addToAssertionCount(1); }
+        } catch (InvalidArgumentException) { $this->addToAssertionCount(1); }
         $this->assertSame([], $this->stored());
         $this->assertSame([], $this->connection->queries);
         $this->assertSame([], $this->events);
@@ -512,9 +519,9 @@ class BulkWriteFixtureConnection extends Connection
     public array $rawQueries = [];
     public array $affectedRows = [];
     public ?int $failAt = null;
-    public ?\Throwable $failure = null;
+    public ?Throwable $failure = null;
     public mixed $beforeQuery = null;
-    public function __construct(public \PDO $database) { parent::__construct(new Config()); }
+    public function __construct(public PDO $database) { parent::__construct(new Config()); }
     public function query(QueryBuilder $builder, ?float $timeout = null): bool|array
     {
         $sql = $builder->getLastPrepareQuery();
@@ -523,7 +530,7 @@ class BulkWriteFixtureConnection extends Connection
         $this->builders[] = $builder;
         $ordinal = count($this->queries);
         if ($this->beforeQuery !== null) { ($this->beforeQuery)($ordinal); }
-        if ($this->failAt === $ordinal) { throw $this->failure ?? new \RuntimeException('Fixture query failure'); }
+        if ($this->failAt === $ordinal) { throw $this->failure ?? new RuntimeException('Fixture query failure'); }
         $sqlite = preg_replace('/\s+AS\s+`__mysqli_new(?:_row)?`(?=\s+ON DUPLICATE KEY UPDATE)/i', '', $sql);
         $sqlite = str_replace(' ON DUPLICATE KEY UPDATE ', ' ON CONFLICT (`id`) DO UPDATE SET ', $sqlite);
         $sqlite = preg_replace('/`__mysqli_new(?:_row)?`\.`([^`]+)`/', 'excluded.`$1`', $sqlite);
@@ -532,7 +539,7 @@ class BulkWriteFixtureConnection extends Connection
         $statement->execute($parameters);
         $this->lastAffectRows = $this->affectedRows === [] ? $statement->rowCount() : array_shift($this->affectedRows);
         $this->lastInsertId = 0;
-        return $statement->columnCount() > 0 ? $statement->fetchAll(\PDO::FETCH_ASSOC) : true;
+        return $statement->columnCount() > 0 ? $statement->fetchAll(PDO::FETCH_ASSOC) : true;
     }
     public function rawQuery(string $query, ?float $timeout = null): bool|array
     {
@@ -548,6 +555,6 @@ class BulkWriteFixtureConnection extends Connection
             return true;
         }
         $statement = $this->database->query($query);
-        return $statement->columnCount() > 0 ? $statement->fetchAll(\PDO::FETCH_ASSOC) : true;
+        return $statement->columnCount() > 0 ? $statement->fetchAll(PDO::FETCH_ASSOC) : true;
     }
 }

@@ -2,10 +2,13 @@
 
 namespace EasySwoole\FastDb\Attributes;
 
+use Attribute;
 use EasySwoole\FastDb\AbstractInterface\ConvertObjectInterface;
 use EasySwoole\FastDb\Exception\RuntimeError;
+use ReflectionClass;
+use UnitEnum;
 
-#[\Attribute(\Attribute::TARGET_PROPERTY)]
+#[Attribute(Attribute::TARGET_PROPERTY)]
 class Property
 {
     public readonly string $name;
@@ -18,7 +21,7 @@ class Property
     ){
         $this->defaultValue = $defaultValue;
         if($this->convertObject){
-            $ref = new \ReflectionClass($this->convertObject);
+            $ref = new ReflectionClass($this->convertObject);
             if(!$ref->implementsInterface(ConvertObjectInterface::class)){
                 $msg = "{$this->convertObject} did not implement ".ConvertObjectInterface::class;
                 throw new RuntimeError($msg);
@@ -45,6 +48,6 @@ class Property
         if (is_array($value)) {
             return array_map(self::copyDefaultValue(...), $value);
         }
-        return is_object($value) && !($value instanceof \UnitEnum) ? clone $value : $value;
+        return is_object($value) && !($value instanceof UnitEnum) ? clone $value : $value;
     }
 }

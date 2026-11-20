@@ -12,7 +12,12 @@ use EasySwoole\Mysqli\Config as DriverConfig;
 use EasySwoole\Pool\ObjectInterface;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
+use RuntimeException;
 use Swoole\Coroutine;
+use Throwable;
+use WeakMap;
+use WeakReference;
 
 final class ContextReleaseTest extends TestCase
 {
@@ -21,7 +26,7 @@ final class ContextReleaseTest extends TestCase
         $config = new Config(['maxObjectNum' => $capacity, 'minObjectNum' => 0, 'intervalCheckTime' => 0]);
         $db = (new FastDb())->addDb($config);
         $pool = new ReleasePool($config);
-        (new \ReflectionProperty(FastDb::class, 'pools'))->setValue($db, ['default' => $pool]);
+        (new ReflectionProperty(FastDb::class, 'pools'))->setValue($db, ['default' => $pool]);
         return [$db, $pool];
     }
 
@@ -31,7 +36,7 @@ final class ContextReleaseTest extends TestCase
     public function testRepeatedBorrowingsReturnTheActualClientAndReleaseQueryResults(string $mode): void
     {
         [$db, $pool] = $this->database();
-        $results = new \WeakMap();
+        $results = new WeakMap();
         try {
             for ($i = 0; $i < 2000; $i++) {
                 if ($mode === 'invoke') {
@@ -103,7 +108,7 @@ final class ContextReleaseTest extends TestCase
     public function testCommitAndRollbackAllowRepeatedBorrowingWithoutKeepingResults(): void
     {
         [$db, $pool] = $this->database();
-        $results = new \WeakMap();
+        $results = new WeakMap();
         try {
             for ($i = 0; $i < 500; $i++) {
                 $this->assertTrue($db->begin());
@@ -135,10 +140,10 @@ final class ContextReleaseTest extends TestCase
                         $db->begin();
                         $clients[$index] = $db->currentConnection();
                         $db->rawQuery('SELECT ' . $index);
-                        $entries[$index] = \WeakReference::create($db->getQueryStack(-1));
+                        $entries[$index] = WeakReference::create($db->getQueryStack(-1));
                         $ready->push($index);
                         $resume[$index]->pop(2);
-                    } catch (\Throwable $error) { $errors[$index] = $error; }
+                    } catch (Throwable $error) { $errors[$index] = $error; }
                 });
             }
             $this->assertSame(0, $ready->pop(2));
@@ -171,8 +176,8 @@ final class ContextReleaseTest extends TestCase
             Coroutine::defer(static fn() => $finished->push(true));
             try {
                 $db->begin(); $client = $db->currentConnection();
-                throw new \RuntimeException('business failure');
-            } catch (\Throwable $error) { $failure = $error; }
+                throw new RuntimeException('business failure');
+            } catch (Throwable $error) { $failure = $error; }
         });
         try {
             $this->assertTrue($finished->pop(2));

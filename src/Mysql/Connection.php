@@ -2,13 +2,16 @@
 
 namespace EasySwoole\FastDb\Mysql;
 
-use EasySwoole\Mysqli\Client;
-use EasySwoole\Mysqli\QueryBuilder;
-use EasySwoole\Mysqli\Exception\TimeoutException as DriverTimeoutException;
 use EasySwoole\FastDb\Exception\TimeoutException;
+use EasySwoole\Mysqli\Client;
+use EasySwoole\Mysqli\Config;
+use EasySwoole\Mysqli\Exception\TimeoutException as DriverTimeoutException;
+use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\Mysqli\Transaction\TransactionCompletionFlags;
 use EasySwoole\Mysqli\Transaction\TransactionStartFlags;
 use EasySwoole\Pool\ObjectInterface;
+use LogicException;
+use Throwable;
 
 class Connection extends Client implements ObjectInterface
 {
@@ -22,7 +25,7 @@ class Connection extends Client implements ObjectInterface
     private int|float|null $lastActiveTick = null;
     private const HEALTH_CHECK_IDLE_NANOSECONDS = 3_000_000_000;
 
-    public function __construct(\EasySwoole\Mysqli\Config $config)
+    public function __construct(Config $config)
     {
         parent::__construct($config);
         // 成功通信只更新活跃时间；共享回调不捕获连接实例。
@@ -35,7 +38,7 @@ class Connection extends Client implements ObjectInterface
     /** 阻止继承的公开回调设置方法覆盖内部分发器；直接操作的日志由调用方负责。 */
     final public function onQuery(callable $callback): static
     {
-        throw new \LogicException('Connection-level query observers are not supported; record direct connection operations in caller code');
+        throw new LogicException('Connection-level query observers are not supported; record direct connection operations in caller code');
     }
 
     /** 直接读取协议确认的事务状态，不另存可能滞后的标记。 */
@@ -135,7 +138,7 @@ class Connection extends Client implements ObjectInterface
         // 执行失败的原异常交给连接池处理，None 按配置保留现有事务。
         match ($this->transactionRecycleAction) {
             TransactionRecycleAction::Commit => $this->commitTransaction(TransactionCompletionFlags::NoChainNoRelease),
-            TransactionRecycleAction::Rollback => $this->rollbackTransaction(TransactionCompletionFlags::NoChainNoRelease),
+            TransactionRecycleAction::Rollback => $this->rollbackTransaction(),
             TransactionRecycleAction::None => null,
         };
     }
@@ -155,7 +158,7 @@ class Connection extends Client implements ObjectInterface
             $protocol->query('select 1');
             $this->lastActiveTick = hrtime(true);
             return true;
-        } catch (\Throwable) {
+        } catch (Throwable) {
             $this->lastActiveTick = null;
             return false;
         }

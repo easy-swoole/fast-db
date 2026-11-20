@@ -14,13 +14,16 @@ use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\Mysqli\Config;
 use EasySwoole\Mysqli\QueryBuilder;
+use PDO;
+use PDOException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
 use Swoole\Coroutine;
 
 final class ChangesTest extends TestCase
 {
-    private ?\ReflectionProperty $singleton = null;
+    private ?ReflectionProperty $singleton = null;
     private mixed $previous;
     private FastDb $db;
     private ChangesConnection $connection;
@@ -28,15 +31,15 @@ final class ChangesTest extends TestCase
     protected function setUp(): void
     {
         if (!extension_loaded('pdo_sqlite')) { $this->markTestSkipped('SQLite is required for change-state write regression.'); }
-        $pdo = new \PDO('sqlite::memory:', options:[\PDO::ATTR_ERRMODE=>\PDO::ERRMODE_EXCEPTION]);
+        $pdo = new PDO('sqlite::memory:', options:[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);
         $pdo->exec('CREATE TABLE changes_records (id TEXT PRIMARY KEY, name TEXT, score INTEGER, tags TEXT, payload TEXT, profile TEXT)');
         $pdo->exec("INSERT INTO changes_records VALUES ('record-a','old',1,'[1]','[1]','{\"city\":\"old\"}')");
         $this->connection = new ChangesConnection($pdo);
         $this->connection->connectionName = 'default';
         $this->db = new FastDb();
-        (new \ReflectionProperty(FastDb::class,'currentConnection'))->setValue($this->db,
+        (new ReflectionProperty(FastDb::class,'currentConnection'))->setValue($this->db,
             [Coroutine::getCid()=>['default'=>$this->connection]]);
-        $this->singleton = new \ReflectionProperty(FastDb::class,'instance');
+        $this->singleton = new ReflectionProperty(FastDb::class,'instance');
         $this->previous = $this->singleton->getValue();
         $this->singleton->setValue(null,$this->db);
         ChangesRecord::$updates = 0;
@@ -46,7 +49,7 @@ final class ChangesTest extends TestCase
     {
         if ($this->singleton === null) { return; }
         $this->db->setOnQuery(static function(): void {});
-        (new \ReflectionProperty(FastDb::class,'currentConnection'))->setValue($this->db,[]);
+        (new ReflectionProperty(FastDb::class,'currentConnection'))->setValue($this->db,[]);
         $this->singleton->setValue(null,$this->previous);
     }
 
@@ -121,7 +124,7 @@ final class ChangesTest extends TestCase
         $this->assertSame(['name' => 'new'], $record->getChanges());
         $this->assertSame(0, ChangesRecord::$updates);
         $this->assertSame([], $this->connection->queries);
-        $this->assertNull((new \ReflectionProperty(AbstractEntity::class, 'queryBuilder'))->getValue($record));
+        $this->assertNull((new ReflectionProperty(AbstractEntity::class, 'queryBuilder'))->getValue($record));
     }
 
     public function testSuccessfulWritesAcceptConvertedBaselines(): void
@@ -134,7 +137,7 @@ final class ChangesTest extends TestCase
         $this->assertTrue($record->update());
         $this->assertFalse($record->hasChange());
         $this->assertSame([], $record->getChanges());
-        $stored = $this->connection->database->query("SELECT tags,payload,profile FROM changes_records WHERE id='record-a'")->fetch(\PDO::FETCH_ASSOC);
+        $stored = $this->connection->database->query("SELECT tags,payload,profile FROM changes_records WHERE id='record-a'")->fetch(PDO::FETCH_ASSOC);
         $this->assertSame(['tags'=>'[1,2]','payload'=>'[2]','profile'=>'{"city":"new"}'], $stored);
     }
 
@@ -167,7 +170,7 @@ final class ChangesTest extends TestCase
         $this->assertFalse($record->hasChange());
         $this->assertSame([], $record->getChanges());
         $this->assertCount(2, $this->connection->queries);
-        $stored = $this->connection->database->query("SELECT name,score FROM changes_records WHERE id='record-a'")->fetch(\PDO::FETCH_ASSOC);
+        $stored = $this->connection->database->query("SELECT name,score FROM changes_records WHERE id='record-a'")->fetch(PDO::FETCH_ASSOC);
         $this->assertSame(['name'=>'new','score'=>2], $stored);
     }
 
@@ -177,7 +180,7 @@ final class ChangesTest extends TestCase
         $record->name = 'pending';
         $record->queryLimit()->where('missing_column',1);
         try { $record->update(); $this->fail('Expected SQL failure'); }
-        catch (\PDOException) { $this->addToAssertionCount(1); }
+        catch (PDOException) { $this->addToAssertionCount(1); }
         $this->assertTrue($record->hasChange('name'));
         $this->assertSame(['name'=>'pending'], $record->getChanges());
     }
@@ -252,7 +255,7 @@ class ChangesProfile extends ConvertBean
 class ChangesConnection extends Connection
 {
     public array $queries = [];
-    public function __construct(public \PDO $database) { parent::__construct(new Config()); }
+    public function __construct(public PDO $database) { parent::__construct(new Config()); }
     public function query(QueryBuilder $builder, ?float $timeout = null): bool|array
     {
         $sql = $builder->getLastPrepareQuery();
@@ -261,6 +264,6 @@ class ChangesConnection extends Connection
         $statement->execute($builder->getLastBindParams());
         $this->lastAffectRows = $statement->rowCount();
         $this->lastInsertId = 0;
-        return $statement->columnCount() > 0 ? $statement->fetchAll(\PDO::FETCH_ASSOC) : true;
+        return $statement->columnCount() > 0 ? $statement->fetchAll(PDO::FETCH_ASSOC) : true;
     }
 }

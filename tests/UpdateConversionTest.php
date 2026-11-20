@@ -12,6 +12,8 @@ use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\Mysqli\QueryBuilder;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
+use Swoole\Coroutine;
 
 final class UpdateConversionTest extends TestCase
 {
@@ -28,7 +30,7 @@ final class UpdateConversionTest extends TestCase
                 return true;
             });
         $db = $this->database($connection);
-        $instance = new \ReflectionProperty(FastDb::class, 'instance');
+        $instance = new ReflectionProperty(FastDb::class, 'instance');
         $original = $instance->getValue();
         $instance->setValue(null, $db);
         try {
@@ -59,7 +61,7 @@ final class UpdateConversionTest extends TestCase
                 return true;
             }))->willReturn(true);
         $db = $this->database($connection);
-        $instance = new \ReflectionProperty(FastDb::class, 'instance');
+        $instance = new ReflectionProperty(FastDb::class, 'instance');
         $original = $instance->getValue();
         $instance->setValue(null, $db);
         try {
@@ -75,7 +77,7 @@ final class UpdateConversionTest extends TestCase
     private function database(Connection $client): FastDb
     {
         $db = new FastDb();
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $client]]);
+        (new ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($db, [Coroutine::getCid() => ['default' => $client]]);
         return $db;
     }
 }

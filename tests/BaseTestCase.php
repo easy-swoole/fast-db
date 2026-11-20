@@ -15,18 +15,19 @@ use EasySwoole\FastDb\Config;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\Utility\File;
 use PHPUnit\Framework\TestCase;
-use Swoole\Coroutine;
+use ReflectionProperty;
+use Swoole\Timer;
 
 class BaseTestCase extends TestCase
 {
-    private \ReflectionProperty $instance;
+    private ReflectionProperty $instance;
     private mixed $previousInstance;
 
     protected function setUp(): void
     {
         parent::setUp();
 
-        $this->instance = new \ReflectionProperty(FastDb::class, 'instance');
+        $this->instance = new ReflectionProperty(FastDb::class, 'instance');
         $this->previousInstance = $this->instance->getValue();
         $this->instance->setValue(null, (new FastDb())->addDb(new Config(MYSQL_CONFIG)));
 
@@ -39,7 +40,7 @@ class BaseTestCase extends TestCase
         try {
             FastDb::getInstance()->recycleContext();
             FastDb::getInstance()->reset();
-            \Swoole\Timer::clearAll();
+            Timer::clearAll();
         } finally {
             $this->instance->setValue(null, $this->previousInstance);
             parent::tearDown();

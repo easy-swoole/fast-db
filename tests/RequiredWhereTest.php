@@ -4,26 +4,29 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests;
 
-use EasySwoole\FastDb\Attributes\RelationType;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Attributes\Hook\OnDelete;
 use EasySwoole\FastDb\Attributes\Hook\OnUpdate;
 use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Attributes\Relate;
+use EasySwoole\FastDb\Attributes\RelationType;
 use EasySwoole\FastDb\Beans\ListResult;
 use EasySwoole\FastDb\Beans\Query;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\Mysqli\QueryBuilder;
+use PDO;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
+use Swoole\Coroutine;
 
 final class RequiredWhereTest extends TestCase
 {
-    private ?\ReflectionProperty $singleton = null;
+    private ?ReflectionProperty $singleton = null;
     private mixed $originalInstance = null;
-    private \PDO $database;
+    private PDO $database;
     private array $queries = [];
 
     protected function setUp(): void
@@ -31,7 +34,7 @@ final class RequiredWhereTest extends TestCase
         if (!extension_loaded('pdo_sqlite')) {
             $this->markTestSkipped('SQLite is used to execute the generated parameterized SQL without MySQL writes.');
         }
-        $this->database = new \PDO('sqlite::memory:', options: [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
+        $this->database = new PDO('sqlite::memory:', options: [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
         $this->database->exec('CREATE TABLE required_where_records (
             id INTEGER PRIMARY KEY, parent_id INTEGER, flag_a INTEGER, flag_b INTEGER, name TEXT
         )');
@@ -50,13 +53,13 @@ final class RequiredWhereTest extends TestCase
             $statement = $this->database->prepare($sql);
             $statement->execute($parameters);
             $affected = $statement->rowCount();
-            return $statement->columnCount() > 0 ? $statement->fetchAll(\PDO::FETCH_ASSOC) : true;
+            return $statement->columnCount() > 0 ? $statement->fetchAll(PDO::FETCH_ASSOC) : true;
         });
         $client->method('getLastAffectRows')->willReturnCallback(static function () use (&$affected): int { return $affected; });
         $client->method('getLastInsertId')->willReturn(0);
         $db = new FastDb();
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $client]]);
-        $this->singleton = new \ReflectionProperty(FastDb::class, 'instance');
+        (new ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($db, [Coroutine::getCid() => ['default' => $client]]);
+        $this->singleton = new ReflectionProperty(FastDb::class, 'instance');
         $this->originalInstance = $this->singleton->getValue();
         $this->singleton->setValue(null, $db);
     }
@@ -64,7 +67,7 @@ final class RequiredWhereTest extends TestCase
     protected function tearDown(): void
     {
         if ($this->singleton !== null) {
-            $connections = new \ReflectionProperty(FastDb::class, 'currentConnection');
+            $connections = new ReflectionProperty(FastDb::class, 'currentConnection');
             $connections->setValue($this->singleton->getValue(), []);
             $this->singleton->setValue(null, $this->originalInstance);
         }
@@ -95,13 +98,13 @@ final class RequiredWhereTest extends TestCase
     private function names(): array
     {
         return $this->database->query('SELECT id, name FROM required_where_records ORDER BY id')
-            ->fetchAll(\PDO::FETCH_KEY_PAIR);
+            ->fetchAll(PDO::FETCH_KEY_PAIR);
     }
 
     private function ids(): array
     {
         return $this->database->query('SELECT id FROM required_where_records ORDER BY id')
-            ->fetchAll(\PDO::FETCH_COLUMN);
+            ->fetchAll(PDO::FETCH_COLUMN);
     }
 
     #[DataProvider('orSources')]

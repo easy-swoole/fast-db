@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests;
 
-use EasySwoole\FastDb\Tests\Model\User;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
+use EasySwoole\FastDb\Tests\Model\User;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
+use Swoole\Coroutine;
 
 final class SerializationTest extends TestCase
 {
@@ -20,9 +22,9 @@ final class SerializationTest extends TestCase
         $client->expects($this->once())->method('query')->willReturn([['id' => 1, 'name' => 'secret', 'email' => 'public@example.com']]);
         $client->expects($this->once())->method('rawQuery')->with('SELECT FOUND_ROWS() as count')->willReturn([['count' => 1]]);
         $db = new FastDb();
-        $connections = new \ReflectionProperty(FastDb::class, 'currentConnection');
-        $connections->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $client]]);
-        $instance = new \ReflectionProperty(FastDb::class, 'instance');
+        $connections = new ReflectionProperty(FastDb::class, 'currentConnection');
+        $connections->setValue($db, [Coroutine::getCid() => ['default' => $client]]);
+        $instance = new ReflectionProperty(FastDb::class, 'instance');
         $original = $instance->getValue();
         $instance->setValue(null, $db);
         try {

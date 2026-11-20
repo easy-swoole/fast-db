@@ -2,7 +2,7 @@
 
 namespace EasySwoole\FastDb\Beans;
 
-use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
+
 
 class ListResult extends ArrayList
 {

@@ -2,16 +2,17 @@
 
 namespace EasySwoole\FastDb\AbstractInterface;
 
-use EasySwoole\FastDb\Attributes\RelationType;
 use EasySwoole\FastDb\Attributes\Hook\Call;
+use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Attributes\Relate;
+use EasySwoole\FastDb\Attributes\RelationType;
 use EasySwoole\FastDb\Beans\EntityReflection;
 use EasySwoole\FastDb\Beans\ListResult;
 use EasySwoole\FastDb\Beans\Query;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\FastDb;
-use EasySwoole\FastDb\Internal\EntityState;
 use EasySwoole\FastDb\Internal\BatchWriter;
+use EasySwoole\FastDb\Internal\EntityState;
 use EasySwoole\FastDb\Internal\FieldCodec;
 use EasySwoole\FastDb\Internal\FieldSelection;
 use EasySwoole\FastDb\Internal\RelationLoader;
@@ -23,8 +24,10 @@ use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\Mysqli\QueryBuilder\Pagination;
 use EasySwoole\Mysqli\QueryBuilder\SelectPlanner;
 use EasySwoole\Mysqli\QueryBuilder\TableReference;
+use InvalidArgumentException;
+use JsonSerializable;
 
-abstract class AbstractEntity implements \JsonSerializable
+abstract class AbstractEntity implements JsonSerializable
 {
     // 字段的比较基准；转换对象保存 toValue() 的结果，普通字段保存赋值后的值。
     // update() 据此识别变化，也能识别对象内部属性被修改的情况。
@@ -143,7 +146,7 @@ abstract class AbstractEntity implements \JsonSerializable
     {
         try {
             if ($chunkSize < 1) {
-                throw new \InvalidArgumentException('Chunk size must be greater than zero');
+                throw new InvalidArgumentException('Chunk size must be greater than zero');
             }
             $selection = $this->queryLimit();
             // 固定入口处的查询条件，避免每页重复应用子类配置或使用回调改过的实体属性。
@@ -180,7 +183,7 @@ abstract class AbstractEntity implements \JsonSerializable
     {
         try {
             if ($chunkSize < 1) {
-                throw new \InvalidArgumentException('Chunk size must be greater than zero');
+                throw new InvalidArgumentException('Chunk size must be greater than zero');
             }
             $reflection = ReflectionCache::getInstance()->parseEntity(static::class);
             $column ??= $reflection->getAutoIncrementProperty()?->name;
@@ -338,7 +341,7 @@ abstract class AbstractEntity implements \JsonSerializable
             $query = $selection->__getQueryBuilder();
             $tableName = $this->tableName();
             if (in_array('IGNORE', $query->getQueryOptions(), true)) {
-                throw new \InvalidArgumentException('Entity update() does not support IGNORE; use QueryBuilder directly');
+                throw new InvalidArgumentException('Entity update() does not support IGNORE; use QueryBuilder directly');
             }
             $properties = $selection->filterProperties($entityRef->allProperties(), builder: $query);
             [$primaryKeyName, $primaryKey] = $this->requirePrimaryKey($entityRef, 'update');
@@ -403,11 +406,11 @@ abstract class AbstractEntity implements \JsonSerializable
             $query = $selection->__getQueryBuilder();
             $tableName = $this->tableName();
             if (in_array('IGNORE', $query->getQueryOptions(), true)) {
-                throw new \InvalidArgumentException('Entity insert() does not support IGNORE; use QueryBuilder directly');
+                throw new InvalidArgumentException('Entity insert() does not support IGNORE; use QueryBuilder directly');
             }
             if ($updateDuplicateCols !== null) {
                 if ($query->getDuplicateColumns() !== null) {
-                    throw new \InvalidArgumentException('Configure duplicate updates through insert() or onDuplicate()');
+                    throw new InvalidArgumentException('Configure duplicate updates through insert() or onDuplicate()');
                 }
                 $query->onDuplicate($updateDuplicateCols);
             }
@@ -471,7 +474,7 @@ abstract class AbstractEntity implements \JsonSerializable
         if ($rowCount === null) {
             $query->limit(1);
         } elseif ($rowCount > 1) {
-            throw new \InvalidArgumentException('findRecord() supports a LIMIT of at most one row');
+            throw new InvalidArgumentException('findRecord() supports a LIMIT of at most one row');
         }
         if ($selectForUpdate) {
             $query->selectForUpdate();
@@ -708,12 +711,12 @@ abstract class AbstractEntity implements \JsonSerializable
     private static function fastWriteQuery(array|callable|string|int $limit, string $operation): QueryBuilder
     {
         if ($limit === '') {
-            throw new \InvalidArgumentException('Fast writes require a non-empty primary key');
+            throw new InvalidArgumentException('Fast writes require a non-empty primary key');
         }
         $query = new QueryBuilder();
         self::applyQueryLimit($query, $limit, $operation);
         if (!$query->hasWhere()) {
-            throw new \InvalidArgumentException('Fast writes require a WHERE condition');
+            throw new InvalidArgumentException('Fast writes require a WHERE condition');
         }
         return $query;
     }
@@ -729,11 +732,11 @@ abstract class AbstractEntity implements \JsonSerializable
         } elseif (is_array($limit)) {
             foreach ($limit as $column => $value) {
                 if (!is_string($column)) {
-                    throw new \InvalidArgumentException('Query conditions require column names as array keys');
+                    throw new InvalidArgumentException('Query conditions require column names as array keys');
                 }
                 if (is_array($value)) {
                     if (!array_is_list($value) || count($value) < 2 || count($value) > 3) {
-                        throw new \InvalidArgumentException('Array conditions require [value, operator, optional conjunction]');
+                        throw new InvalidArgumentException('Array conditions require [value, operator, optional conjunction]');
                     }
                     $query->where($column, ...$value);
                 } else {

@@ -11,7 +11,6 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests;
 
-use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Beans\ListResult;
 use EasySwoole\FastDb\Beans\Query;
 use EasySwoole\FastDb\FastDb;
@@ -438,7 +437,7 @@ final class ModelTest extends BaseTestCase
         $this->assertSame('EasySwoole1', $student->name);
 
         // 3. 使用回调作为查询条件。
-        $student = StudentModel::findRecord(function (\EasySwoole\Mysqli\QueryBuilder $query) {
+        $student = StudentModel::findRecord(function (QueryBuilder $query) {
             $query->where('name', 'EasySwoole1');
         });
         $this->assertInstanceOf(StudentModel::class, $student);
@@ -492,7 +491,7 @@ final class ModelTest extends BaseTestCase
         }
 
         // 3. 使用回调作为查询条件。
-        $list = StudentModel::findAll(function (\EasySwoole\Mysqli\QueryBuilder $query) {
+        $list = StudentModel::findAll(function (QueryBuilder $query) {
             $query->where('name', 'EasySwoole1')->limit(3)->orderBy('id', 'asc');
         });
         $this->assertIsArray($list);

@@ -4,6 +4,7 @@ namespace EasySwoole\FastDb\Mysql;
 
 use EasySwoole\FastDb\Internal\SqlSnapshot;
 use EasySwoole\Mysqli\QueryBuilder;
+use Throwable;
 
 /** 查询完成时的只读结果，日志 SQL 使用本次构建时的参数和引号规则。 */
 final class QueryResult
@@ -16,7 +17,7 @@ final class QueryResult
         private readonly float $duration,
         private readonly string $connectionName,
         private readonly mixed $result = null,
-        private readonly ?\Throwable $exception = null,
+        private readonly ?Throwable $exception = null,
         private readonly int|string|null $affectedRows = null,
         private readonly int|string|null $insertId = null,
         private readonly ?string $rawSql = null,
@@ -51,7 +52,7 @@ final class QueryResult
         return $this->duration;
     }
 
-    public function getException(): ?\Throwable
+    public function getException(): ?Throwable
     {
         return $this->exception;
     }

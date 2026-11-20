@@ -8,13 +8,15 @@ use EasySwoole\FastDb\Config;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\Mysqli\Transaction\TransactionStartFlags;
 use PHPUnit\Framework\TestCase;
+use RuntimeException;
 use Swoole\Coroutine;
+use mysqli;
 
 /** 每个用例创建随机命名的独立表，不读取或修改业务表。 */
 final class ScopeIntegrationTest extends TestCase
 {
     private ?FastDb $db = null;
-    private ?\mysqli $observer = null;
+    private ?mysqli $observer = null;
     private ?string $table = null;
 
     protected function setUp(): void
@@ -22,7 +24,7 @@ final class ScopeIntegrationTest extends TestCase
         if (!extension_loaded('mysqli') || !defined('MYSQL_CONFIG')) { $this->markTestSkipped('Native mysqli and test database configuration are required.'); }
         if (Coroutine::getCid() < 0) { $this->markTestSkipped('Run through tests/run.php in a Swoole coroutine.'); }
         $this->db = (new FastDb())->addDb(new Config(MYSQL_CONFIG), 'a')->addDb(new Config(MYSQL_CONFIG), 'b');
-        $this->observer = new \mysqli(MYSQL_CONFIG['host'], MYSQL_CONFIG['user'], MYSQL_CONFIG['password'],
+        $this->observer = new mysqli(MYSQL_CONFIG['host'], MYSQL_CONFIG['user'], MYSQL_CONFIG['password'],
             MYSQL_CONFIG['database'], MYSQL_CONFIG['port']);
         $this->observer->set_charset(MYSQL_CONFIG['charset'] ?? 'utf8mb4');
         $this->table = 'fastdb_scope_' . bin2hex(random_bytes(10));
@@ -57,19 +59,19 @@ final class ScopeIntegrationTest extends TestCase
     {
         $this->assertFalse($this->db->transaction(function (): bool { $this->write(1); return false; }));
         $this->assertSame(1, $this->value());
-        $failure = new \RuntimeException('business failed');
+        $failure = new RuntimeException('business failed');
         try { $this->db->transaction(function () use ($failure): void { $this->write(2); throw $failure; }); $this->fail('Expected business error'); }
-        catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
+        catch (RuntimeException $error) { $this->assertSame($failure, $error); }
         $this->assertSame(1, $this->value());
     }
 
     public function testCaughtJoinedFailureCanBeCommittedByTheOuterOwner(): void
     {
-        $failure = new \RuntimeException('inner failed');
+        $failure = new RuntimeException('inner failed');
         $this->db->transaction(function () use ($failure): void {
             $this->write(1);
             try { $this->db->transaction(function () use ($failure): void { $this->write(2); throw $failure; }); }
-            catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
+            catch (RuntimeException $error) { $this->assertSame($failure, $error); }
         });
         $this->assertSame(2, $this->value());
     }
@@ -86,7 +88,7 @@ final class ScopeIntegrationTest extends TestCase
 
     public function testAtoBtoAWithACaughtInnerFailureCommitsBothConnections(): void
     {
-        $failure = new \RuntimeException('joined A failed');
+        $failure = new RuntimeException('joined A failed');
         $this->db->transaction(function () use ($failure): void {
             $this->write(1, 1);
             $this->db->withConnection('b', function () use ($failure): void {
@@ -96,7 +98,7 @@ final class ScopeIntegrationTest extends TestCase
                         $this->db->withConnection('a', function () use ($failure): void {
                             $this->db->transaction(function () use ($failure): void { $this->write(2, 1); throw $failure; });
                         });
-                    } catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
+                    } catch (RuntimeException $error) { $this->assertSame($failure, $error); }
                 });
             });
         });
@@ -106,7 +108,7 @@ final class ScopeIntegrationTest extends TestCase
 
     public function testCommittedBIsNotUndoneByARollbackOnA(): void
     {
-        $failure = new \RuntimeException('A failed');
+        $failure = new RuntimeException('A failed');
         try {
             $this->db->transaction(function () use ($failure): void {
                 $this->write(1, 1);
@@ -114,7 +116,7 @@ final class ScopeIntegrationTest extends TestCase
                 throw $failure;
             });
             $this->fail('Expected A error');
-        } catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
+        } catch (RuntimeException $error) { $this->assertSame($failure, $error); }
         $this->assertSame(0, $this->value(1));
         $this->assertSame(5, $this->value(2));
     }

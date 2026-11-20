@@ -2,7 +2,9 @@
 
 namespace EasySwoole\FastDb\Attributes;
 
-#[\Attribute(\Attribute::TARGET_METHOD)]
+use Attribute;
+
+#[Attribute(Attribute::TARGET_METHOD)]
 class Relate
 {
     function __construct(

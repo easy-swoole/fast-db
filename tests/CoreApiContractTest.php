@@ -6,13 +6,15 @@ namespace EasySwoole\FastDb\Tests;
 
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use PHPUnit\Framework\TestCase;
+use ReflectionClass;
+use UnitEnum;
 
 final class CoreApiContractTest extends TestCase
 {
     public function testEntityPublicMethodsMatchTheirDeclaredContracts(): void
     {
         $contracts = json_decode(file_get_contents(__DIR__ . '/fixtures/core-public-api.json'), true, 512, JSON_THROW_ON_ERROR);
-        $reflection = new \ReflectionClass(AbstractEntity::class);
+        $reflection = new ReflectionClass(AbstractEntity::class);
         // 校验实体公开入口的签名契约，允许新增方法和重构内部实现。
         foreach ($contracts[AbstractEntity::class]['methods'] as $name => $expected) {
             $this->assertTrue($reflection->hasMethod($name), AbstractEntity::class . '::' . $name);
@@ -37,7 +39,7 @@ final class CoreApiContractTest extends TestCase
 
     private function defaultValue(mixed $value): mixed
     {
-        if ($value instanceof \UnitEnum) { return ['enum' => $value::class . '::' . $value->name]; }
+        if ($value instanceof UnitEnum) { return ['enum' => $value::class . '::' . $value->name]; }
         if (is_array($value)) { return array_map($this->defaultValue(...), $value); }
         if (is_object($value)) { return ['class' => $value::class]; }
         return $value;

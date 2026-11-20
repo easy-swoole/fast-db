@@ -14,6 +14,9 @@ use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Attributes\Relate;
 use EasySwoole\FastDb\Beans\EntityReflection;
 use EasySwoole\FastDb\Exception\RuntimeError;
+use ReflectionClass;
+use ReflectionException;
+use ReflectionMethod;
 
 /** 按类保存字段和关联元数据，不保留实体实例。 */
 class ReflectionCache
@@ -25,7 +28,7 @@ class ReflectionCache
     private array $relationMethodNames = [];
 
     /**
-     * @throws \ReflectionException
+     * @throws ReflectionException
      * @throws RuntimeError
      */
     public function parseEntity(string $entityClass): EntityReflection
@@ -33,7 +36,7 @@ class ReflectionCache
         if (isset($this->entityData[$entityClass])) {
             return $this->entityData[$entityClass];
         }
-        $reflection = new \ReflectionClass($entityClass);
+        $reflection = new ReflectionClass($entityClass);
         if (!$reflection->isSubclassOf(AbstractEntity::class)) {
             throw new RuntimeError("{$entityClass} not a subclass of " . AbstractEntity::class);
         }
@@ -96,7 +99,7 @@ class ReflectionCache
     {
         $cacheKey = strtolower($method);
         return $this->relationMethodNames[$entityClass][$cacheKey]
-            ??= (new \ReflectionMethod($entityClass, $method))->getName();
+            ??= (new ReflectionMethod($entityClass, $method))->getName();
     }
 
     /** 关联声明解析后为只读，按实体类和方法共享同一份定义。 */
@@ -104,7 +107,7 @@ class ReflectionCache
     {
         $cacheKey = strtolower($method);
         if (!isset($this->relationData[$entityClass][$cacheKey])) {
-            $reflection = new \ReflectionMethod($entityClass, $method);
+            $reflection = new ReflectionMethod($entityClass, $method);
             $this->relationMethodNames[$entityClass][$cacheKey] = $reflection->getName();
             $attributes = $reflection->getAttributes(Relate::class);
             if ($attributes === []) {
@@ -143,7 +146,7 @@ class ReflectionCache
         );
     }
 
-    protected function parseClassTag(string $targetTag, \ReflectionClass $ref)
+    protected function parseClassTag(string $targetTag, ReflectionClass $ref)
     {
         $attributes = $ref->getAttributes($targetTag);
         if ($attributes !== []) { return $attributes[0]->newInstance(); }

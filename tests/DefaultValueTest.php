@@ -4,18 +4,21 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests;
 
+use DateTimeZone;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\AbstractInterface\ConvertDateTime;
 use EasySwoole\FastDb\AbstractInterface\ConvertList;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Utility\ReflectionCache;
+use Error;
 use PHPUnit\Framework\TestCase;
+use stdClass;
 
 final class DefaultValueTest extends TestCase
 {
     public function testDuplicatePropertyAttributeFailsAtReflection(): void
     {
-        $this->expectException(\Error::class);
+        $this->expectException(Error::class);
         $this->expectExceptionMessage('must not be repeated');
         new class extends AbstractEntity {
             #[Property(defaultValue: 1)]
@@ -48,7 +51,7 @@ final class DefaultValueTest extends TestCase
         $property->getDefaultValue()->append('changed through metadata');
         $this->assertSame([], (new MutableDefaultEntity())->tags->toArray());
 
-        $this->expectException(\Error::class);
+        $this->expectException(Error::class);
         $property->allowNull = true;
     }
 
@@ -106,10 +109,10 @@ class MutableDefaultEntity extends AbstractEntity
     #[Property(defaultValue: new ConvertList([]), convertObject: ConvertList::class)]
     public ConvertList $tags;
 
-    #[Property(defaultValue: new \stdClass())]
-    public \stdClass $metadata;
+    #[Property(defaultValue: new stdClass())]
+    public stdClass $metadata;
 
-    #[Property(defaultValue: ['outer' => ['object' => new \stdClass()]])]
+    #[Property(defaultValue: ['outer' => ['object' => new stdClass()]])]
     public array $nested;
 
     public function tableName(): string
@@ -121,7 +124,7 @@ class MutableDefaultEntity extends AbstractEntity
 class DateTimeDefaultEntity extends AbstractEntity
 {
     #[Property(
-        defaultValue: new ConvertDateTime('2026-11-09 12:34:56.123456', new \DateTimeZone('Asia/Shanghai')),
+        defaultValue: new ConvertDateTime('2026-11-09 12:34:56.123456', new DateTimeZone('Asia/Shanghai')),
         convertObject: ConvertDateTime::class
     )]
     public ConvertDateTime $createdAt;

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests;
 
+use Closure;
 use EasySwoole\FastDb\Config;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\FastDb;
@@ -16,9 +17,13 @@ use EasySwoole\Mysqli\Transaction\TransactionCompletionFlags;
 use EasySwoole\Mysqli\Transaction\TransactionStartFlags;
 use EasySwoole\Pool\Exception\PoolEmpty;
 use EasySwoole\Pool\ObjectInterface;
+use LogicException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
+use RuntimeException;
 use Swoole\Coroutine;
+use Throwable;
 
 final class ConnectionAcquireTimingTest extends TestCase
 {
@@ -98,13 +103,13 @@ final class ConnectionAcquireTimingTest extends TestCase
     public function testAcquireFailureLogsTheActualEscapingExceptionWithoutQueryNotification(string $failureMode): void
     {
         [$db, $pools, $clients] = $this->database();
-        $original = new \RuntimeException('health check failed', 31);
+        $original = new RuntimeException('health check failed', 31);
         $pools['default']->failure = $failureMode === 'exception' ? $original : false;
         $notifications = 0;
         $db->setOnQuery(static function () use (&$notifications): void { $notifications++; });
         $caught = null;
         try { $db->rawQuery('SELECT never_sent'); }
-        catch (\RuntimeException|RuntimeError $error) { $caught = $error; }
+        catch (RuntimeException|RuntimeError $error) { $caught = $error; }
         if ($failureMode === 'exception') {
             $this->assertSame($original, $caught);
         } else {
@@ -190,11 +195,11 @@ final class ConnectionAcquireTimingTest extends TestCase
         $custom = new AcquireTimingManualTransactionDb();
         [$db, $pools] = $this->database(db: $custom);
         $db->transaction(static function (): void {});
-        $failure = new \LogicException('business failed');
+        $failure = new LogicException('business failed');
         try {
             $db->transaction(static function () use ($failure): void { throw $failure; });
             $this->fail('Expected business failure');
-        } catch (\LogicException $error) {
+        } catch (LogicException $error) {
             $this->assertSame($failure, $error);
         }
         $this->assertSame([], $custom->manualCalls);
@@ -241,12 +246,12 @@ final class ConnectionAcquireTimingTest extends TestCase
     public function testSqlFailureAndSuccessfulAcquireHaveSeparateExceptionState(): void
     {
         [$db, $pools, $clients] = $this->database();
-        $failure = new \RuntimeException('query failed');
+        $failure = new RuntimeException('query failed');
         $clients['default']->queryFailure = $failure;
         $observed = null;
         $db->setOnQuery(static function (QueryResult $result) use (&$observed): void { $observed = $result; });
         try { $db->rawQuery('SELECT fails'); $this->fail('Expected SQL error'); }
-        catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
+        catch (RuntimeException $error) { $this->assertSame($failure, $error); }
         $this->assertSame($failure, $observed->getException());
         $this->assertSame(['connectionAcquire', 'query'], array_column($db->getQueryStack(), 'type'));
         $this->assertNull($db->getQueryStack(0)->exception);
@@ -260,7 +265,7 @@ final class ConnectionAcquireTimingTest extends TestCase
     public function testDefaultQueriesAndReadOnlyDiagnosticsDoNotAllocateTheDiagnosticsObject(): void
     {
         [$db] = $this->database(stack: false);
-        $diagnostics = new \ReflectionProperty(FastDb::class, 'diagnostics');
+        $diagnostics = new ReflectionProperty(FastDb::class, 'diagnostics');
         $this->assertNull($diagnostics->getValue($db));
         $this->assertNull($db->getQueryStack());
         $db->rawQuery('SELECT success');
@@ -346,7 +351,7 @@ final class ConnectionAcquireTimingTest extends TestCase
         $pool = new AcquireTimingRetryPool($config, $clients);
         $db = (new FastDb())->addDb($config)->configureQueryStack(true);
         $this->databases[] = $db;
-        (new \ReflectionProperty(FastDb::class, 'pools'))->setValue($db, ['default' => $pool]);
+        (new ReflectionProperty(FastDb::class, 'pools'))->setValue($db, ['default' => $pool]);
         try {
             $db->rawQuery('SELECT after_health_retry');
             $this->assertSame(2, $checks);
@@ -365,7 +370,7 @@ final class ConnectionAcquireTimingTest extends TestCase
         Coroutine::create(static function () use ($pool, $busy, $released): void {
             Coroutine::sleep(0.025);
             try { $pool->recycleObj($busy); $released->push(null); }
-            catch (\Throwable $error) { $released->push($error); }
+            catch (Throwable $error) { $released->push($error); }
         });
         try {
             $db->rawQuery('SELECT after_wait');
@@ -410,7 +415,7 @@ final class ConnectionAcquireTimingTest extends TestCase
             $clients[$name] = new AcquireTimingClient();
             $pools[$name] = new AcquireTimingPool($config, $clients[$name]);
         }
-        (new \ReflectionProperty(FastDb::class, 'pools'))->setValue($db, $pools);
+        (new ReflectionProperty(FastDb::class, 'pools'))->setValue($db, $pools);
         return [$db, $pools, $clients];
     }
 
@@ -420,7 +425,7 @@ final class ConnectionAcquireTimingTest extends TestCase
         $pool = new AcquireTimingRetryPool($config, [new AcquireTimingClient()]);
         $db = (new FastDb())->addDb($config)->configureQueryStack(true);
         $this->databases[] = $db;
-        (new \ReflectionProperty(FastDb::class, 'pools'))->setValue($db, ['default' => $pool]);
+        (new ReflectionProperty(FastDb::class, 'pools'))->setValue($db, ['default' => $pool]);
         return [$db, $pool];
     }
 
@@ -434,8 +439,8 @@ class AcquireTimingClient extends Connection
 {
     private bool $transactionActive = false;
     public array $sql = [];
-    public ?\Throwable $queryFailure = null;
-    public ?\Closure $healthCheck = null;
+    public ?Throwable $queryFailure = null;
+    public ?Closure $healthCheck = null;
     public function __construct() { parent::__construct(new ClientConfig()); }
     public function isInTransaction(): bool { return $this->transactionActive; }
     public function query(QueryBuilder $builder, ?float $timeout = null): bool|array { return $this->rawQuery($builder->getLastPrepareQuery(), $timeout); }
@@ -455,15 +460,15 @@ class AcquireTimingPool extends Pool
 {
     public int $borrows = 0;
     public int $recycles = 0;
-    public \Throwable|false|null $failure = null;
-    public ?\Closure $onAcquire = null;
+    public Throwable|false|null $failure = null;
+    public ?Closure $onAcquire = null;
     public function __construct(Config $config, private Connection $client) { parent::__construct($config); }
     public function getObj(?float $timeout = null, int $tryTimes = 3): ?ObjectInterface
     {
         $this->borrows++;
         Coroutine::sleep(0.015);
         if ($this->onAcquire !== null) { ($this->onAcquire)(); }
-        if ($this->failure instanceof \Throwable) { throw $this->failure; }
+        if ($this->failure instanceof Throwable) { throw $this->failure; }
         return $this->failure === false ? null : $this->client;
     }
     public function recycleObj($obj): bool { $this->recycles++; return true; }

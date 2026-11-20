@@ -4,20 +4,22 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests;
 
-use EasySwoole\FastDb\Attributes\RelationType;
+use Closure;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Attributes\Relate;
+use EasySwoole\FastDb\Attributes\RelationType;
 use EasySwoole\FastDb\Beans\ListResult;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Internal\RelationLoader;
 use EasySwoole\FastDb\Internal\RelationPlan;
-
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\Mysqli\QueryBuilder;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
+use WeakReference;
 
 final class RelationPreloadCacheTest extends TestCase
 {
@@ -28,14 +30,14 @@ final class RelationPreloadCacheTest extends TestCase
 
     protected function setUp(): void
     {
-        $singleton = new \ReflectionProperty(FastDb::class, 'instance');
+        $singleton = new ReflectionProperty(FastDb::class, 'instance');
         $this->previousDb = $singleton->getValue();
         $this->db = new FastDb(); $singleton->setValue(null, $this->db);
     }
 
     protected function tearDown(): void
     {
-        (new \ReflectionProperty(FastDb::class, 'instance'))->setValue(null, $this->previousDb);
+        (new ReflectionProperty(FastDb::class, 'instance'))->setValue(null, $this->previousDb);
     }
 
     public function testExplicitOneAndManyRemainReadableWithLazyCachingDisabled(): void
@@ -164,7 +166,7 @@ final class RelationPreloadCacheTest extends TestCase
     {
         $parent = $this->parent(); $relation = $this->relation(); $loader = new RelationLoader();
         $lookup = $this->lookup($parent, $relation);
-        $parentRef = \WeakReference::create($parent); $queryRef = \WeakReference::create($lookup);
+        $parentRef = WeakReference::create($parent); $queryRef = WeakReference::create($lookup);
         $loader->prime(RelationLoader::cacheKey($relation, $lookup, false, 'default'), new ListResult([]));
         unset($parent, $lookup); gc_collect_cycles();
         $this->assertNull($parentRef->get());
@@ -188,7 +190,7 @@ final class RelationPreloadCacheTest extends TestCase
     private function load(RelationLoader $loader, PreloadCacheParent $parent, Relate $relation, ?string $table = null): mixed
     {
         $reset = static function () use ($parent): void {
-            (new \ReflectionProperty(AbstractEntity::class, 'queryBuilder'))->setValue($parent, null);
+            (new ReflectionProperty(AbstractEntity::class, 'queryBuilder'))->setValue($parent, null);
         };
         try {
             $selection = $parent->queryLimit();
@@ -201,7 +203,7 @@ final class RelationPreloadCacheTest extends TestCase
                     $this->queries++;
                     return new QueryResult(0.0, 0.0, 0.0, 'default',
                         [['id' => 99, 'parent_id' => $parent->id, 'label' => 'database']]);
-                }, \Closure::bind(static fn (string $class, array $row, ?AbstractEntity $target = null) =>
+                }, Closure::bind(static fn (string $class, array $row, ?AbstractEntity $target = null) =>
                     AbstractEntity::hydrateEntity($class, $row, $target), null, AbstractEntity::class));
         } finally {
             $this->resets++;

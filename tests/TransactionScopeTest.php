@@ -10,9 +10,14 @@ use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\Mysqli\Config;
 use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\Mysqli\Transaction\TransactionStartFlags;
+use Error;
+use PDO;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
+use RuntimeException;
 use Swoole\Coroutine;
+use Throwable;
 
 final class TransactionScopeTest extends TestCase
 {
@@ -24,12 +29,12 @@ final class TransactionScopeTest extends TestCase
     {
         $this->db = (new FastDb())->addDb(new FastDbConfig(), 'a')->addDb(new FastDbConfig(), 'b');
         foreach (['a', 'b'] as $name) {
-            $database = new \PDO('sqlite::memory:');
+            $database = new PDO('sqlite::memory:');
             $database->exec('CREATE TABLE ledger (value INTEGER NOT NULL)');
             $this->connections[$name] = new TransactionScopeSqliteClient($database);
             $this->connections[$name]->connectionName = $name;
         }
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db, [Coroutine::getCid() => $this->connections]);
+        (new ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db, [Coroutine::getCid() => $this->connections]);
         $this->db->selectConnection('a');
     }
 
@@ -37,13 +42,13 @@ final class TransactionScopeTest extends TestCase
     {
         $this->db->setOnQuery(static function (): void {});
         foreach ($this->connections as $connection) { $connection->close(); }
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db, []);
+        (new ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db, []);
     }
 
     private function insert(int $value): void { $this->db->rawQuery('INSERT INTO ledger (value) VALUES (' . $value . ')'); }
     private function values(string $name = 'a'): array
     {
-        return array_map('intval', $this->connections[$name]->database->query('SELECT value FROM ledger ORDER BY rowid')->fetchAll(\PDO::FETCH_COLUMN));
+        return array_map('intval', $this->connections[$name]->database->query('SELECT value FROM ledger ORDER BY rowid')->fetchAll(PDO::FETCH_COLUMN));
     }
     private function commands(string $name = 'a'): array
     {
@@ -70,22 +75,22 @@ final class TransactionScopeTest extends TestCase
 
     public function testEscapingBusinessExceptionRollsBackAndKeepsTheSameThrowable(): void
     {
-        $failure = new \Error('business failure');
+        $failure = new Error('business failure');
         try {
             $this->db->transaction(function () use ($failure): void { $this->insert(1); throw $failure; });
             $this->fail('Expected business error');
-        } catch (\Error $error) { $this->assertSame($failure, $error); }
+        } catch (Error $error) { $this->assertSame($failure, $error); }
         $this->assertSame([], $this->values());
         $this->assertSame(['START', 'ROLLBACK'], $this->commands());
     }
 
     public function testCaughtJoinedFailureDoesNotPreventTheOwnerFromCommitting(): void
     {
-        $failure = new \RuntimeException('inner failure');
+        $failure = new RuntimeException('inner failure');
         $this->db->transaction(function () use ($failure): void {
             $this->insert(1);
             try { $this->db->transaction(function () use ($failure): void { $this->insert(2); throw $failure; }); }
-            catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
+            catch (RuntimeException $error) { $this->assertSame($failure, $error); }
             $this->insert(3);
         });
         $this->assertSame([1, 2, 3], $this->values());
@@ -94,14 +99,14 @@ final class TransactionScopeTest extends TestCase
 
     public function testUncaughtJoinedFailureReachesTheOwnerAndRollsEverythingBack(): void
     {
-        $failure = new \RuntimeException('inner failure');
+        $failure = new RuntimeException('inner failure');
         try {
             $this->db->transaction(function () use ($failure): void {
                 $this->insert(1);
                 $this->db->transaction(function () use ($failure): void { $this->insert(2); throw $failure; });
             });
             $this->fail('Expected inner error');
-        } catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
+        } catch (RuntimeException $error) { $this->assertSame($failure, $error); }
         $this->assertSame([], $this->values());
         $this->assertSame(['START', 'ROLLBACK'], $this->commands());
     }
@@ -119,11 +124,11 @@ final class TransactionScopeTest extends TestCase
 
     public function testFailureWhileJoiningManualTransactionDoesNotEndOrMarkIt(): void
     {
-        $failure = new \RuntimeException('joined failure');
+        $failure = new RuntimeException('joined failure');
         $this->db->begin();
         $this->insert(1);
         try { $this->db->transaction(function () use ($failure): void { $this->insert(2); throw $failure; }); $this->fail('Expected joined failure'); }
-        catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
+        catch (RuntimeException $error) { $this->assertSame($failure, $error); }
         $this->assertTrue($this->connections['a']->isInTransaction());
         $this->assertSame(['START'], $this->commands());
         $this->assertTrue($this->db->commit());
@@ -132,7 +137,7 @@ final class TransactionScopeTest extends TestCase
 
     public function testAtoBtoAUsesOneTransactionPerActualConnectionAndCaughtInnerFailureCanCommit(): void
     {
-        $failure = new \RuntimeException('joined A failure');
+        $failure = new RuntimeException('joined A failure');
         $this->db->transaction(function () use ($failure): void {
             $this->insert(1);
             $this->db->withConnection('b', function () use ($failure): void {
@@ -142,7 +147,7 @@ final class TransactionScopeTest extends TestCase
                         $this->db->withConnection('a', function () use ($failure): void {
                             $this->db->transaction(function () use ($failure): void { $this->insert(2); throw $failure; });
                         });
-                    } catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
+                    } catch (RuntimeException $error) { $this->assertSame($failure, $error); }
                 });
             });
             $this->insert(3);
@@ -156,7 +161,7 @@ final class TransactionScopeTest extends TestCase
 
     public function testCommittedBIsIndependentFromALaterRollbackOfA(): void
     {
-        $failure = new \RuntimeException('A failure');
+        $failure = new RuntimeException('A failure');
         try {
             $this->db->transaction(function () use ($failure): void {
                 $this->insert(1);
@@ -164,7 +169,7 @@ final class TransactionScopeTest extends TestCase
                 throw $failure;
             });
             $this->fail('Expected A failure');
-        } catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
+        } catch (RuntimeException $error) { $this->assertSame($failure, $error); }
         $this->assertSame([], $this->values('a'));
         $this->assertSame([2], $this->values('b'));
         $this->assertSame(['START', 'ROLLBACK'], $this->commands('a'));
@@ -211,13 +216,13 @@ final class TransactionScopeTest extends TestCase
 
     public function testBeginFailureNeverRunsTheBusinessCallback(): void
     {
-        $failure = new \RuntimeException('begin failed');
+        $failure = new RuntimeException('begin failed');
         $this->connections['a']->failCommands['START'] = $failure;
         $entered = false;
         try {
             $this->db->transaction(static function () use (&$entered): void { $entered = true; });
             $this->fail('Expected begin failure');
-        } catch (\Throwable $error) {
+        } catch (Throwable $error) {
             $this->assertSame($failure, $error);
         }
         $this->assertFalse($entered);
@@ -226,10 +231,10 @@ final class TransactionScopeTest extends TestCase
 
     public function testCommitFailureIsReportedWithoutAutomaticRollbackOrRetry(): void
     {
-        $failure = new \RuntimeException('commit failed');
+        $failure = new RuntimeException('commit failed');
         $this->connections['a']->failCommands['COMMIT'] = $failure;
         try { $this->db->transaction(function (): void { $this->insert(1); }); $this->fail('Expected commit failure'); }
-        catch (\Throwable $error) {
+        catch (Throwable $error) {
             $this->assertSame($failure, $error);
         }
         $this->assertSame(['START', 'COMMIT'], $this->commands());
@@ -238,10 +243,10 @@ final class TransactionScopeTest extends TestCase
 
     public function testRollbackFailureDoesNotReplaceTheBusinessException(): void
     {
-        $business = new \RuntimeException('business failed');
-        $this->connections['a']->failCommands['ROLLBACK'] = new \RuntimeException('cleanup failed');
+        $business = new RuntimeException('business failed');
+        $this->connections['a']->failCommands['ROLLBACK'] = new RuntimeException('cleanup failed');
         try { $this->db->transaction(function () use ($business): void { $this->insert(1); throw $business; }); $this->fail('Expected business failure'); }
-        catch (\RuntimeException $error) { $this->assertSame($business, $error); }
+        catch (RuntimeException $error) { $this->assertSame($business, $error); }
         $this->assertSame(['START', 'ROLLBACK'], $this->commands());
     }
 
@@ -262,7 +267,7 @@ class TransactionScopeSqliteClient extends Connection
     public bool $isInTransaction = false;
     public array $queries = [];
     public array $failCommands = [];
-    public function __construct(public \PDO $database) { parent::__construct(new Config()); }
+    public function __construct(public PDO $database) { parent::__construct(new Config()); }
     public function isInTransaction(): bool { return $this->isInTransaction; }
     public function query(QueryBuilder $builder, ?float $timeout = null): bool|array
     {
@@ -292,6 +297,6 @@ class TransactionScopeSqliteClient extends Connection
         $statement = $this->database->prepare($query);
         $statement->execute($parameters);
         $this->lastAffectRows = $statement->rowCount();
-        return $statement->columnCount() > 0 ? $statement->fetchAll(\PDO::FETCH_ASSOC) : true;
+        return $statement->columnCount() > 0 ? $statement->fetchAll(PDO::FETCH_ASSOC) : true;
     }
 }

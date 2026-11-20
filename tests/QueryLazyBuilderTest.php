@@ -10,26 +10,31 @@ use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Beans\Page;
 use EasySwoole\FastDb\Beans\Query;
 use EasySwoole\Mysqli\QueryBuilder;
+use InvalidArgumentException;
+use LogicException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
+use Throwable;
+use WeakReference;
 
 final class QueryLazyBuilderTest extends TestCase
 {
     private function builderState(Query $query): ?QueryBuilder
     {
-        return (new \ReflectionProperty(Query::class, 'queryBuilder'))->getValue($query);
+        return (new ReflectionProperty(Query::class, 'queryBuilder'))->getValue($query);
     }
 
     public function testPlainSerializationDoesNotCreateAQueryOrRetainTheEntityUntilGc(): void
     {
         $entity = new LazyOutputOwner(['id' => 1, 'secret' => 'private']);
-        $state = new \ReflectionProperty(AbstractEntity::class, 'queryBuilder');
+        $state = new ReflectionProperty(AbstractEntity::class, 'queryBuilder');
         $this->assertSame(['id' => 1, 'secret' => 'private'], $entity->toArray());
         $this->assertSame('{"id":1,"secret":"private"}', json_encode($entity, JSON_THROW_ON_ERROR));
         $entity->secret = null;
         $this->assertSame(['id' => 1], $entity->toArray(true));
         $this->assertNull($state->getValue($entity));
-        $reference = \WeakReference::create($entity);
+        $reference = WeakReference::create($entity);
         unset($entity);
         $this->assertNull($reference->get());
     }
@@ -142,7 +147,7 @@ final class QueryLazyBuilderTest extends TestCase
 
     public function testInvalidPageIsNotInterpretedAsLimit(): void
     {
-        $this->expectException(\InvalidArgumentException::class);
+        $this->expectException(InvalidArgumentException::class);
         (new Query(new LazyQueryOwner()))->page(0);
     }
 
@@ -165,7 +170,7 @@ final class QueryLazyBuilderTest extends TestCase
                 $builder = $operation();
                 $builder->get('items');
                 return [$builder->getLastPrepareQuery(), $builder->getLastBindParams(), $builder->getLastQueryOptions()];
-            } catch (\Throwable $error) {
+            } catch (Throwable $error) {
                 return [$error::class];
             }
         };
@@ -189,7 +194,7 @@ class LazyGetterOverrideQuery extends Query
 {
     public function __getQueryBuilder(): QueryBuilder
     {
-        throw new \LogicException('Internal SQL methods must preserve their original private builder dispatch.');
+        throw new LogicException('Internal SQL methods must preserve their original private builder dispatch.');
     }
 }
 

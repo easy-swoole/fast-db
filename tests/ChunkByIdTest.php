@@ -15,13 +15,19 @@ use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\Mysqli\Config;
 use EasySwoole\Mysqli\QueryBuilder;
+use InvalidArgumentException;
+use LogicException;
+use PDO;
+use PDOException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
+use RuntimeException;
 use Swoole\Coroutine;
 
 final class ChunkByIdTest extends TestCase
 {
-    private ?\ReflectionProperty $singleton = null;
+    private ?ReflectionProperty $singleton = null;
     private mixed $originalInstance = null;
     private FastDb $db;
     private KeysetChunkSqliteConnection $connection;
@@ -30,7 +36,7 @@ final class ChunkByIdTest extends TestCase
     protected function setUp(): void
     {
         if (!extension_loaded('pdo_sqlite')) { $this->markTestSkipped('SQLite exercises generated SQL without MySQL writes.'); }
-        $database = new \PDO('sqlite::memory:', options: [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
+        $database = new PDO('sqlite::memory:', options: [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
         $database->exec('CREATE TABLE keyset_chunk_records (
             id INTEGER PRIMARY KEY, stable_key TEXT UNIQUE, name TEXT, status INTEGER,
             priority INTEGER, payload TEXT
@@ -38,10 +44,10 @@ final class ChunkByIdTest extends TestCase
         $this->connection = new KeysetChunkSqliteConnection($database);
         $this->connection->connectionName = 'default';
         $this->db = new FastDb();
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db,
+        (new ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db,
             [Coroutine::getCid() => ['default' => $this->connection]]);
         $this->db->setOnQuery(function (QueryResult $result): void { $this->events[] = $result; });
-        $this->singleton = new \ReflectionProperty(FastDb::class, 'instance');
+        $this->singleton = new ReflectionProperty(FastDb::class, 'instance');
         $this->originalInstance = $this->singleton->getValue();
         $this->singleton->setValue(null, $this->db);
     }
@@ -50,7 +56,7 @@ final class ChunkByIdTest extends TestCase
     {
         if ($this->singleton === null) { return; }
         $this->db->setOnQuery(static function (): void {});
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db, []);
+        (new ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db, []);
         $this->singleton->setValue(null, $this->originalInstance);
     }
 
@@ -144,7 +150,7 @@ final class ChunkByIdTest extends TestCase
         $owner->queryLimit()->where('status', 0)->orWhere('priority', 1)->orderBy('name', 'DESC')->page(4, false, 1);
         $seen = [];
         $count = $owner->chunkById(static function (KeysetChunkRecord $row) use (&$seen): void {
-            if (count($seen) > 12) { throw new \RuntimeException('Cursor did not advance'); }
+            if (count($seen) > 12) { throw new RuntimeException('Cursor did not advance'); }
             $seen[] = $row->id;
         }, 2);
         $this->assertSame(5, $count);
@@ -298,11 +304,11 @@ final class ChunkByIdTest extends TestCase
         $this->seed(3);
         $owner = new KeysetChunkRecord();
         $owner->queryLimit()->where('status', 0)->fields(['id'])->hideFields('payload')->persistFieldLimit();
-        $failure = new \RuntimeException('callback failed');
+        $failure = new RuntimeException('callback failed');
         try {
             $owner->chunkById(static function () use ($failure): void { throw $failure; }, 2);
             $this->fail('Callback exception must propagate');
-        } catch (\RuntimeException $caught) { $this->assertSame($failure, $caught); }
+        } catch (RuntimeException $caught) { $this->assertSame($failure, $caught); }
         $this->assertCount(1, $this->pages());
         $this->assertClean($owner);
     }
@@ -314,7 +320,7 @@ final class ChunkByIdTest extends TestCase
         $entityEvents = [];
         $owner->setOnQuery(static function (QueryResult $result) use (&$entityEvents): void { $entityEvents[] = $result; });
         try { $owner->chunkById(static function (): void { self::fail('Failed SQL cannot deliver rows'); }, 2); $this->fail('SQL must fail'); }
-        catch (\PDOException $error) {
+        catch (PDOException $error) {
             $this->assertSame($error, $this->events[0]->getException());
             $this->assertSame($error, $entityEvents[0]->getException());
         }
@@ -355,7 +361,7 @@ final class ChunkByIdTest extends TestCase
         $owner = new KeysetChunkRecord();
         $owner->queryLimit()->where('status', 0)->hideFields('payload');
         try { $owner->chunkById(static function (): void { self::fail('No callback expected'); }, $size); $this->fail('Invalid size must fail'); }
-        catch (\InvalidArgumentException) { $this->addToAssertionCount(1); }
+        catch (InvalidArgumentException) { $this->addToAssertionCount(1); }
         $this->assertSame([], $this->connection->queries);
         $this->assertClean($owner);
     }
@@ -364,7 +370,7 @@ final class ChunkByIdTest extends TestCase
     {
         $owner = new KeysetChunkNoPrimaryRecord();
         try { $owner->chunkById(static function (): void {}, 2); $this->fail('No primary key must fail'); }
-        catch (RuntimeError|\InvalidArgumentException) { $this->addToAssertionCount(1); }
+        catch (RuntimeError|InvalidArgumentException) { $this->addToAssertionCount(1); }
         $this->assertSame([], $this->connection->queries);
         $this->assertClean($owner);
     }
@@ -376,7 +382,7 @@ final class ChunkByIdTest extends TestCase
     {
         $owner = new KeysetChunkRecord();
         try { $owner->chunkById(static function (): void {}, 2, $column); $this->fail('Invalid cursor column must fail'); }
-        catch (RuntimeError|\InvalidArgumentException) { $this->addToAssertionCount(1); }
+        catch (RuntimeError|InvalidArgumentException) { $this->addToAssertionCount(1); }
         $this->assertSame([], $this->connection->queries);
         $this->assertClean($owner);
     }
@@ -405,7 +411,7 @@ class KeysetChunkSqliteConnection extends Connection
 {
     public array $queries = [];
     public array $rawQueries = [];
-    public function __construct(public \PDO $database) { parent::__construct(new Config()); }
+    public function __construct(public PDO $database) { parent::__construct(new Config()); }
     public function query(QueryBuilder $builder, ?float $timeout = null): bool|array
     {
         $sql = $builder->getLastPrepareQuery();
@@ -414,12 +420,12 @@ class KeysetChunkSqliteConnection extends Connection
         $statement = $this->database->prepare($sql);
         $statement->execute($parameters);
         $this->lastAffectRows = $statement->rowCount(); $this->lastInsertId = 0;
-        return $statement->columnCount() > 0 ? $statement->fetchAll(\PDO::FETCH_ASSOC) : true;
+        return $statement->columnCount() > 0 ? $statement->fetchAll(PDO::FETCH_ASSOC) : true;
     }
     public function rawQuery(string $query, ?float $timeout = null): bool|array
     {
         $this->rawQueries[] = $query;
-        throw new \LogicException('Unexpected raw SQL while traversing keyset pages: ' . $query);
+        throw new LogicException('Unexpected raw SQL while traversing keyset pages: ' . $query);
     }
 }
 

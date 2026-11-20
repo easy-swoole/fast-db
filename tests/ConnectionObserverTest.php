@@ -10,14 +10,22 @@ use EasySwoole\FastDb\Mysql\Pool;
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\Mysqli\Client;
 use EasySwoole\Mysqli\Config;
+use EasySwoole\Mysqli\Exception\Exception;
+use EasySwoole\Mysqli\Exception\TimeoutException;
 use EasySwoole\Mysqli\Protocol\Connection as ProtocolConnection;
 use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\Mysqli\Transaction\TransactionCompletionFlags;
+use LogicException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionMethod;
+use ReflectionProperty;
+use RuntimeException;
 use Swoole\Coroutine;
 use Swoole\Coroutine\Channel;
 use Swoole\Coroutine\Socket;
+use Throwable;
+use WeakReference;
 
 final class ConnectionObserverTest extends TestCase
 {
@@ -47,7 +55,7 @@ final class ConnectionObserverTest extends TestCase
     public function testRollbackStateIsSynchronizedBeforeAGlobalObserverThrows(string $mode): void
     {
         $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer) use ($mode): void {
-            $failure = new \RuntimeException('observer failed');
+            $failure = new RuntimeException('observer failed');
             $db->setOnQuery(function (QueryResult $result) use ($connection, $failure): void {
                 $this->assertTrue($result->getResult());
                 $this->assertFalse($connection->isInTransaction());
@@ -55,7 +63,7 @@ final class ConnectionObserverTest extends TestCase
             });
             $this->queueQuery($peer, $mode, $this->ok());
             try { $this->execute($db, $mode, 'ROLLBACK'); $this->fail('Expected observer error'); }
-            catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
+            catch (RuntimeException $error) { $this->assertSame($failure, $error); }
             $this->assertFalse($connection->isInTransaction());
         }, true);
     }
@@ -129,13 +137,13 @@ final class ConnectionObserverTest extends TestCase
                 $commands = [];
                 $read = static function () use ($peer, &$commands): void {
                     $header = $peer->recvAll(4, 0.1);
-                    if (!is_string($header) || strlen($header) !== 4) { throw new \RuntimeException('Missing command header'); }
+                    if (!is_string($header) || strlen($header) !== 4) { throw new RuntimeException('Missing command header'); }
                     $length = ord($header[0]) | (ord($header[1]) << 8) | (ord($header[2]) << 16);
                     $commands[] = $peer->recvAll($length, 0.1);
                 };
                 $send = static function (string $payload) use ($peer): void {
                     $packet = substr(pack('V', strlen($payload)), 0, 3) . "\1" . $payload;
-                    if ($peer->sendAll($packet, 0.1) !== strlen($packet)) { throw new \RuntimeException('Cannot send response'); }
+                    if ($peer->sendAll($packet, 0.1) !== strlen($packet)) { throw new RuntimeException('Cannot send response'); }
                 };
                 try {
                     if ($mode === 'prepared') { $read(); $send("\0" . pack('VvvCv', 7, 0, 0, 0, 0)); }
@@ -143,7 +151,7 @@ final class ConnectionObserverTest extends TestCase
                     $send($fails ? "\xff" . pack('v', 1064) . '#42000direct failure' : "\0\3\x29\2\0\0\0");
                     if ($mode === 'prepared') { $read(); }
                     $observations->push($commands);
-                } catch (\Throwable $error) { $observations->push($error); }
+                } catch (Throwable $error) { $observations->push($error); }
             });
             try {
                 $value = match ($mode) {
@@ -153,7 +161,7 @@ final class ConnectionObserverTest extends TestCase
                 };
                 $this->assertFalse($fails);
                 if ($mode !== 'restore') { $this->assertTrue($value); }
-            } catch (\EasySwoole\Mysqli\Exception\Exception $error) {
+            } catch (Exception $error) {
                 $this->assertTrue($fails);
                 $this->assertSame(1064, $error->getCode());
             }
@@ -178,7 +186,7 @@ final class ConnectionObserverTest extends TestCase
                 try {
                     $mode === 'raw' ? $connection->rawQuery('DO inner_query') : $connection->query($builder->raw('DO inner_query'));
                     $this->fail('Expected direct SQL failure');
-                } catch (\EasySwoole\Mysqli\Exception\Exception $error) { $this->assertSame(1064, $error->getCode()); }
+                } catch (Exception $error) { $this->assertSame(1064, $error->getCode()); }
                 $builder->raw('DO outer_query');
             });
             $this->assertSame([$result], $logged);
@@ -192,14 +200,14 @@ final class ConnectionObserverTest extends TestCase
     public function testObserverFailureDoesNotBecomeAConnectionTimeoutOrInvalidateRecentActivity(): void
     {
         $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
-            $failure = new \EasySwoole\Mysqli\Exception\TimeoutException('business observer failed', 110);
+            $failure = new TimeoutException('business observer failed', 110);
             $logged = null;
             $db->setOnQuery(static function (QueryResult $result) use (&$logged, $failure): void { $logged = $result; throw $failure; });
             $this->queueQuery($peer, 'raw', $this->ok(2, 1, 11));
             try {
                 $db->rawQuery('DO 1');
                 $this->fail('Expected observer error');
-            } catch (\Throwable $error) { $this->assertSame($failure, $error); }
+            } catch (Throwable $error) { $this->assertSame($failure, $error); }
             $this->assertTrue($logged->getResult());
             $this->assertNull($logged->getException());
             $this->assertSame(11, $logged->getInsertId());
@@ -213,7 +221,7 @@ final class ConnectionObserverTest extends TestCase
     public function testSharedDispatcherDoesNotKeepAnUnusedConnectionAlive(): void
     {
         $connection = new Connection(new Config());
-        $weak = \WeakReference::create($connection);
+        $weak = WeakReference::create($connection);
         unset($connection);
         $this->assertNull($weak->get());
     }
@@ -249,14 +257,14 @@ final class ConnectionObserverTest extends TestCase
     public function testGlobalObserverErrorDoesNotChangeANewerTransactionState(): void
     {
         $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
-            $once = false; $failure = new \EasySwoole\Mysqli\Exception\Exception('observer error', 1213);
+            $once = false; $failure = new Exception('observer error', 1213);
             $db->setOnQuery(static function () use ($db, &$once, $failure): void {
                 if (!$once) { $once = true; $db->begin(); throw $failure; }
             });
             $this->queueQuery($peer, 'raw', $this->ok());
             $this->queueQuery($peer, 'raw', $this->ok(1));
             try { $db->commit(); $this->fail('Expected observer error'); }
-            catch (\EasySwoole\Mysqli\Exception\Exception $error) { $this->assertSame($failure, $error); }
+            catch (Exception $error) { $this->assertSame($failure, $error); }
             $this->assertTrue($connection->isInTransaction());
         }, true);
     }
@@ -280,16 +288,16 @@ final class ConnectionObserverTest extends TestCase
         $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer): void {
             $called = false;
             $request = (object) ['payload' => str_repeat('r', 1024 * 1024)];
-            $weak = \WeakReference::create($request);
+            $weak = WeakReference::create($request);
             try {
                 $connection->onQuery(static function () use ($request, &$called): void { $called = true; });
                 $this->fail('Connection-level registration must be rejected');
-            } catch (\LogicException $error) { $this->assertNotSame('', $error->getMessage()); }
+            } catch (LogicException $error) { $this->assertNotSame('', $error->getMessage()); }
             // 捕获的异常也可能通过调用栈保留回调参数。
             unset($error, $request);
             gc_collect_cycles();
             $this->assertNull($weak->get());
-            $this->assertTrue((new \ReflectionMethod(Connection::class, 'onQuery'))->isFinal());
+            $this->assertTrue((new ReflectionMethod(Connection::class, 'onQuery'))->isFinal());
             $this->queueQuery($peer, 'raw', $this->ok());
             $this->assertTrue($connection->rawQuery('ROLLBACK'));
             $this->assertFalse($called);
@@ -320,12 +328,12 @@ final class ConnectionObserverTest extends TestCase
     public function testRejectedCloseKeepsTheActiveTransactionFlag(): void
     {
         $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer, ProtocolConnection $protocol): void {
-            $tickProperty = new \ReflectionProperty(Connection::class, 'lastActiveTick');
+            $tickProperty = new ReflectionProperty(Connection::class, 'lastActiveTick');
             $tick = hrtime(true); $tickProperty->setValue($connection, $tick);
-            $busy = new \ReflectionProperty($protocol, 'busy'); $busy->setValue($protocol, true);
+            $busy = new ReflectionProperty($protocol, 'busy'); $busy->setValue($protocol, true);
             try {
                 try { $connection->close(); $this->fail('Expected concurrent close rejection'); }
-                catch (\EasySwoole\Mysqli\Exception\Exception $error) { $this->assertStringContainsString('Concurrent', $error->getMessage()); }
+                catch (Exception $error) { $this->assertStringContainsString('Concurrent', $error->getMessage()); }
                 $this->assertTrue($connection->isInTransaction());
                 $this->assertTrue($protocol->isConnected());
                 $this->assertSame($tick, $tickProperty->getValue($connection));
@@ -343,8 +351,8 @@ final class ConnectionObserverTest extends TestCase
                     return true;
                 }
             );
-            (new \ReflectionProperty(FastDb::class, 'pools'))->setValue($db, ['default' => $pool]);
-            $failure = new \RuntimeException('release observer');
+            (new ReflectionProperty(FastDb::class, 'pools'))->setValue($db, ['default' => $pool]);
+            $failure = new RuntimeException('release observer');
             $db->setOnQuery(function () use ($connection, $failure): void {
                 $this->assertFalse($connection->isInTransaction());
                 $this->assertNull($connection->mysqlClient());
@@ -352,7 +360,7 @@ final class ConnectionObserverTest extends TestCase
             });
             $this->queueQuery($peer, 'raw', $this->ok());
             try { $db->commit(flags: TransactionCompletionFlags::Release); $this->fail('Expected observer error'); }
-            catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
+            catch (RuntimeException $error) { $this->assertSame($failure, $error); }
             $this->assertFalse($connection->isInTransaction());
             $this->assertNull($connection->mysqlClient());
         }, true);
@@ -367,11 +375,11 @@ final class ConnectionObserverTest extends TestCase
                 static function (Connection $client) use (&$discardStarted): bool {
                     $discardStarted = microtime(true);
                     $client->gc();
-                    (new \ReflectionProperty(Client::class, 'lastAffectRows'))->setValue($client, null);
+                    (new ReflectionProperty(Client::class, 'lastAffectRows'))->setValue($client, null);
                     return true;
                 }
             );
-            (new \ReflectionProperty(FastDb::class, 'pools'))->setValue($db, ['default' => $pool]);
+            (new ReflectionProperty(FastDb::class, 'pools'))->setValue($db, ['default' => $pool]);
             $observed = null;
             $db->setOnQuery(function (QueryResult $result) use ($db, &$discardStarted, &$observed): void {
                 $this->assertNotNull($discardStarted);
@@ -388,7 +396,7 @@ final class ConnectionObserverTest extends TestCase
     public function testDisconnectedRestoreClearsTheTransactionWithoutSendingRollback(): void
     {
         $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer, ProtocolConnection $protocol): void {
-            $stream = (new \ReflectionProperty($protocol, 'stream'))->getValue($protocol); $stream->close();
+            $stream = (new ReflectionProperty($protocol, 'stream'))->getValue($protocol); $stream->close();
             $connection->objectRestore();
             $this->assertFalse($connection->isInTransaction());
             $this->assertNull($connection->mysqlClient());
@@ -409,7 +417,7 @@ final class ConnectionObserverTest extends TestCase
         $this->withConnection(function (FastDb $db, Connection $connection, Socket $peer) use ($mode, $code, $active): void {
             $this->queueQuery($peer, $mode, "\xff" . pack('v', $code) . '#HY000statement failed');
             try { $this->execute($db, $mode, 'DO 1'); $this->fail('Expected SQL error'); }
-            catch (\EasySwoole\Mysqli\Exception\Exception $error) { $this->assertSame($code, $error->getCode()); }
+            catch (Exception $error) { $this->assertSame($code, $error->getCode()); }
             $this->assertSame($active, $connection->isInTransaction());
             $this->assertTrue($connection->mysqlClient()->isConnected());
         }, true);
@@ -456,7 +464,7 @@ final class ConnectionObserverTest extends TestCase
             $this->queueQuery($peer, 'raw', $this->ok(1));
             $this->assertSame([], iterator_to_array($connection->rawIterate('START TRANSACTION')));
             $this->assertTrue($connection->isInTransaction());
-            $this->assertNotNull((new \ReflectionProperty(Connection::class, 'lastActiveTick'))->getValue($connection));
+            $this->assertNotNull((new ReflectionProperty(Connection::class, 'lastActiveTick'))->getValue($connection));
             $this->queueQuery($peer, 'raw', $this->ok());
             $this->assertSame([], iterator_to_array($connection->rawIterate('ROLLBACK')));
             $this->assertFalse($connection->isInTransaction());
@@ -472,7 +480,7 @@ final class ConnectionObserverTest extends TestCase
                 $mode === 'raw' ? $connection->rawIterate('SELECT 1')
                     : $connection->iterate((new QueryBuilder())->raw('SELECT 1'));
                 $this->fail('Expected stream startup deadlock');
-            } catch (\EasySwoole\Mysqli\Exception\Exception $error) { $this->assertSame(1213, $error->getCode()); }
+            } catch (Exception $error) { $this->assertSame(1213, $error->getCode()); }
             $this->assertFalse($connection->isInTransaction());
             $this->assertTrue($connection->mysqlClient()->isConnected());
             $commands = [];
@@ -498,7 +506,7 @@ final class ConnectionObserverTest extends TestCase
             $this->assertTrue($connection->isInTransaction());
             $peer->close();
             try { iterator_to_array($stream); $this->fail('Expected stream read failure'); }
-            catch (\EasySwoole\Mysqli\Exception\Exception) { $this->addToAssertionCount(1); }
+            catch (Exception) { $this->addToAssertionCount(1); }
             $this->assertFalse($connection->mysqlClient()->isConnected());
             $this->assertFalse($connection->isInTransaction());
         }, true);
@@ -526,12 +534,12 @@ final class ConnectionObserverTest extends TestCase
         $check = function () use ($test, $transaction): void {
             [$socket, $peer] = swoole_coroutine_socketpair(AF_UNIX, SOCK_STREAM, 0);
             $config = new Config(['timeout' => 0.03]); $protocol = new ProtocolConnection($config);
-            $stream = (new \ReflectionProperty($protocol, 'stream'))->getValue($protocol);
-            (new \ReflectionProperty($stream, 'socket'))->setValue($stream, $socket);
-            $state = (new \ReflectionProperty($protocol, 'state'))->getValue($protocol); $state->established(); $state->applyServerStatus($transaction ? 1 : 2);
+            $stream = (new ReflectionProperty($protocol, 'stream'))->getValue($protocol);
+            (new ReflectionProperty($stream, 'socket'))->setValue($stream, $socket);
+            $state = (new ReflectionProperty($protocol, 'state'))->getValue($protocol); $state->established(); $state->applyServerStatus($transaction ? 1 : 2);
             $connection = new Connection($config); $connection->connectionName = 'default';
-            (new \ReflectionProperty(Client::class, 'mysqlClient'))->setValue($connection, $protocol);
-            $db = new FastDb(); $current = new \ReflectionProperty(FastDb::class, 'currentConnection');
+            (new ReflectionProperty(Client::class, 'mysqlClient'))->setValue($connection, $protocol);
+            $db = new FastDb(); $current = new ReflectionProperty(FastDb::class, 'currentConnection');
             $current->setValue($db, [Coroutine::getCid() => ['default' => $connection]]);
             try { $test($db, $connection, $peer, $protocol); }
             finally { $db->setOnQuery(static function (): void {}); $current->setValue($db, []); $connection->close(); $peer->close(); }

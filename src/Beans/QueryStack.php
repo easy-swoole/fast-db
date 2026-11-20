@@ -3,6 +3,7 @@
 namespace EasySwoole\FastDb\Beans;
 
 use EasySwoole\FastDb\Internal\SqlSnapshot;
+use Throwable;
 
 final class QueryStack
 {
@@ -12,7 +13,7 @@ final class QueryStack
         public readonly float $startTime,
         public readonly float $endTime,
         public readonly float $duration,
-        public readonly ?\Throwable $exception = null,
+        public readonly ?Throwable $exception = null,
         public readonly ?string $rawQuery = null,
         private readonly ?SqlSnapshot $sql = null,
     ) {}

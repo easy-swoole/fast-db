@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests;
 
+use Closure;
+use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Attributes\Hook\Call;
 use EasySwoole\FastDb\Attributes\Hook\OnInitialize;
 use EasySwoole\FastDb\Utility\ReflectionCache;
-use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
+use Error;
 use PHPUnit\Framework\TestCase;
 
 final class CallTest extends TestCase
@@ -19,7 +21,7 @@ final class CallTest extends TestCase
         $this->assertSame('instanceHook', $hook->callback);
         $this->assertSame(['instance'], (new CachedHookCallOwner())->events);
 
-        $this->expectException(\Error::class);
+        $this->expectException(Error::class);
         $hook->callback = 'get_class';
     }
 
@@ -30,7 +32,7 @@ final class CallTest extends TestCase
 
     public function testRepeatedHooksOnTheSameClassFailAtReflection(): void
     {
-        $this->expectException(\Error::class);
+        $this->expectException(Error::class);
         $this->expectExceptionMessage('must not be repeated');
         new DuplicateHookCallOwner();
     }
@@ -48,7 +50,7 @@ final class CallTest extends TestCase
         $this->assertSame(['instance', 'static'], $entity->events);
         $this->assertSame($entity, $entity->invokeHook(new Call(static fn($owner) => $owner)));
         $this->assertSame('method', $entity->invokeHook(new Call('get_class')));
-        $this->assertSame(InheritedHookCallOwner::class, $entity->invokeHook(new Call(\Closure::fromCallable('get_class'))));
+        $this->assertSame(InheritedHookCallOwner::class, $entity->invokeHook(new Call(Closure::fromCallable('get_class'))));
     }
 }
 

@@ -4,39 +4,44 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests;
 
-use EasySwoole\FastDb\Attributes\RelationType;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Attributes\Relate;
+use EasySwoole\FastDb\Attributes\RelationType;
+use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
-use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\FastDb\Tests\Model\ConvertedKey;
 use EasySwoole\Mysqli\Config;
 use EasySwoole\Mysqli\QueryBuilder;
+use InvalidArgumentException;
+use LogicException;
+use PDO;
+use PDOException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
 use Swoole\Coroutine;
 
 final class EntityQueryBoundaryTest extends TestCase
 {
     private FastDb $db;
     private QueryBoundaryConnection $client;
-    private \ReflectionProperty $singleton;
+    private ReflectionProperty $singleton;
     private mixed $previous;
 
     protected function setUp(): void
     {
         if (!extension_loaded('pdo_sqlite')) { $this->markTestSkipped('SQLite is required for offline SQL execution.'); }
-        $pdo = new \PDO('sqlite::memory:', options: [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
+        $pdo = new PDO('sqlite::memory:', options: [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
         $pdo->exec('CREATE TABLE query_boundary (id TEXT PRIMARY KEY, value REAL, `order` INTEGER, grp INTEGER)');
         $pdo->exec("INSERT INTO query_boundary VALUES ('is_object',1.5,4,1),('trim',2.5,6,1),('other',NULL,8,2)");
         $this->client = new QueryBoundaryConnection($pdo);
         $this->db = new FastDb();
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db,
+        (new ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db,
             [Coroutine::getCid() => ['default' => $this->client]]);
-        $this->singleton = new \ReflectionProperty(FastDb::class, 'instance');
+        $this->singleton = new ReflectionProperty(FastDb::class, 'instance');
         $this->previous = $this->singleton->getValue();
         $this->singleton->setValue(null, $this->db);
     }
@@ -45,7 +50,7 @@ final class EntityQueryBoundaryTest extends TestCase
     {
         if (!isset($this->singleton)) { return; }
         $this->db->setOnQuery(static function (): void {});
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db, []);
+        (new ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db, []);
         $this->singleton->setValue(null, $this->previous);
     }
 
@@ -60,7 +65,7 @@ final class EntityQueryBoundaryTest extends TestCase
         $this->assertSame(0, QueryBoundaryRecord::fastUpdate('is_null', ['order' => 0]));
         $this->assertSame(0, QueryBoundaryRecord::fastDelete('is_null'));
         $this->assertSame(1, QueryBoundaryRecord::fastDelete('is_object'));
-        $this->assertSame(['other', 'trim'], $this->client->database->query('SELECT id FROM query_boundary ORDER BY id')->fetchAll(\PDO::FETCH_COLUMN));
+        $this->assertSame(['other', 'trim'], $this->client->database->query('SELECT id FROM query_boundary ORDER BY id')->fetchAll(PDO::FETCH_COLUMN));
     }
 
     public static function findRecordLimits(): array
@@ -97,7 +102,7 @@ final class EntityQueryBoundaryTest extends TestCase
     #[DataProvider('multiRowFindRecordLimits')]
     public function testFindRecordRejectsMultipleRowsBeforeExecutingSql(int $first, ?int $second): void
     {
-        $this->expectException(\InvalidArgumentException::class);
+        $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('findRecord() supports a LIMIT of at most one row');
         try {
             QueryBoundaryRecord::findRecord(static function (QueryBuilder $query) use ($first, $second): void {
@@ -165,7 +170,7 @@ final class EntityQueryBoundaryTest extends TestCase
     public function testFastWritesRejectMissingConditionsBeforeExecutingSql(string $operation,
         array|string|callable $condition, string $message): void
     {
-        $this->expectException(\InvalidArgumentException::class);
+        $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage($message);
         try {
             if ($operation === 'update') {
@@ -205,7 +210,7 @@ final class EntityQueryBoundaryTest extends TestCase
         $entity = $kind === 'uninitialized' ? new QueryBoundaryRecord() : new NullablePrimaryKeyRecord();
         if ($kind === 'empty') { $entity->id = ''; }
         $entity->order = 1;
-        $this->expectException(\EasySwoole\FastDb\Exception\RuntimeError::class);
+        $this->expectException(RuntimeError::class);
         $this->expectExceptionMessage('without primary key value');
         try { $entity->$operation(); }
         finally { $this->assertSame([], $this->client->queries); }
@@ -283,7 +288,7 @@ final class EntityQueryBoundaryTest extends TestCase
         $entity->order = 12;
         // 主键未参与字段写入时，也必须校验数据库定位值没有变化。
         $entity->queryLimit()->fields(['order']);
-        $this->expectException(\EasySwoole\FastDb\Exception\RuntimeError::class);
+        $this->expectException(RuntimeError::class);
         $this->expectExceptionMessage('Cannot change entity primary key: id');
         try { $entity->$operation(); }
         finally {
@@ -373,7 +378,7 @@ final class EntityQueryBoundaryTest extends TestCase
     {
         $entity = new QueryBoundaryRecord();
         $this->assertSame(3, $entity->count('`query_boundary`.`order`'));
-        $this->expectException(\PDOException::class);
+        $this->expectException(PDOException::class);
         $entity->count('DISTINCT grp');
     }
 
@@ -451,7 +456,7 @@ class QueryBoundaryConnection extends Connection
     public array $queries = [];
     public int $countQueries = 0;
     private int $foundRows = 0;
-    public function __construct(public \PDO $database) { parent::__construct(new Config()); $this->connectionName = 'default'; }
+    public function __construct(public PDO $database) { parent::__construct(new Config()); $this->connectionName = 'default'; }
     public function query(QueryBuilder $builder, ?float $timeout = null): bool|array
     {
         $sql = str_replace('SQL_CALC_FOUND_ROWS ', '', $builder->getLastPrepareQuery());
@@ -460,15 +465,15 @@ class QueryBoundaryConnection extends Connection
         if (in_array('SQL_CALC_FOUND_ROWS', $builder->getLastQueryOptions(), true)) {
             $all = $this->database->prepare(preg_replace('/\sLIMIT\s+\d+(?:\s*,\s*\d+)?\s*$/i', '', $sql));
             $all->execute($parameters);
-            $this->foundRows = count($all->fetchAll(\PDO::FETCH_ASSOC));
+            $this->foundRows = count($all->fetchAll(PDO::FETCH_ASSOC));
         }
         $statement = $this->database->prepare($sql); $statement->execute($parameters);
         $this->lastAffectRows = $statement->rowCount(); $this->lastInsertId = 0;
-        return $statement->columnCount() > 0 ? $statement->fetchAll(\PDO::FETCH_ASSOC) : true;
+        return $statement->columnCount() > 0 ? $statement->fetchAll(PDO::FETCH_ASSOC) : true;
     }
     public function rawQuery(string $sql, ?float $timeout = null): bool|array
     {
-        if ($sql !== 'SELECT FOUND_ROWS() as count') { throw new \LogicException('Unexpected raw SQL'); }
+        if ($sql !== 'SELECT FOUND_ROWS() as count') { throw new LogicException('Unexpected raw SQL'); }
         $this->countQueries++;
         return [['count' => $this->foundRows]];
     }

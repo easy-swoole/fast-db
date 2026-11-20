@@ -4,16 +4,36 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests;
 
+use EasySwoole\FastDb\Config as FastDbConfig;
+use EasySwoole\FastDb\Exception\Exception as FastDbException;
+use EasySwoole\FastDb\Exception\TimeoutException;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
+use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\FastDb\Mysql\TransactionRecycleAction;
+use EasySwoole\Mysqli\Client;
+use EasySwoole\Mysqli\Config;
+use EasySwoole\Mysqli\Exception\Exception;
+use EasySwoole\Mysqli\Exception\TimeoutException as DriverTimeoutException;
+use EasySwoole\Mysqli\Protocol\Connection as ProtocolConnection;
+use EasySwoole\Mysqli\QueryBuilder;
+use EasySwoole\Mysqli\Transaction\TransactionCompletionFlags;
+use EasySwoole\Mysqli\Transaction\TransactionStartFlags;
+use Error;
+use InvalidArgumentException;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
+use RuntimeException;
+use Swoole\Coroutine;
+use Swoole\Coroutine\Socket;
+use TypeError;
 
 final class ConnectionTest extends TestCase
 {
     public function testRestoreAllowsStartingANewTransaction(): void
     {
-        $this->withConnected(function (Connection $connection, \Swoole\Coroutine\Socket $peer): void {
+        $this->withConnected(function (Connection $connection, Socket $peer): void {
             $this->queueOk($peer);
             $connection->objectRestore();
             $this->assertFalse($connection->isInTransaction());
@@ -38,11 +58,11 @@ final class ConnectionTest extends TestCase
         return $cases;
     }
 
-    #[\PHPUnit\Framework\Attributes\DataProvider('recycleStates')]
+    #[DataProvider('recycleStates')]
     public function testRestoreAppliesTheConfiguredActionOnlyToAnActiveTransaction(
         TransactionRecycleAction $action, bool $active
     ): void {
-        $this->withConnected(function (Connection $connection, \Swoole\Coroutine\Socket $peer) use ($action, $active): void {
+        $this->withConnected(function (Connection $connection, Socket $peer) use ($action, $active): void {
             $connection->transactionRecycleAction = $action;
             $sendsCommand = $active && $action !== TransactionRecycleAction::None;
             if ($sendsCommand) { $this->queueOk($peer); }
@@ -62,10 +82,10 @@ final class ConnectionTest extends TestCase
         }, $active);
     }
 
-    #[\PHPUnit\Framework\Attributes\DataProvider('recycleActions')]
+    #[DataProvider('recycleActions')]
     public function testRecycleActionPersistsAcrossRestores(TransactionRecycleAction $action): void
     {
-        $this->withConnected(function (Connection $connection, \Swoole\Coroutine\Socket $peer) use ($action): void {
+        $this->withConnected(function (Connection $connection, Socket $peer) use ($action): void {
             $connection->transactionRecycleAction = $action;
             if ($action !== TransactionRecycleAction::None) { $this->queueOk($peer); }
             $connection->objectRestore();
@@ -86,11 +106,11 @@ final class ConnectionTest extends TestCase
         return $cases;
     }
 
-    #[\PHPUnit\Framework\Attributes\DataProvider('cleanupModes')]
+    #[DataProvider('cleanupModes')]
     public function testRecycleActionDoesNotOpenAClosedSession(TransactionRecycleAction $action, string $method): void
     {
         $connection = $this->getMockBuilder(Connection::class)
-            ->setConstructorArgs([new \EasySwoole\Mysqli\Config()])
+            ->setConstructorArgs([new Config()])
             ->onlyMethods(['rawQuery'])->getMock();
         $connection->transactionRecycleAction = $action;
         $connection->close();
@@ -104,16 +124,16 @@ final class ConnectionTest extends TestCase
         return [[TransactionRecycleAction::Commit], [TransactionRecycleAction::Rollback]];
     }
 
-    #[\PHPUnit\Framework\Attributes\DataProvider('transactionCompletionActions')]
+    #[DataProvider('transactionCompletionActions')]
     public function testFailedRestorePreservesTheOriginalSqlError(TransactionRecycleAction $action): void
     {
-        $this->withConnected(function (Connection $connection, \Swoole\Coroutine\Socket $peer) use ($action): void {
+        $this->withConnected(function (Connection $connection, Socket $peer) use ($action): void {
             $connection->transactionRecycleAction = $action;
             $payload = "\xff" . pack('v', 1064) . '#42000completion failed';
             $this->queuePacket($peer, $payload);
             $this->queueOk($peer);
             try { $connection->objectRestore(); $this->fail('Expected transaction SQL error'); }
-            catch (\EasySwoole\Mysqli\Exception\Exception $error) {
+            catch (Exception $error) {
                 $this->assertSame(1064, $error->getCode());
                 $this->assertStringContainsString('completion failed', $error->getMessage());
             }
@@ -123,10 +143,10 @@ final class ConnectionTest extends TestCase
         }, true);
     }
 
-    #[\PHPUnit\Framework\Attributes\DataProvider('recycleActions')]
+    #[DataProvider('recycleActions')]
     public function testDiscardedConnectionClosesWithoutCompletingTheTransaction(TransactionRecycleAction $action): void
     {
-        $this->withConnected(function (Connection $connection, \Swoole\Coroutine\Socket $peer) use ($action): void {
+        $this->withConnected(function (Connection $connection, Socket $peer) use ($action): void {
             $connection->transactionRecycleAction = $action;
             $connection->gc();
             $this->assertFalse($connection->isInTransaction());
@@ -137,10 +157,10 @@ final class ConnectionTest extends TestCase
 
     public function testTransactionRecycleActionConfiguration(): void
     {
-        $config = new \EasySwoole\FastDb\Config();
+        $config = new FastDbConfig();
         $this->assertSame(TransactionRecycleAction::Rollback, $config->getTransactionRecycleAction());
         foreach (TransactionRecycleAction::cases() as $action) {
-            $config = new \EasySwoole\FastDb\Config(['transactionRecycleAction' => $action]);
+            $config = new FastDbConfig(['transactionRecycleAction' => $action]);
             $this->assertSame($action, $config->getTransactionRecycleAction());
             $this->assertSame($action, $config->toArray()['transactionRecycleAction']);
         }
@@ -153,27 +173,27 @@ final class ConnectionTest extends TestCase
 
     public function testQueryTimeoutReachesMysqliClient(): void
     {
-        $connection = new Connection(new \EasySwoole\Mysqli\Config());
-        $builder = new \EasySwoole\Mysqli\QueryBuilder();
+        $connection = new Connection(new Config());
+        $builder = new QueryBuilder();
         $builder->raw('SELECT 1');
-        $this->expectException(\InvalidArgumentException::class);
+        $this->expectException(InvalidArgumentException::class);
         $connection->query($builder, 0.0);
     }
 
     public function testRawQueryTimeoutReachesMysqliClient(): void
     {
-        $connection = new Connection(new \EasySwoole\Mysqli\Config());
-        $this->expectException(\InvalidArgumentException::class);
+        $connection = new Connection(new Config());
+        $this->expectException(InvalidArgumentException::class);
         $connection->rawQuery('SELECT 1', 0.0);
     }
 
     public function testEnumTransactionFlagsPreserveChainState(): void
     {
-        $this->withConnected(function (Connection $connection, \Swoole\Coroutine\Socket $peer): void {
+        $this->withConnected(function (Connection $connection, Socket $peer): void {
             $this->queueOk($peer, true); $this->queueOk($peer, true);
             $db = new FastDb();
-            $this->assertTrue($db->begin($connection, \EasySwoole\Mysqli\Transaction\TransactionStartFlags::ReadOnly));
-            $this->assertTrue($db->commit($connection, \EasySwoole\Mysqli\Transaction\TransactionCompletionFlags::Chain));
+            $this->assertTrue($db->begin($connection, TransactionStartFlags::ReadOnly));
+            $this->assertTrue($db->commit($connection, TransactionCompletionFlags::Chain));
             $this->assertTrue($connection->isInTransaction());
             $this->assertTrue($connection->mysqlClient()->inTransaction());
         });
@@ -181,7 +201,7 @@ final class ConnectionTest extends TestCase
 
     public function testMysqliConfigReceivesTimeoutSettings(): void
     {
-        $config = new \EasySwoole\FastDb\Config(['timeout' => 7, 'maxConnectTime' => 8, 'compress' => true]);
+        $config = new FastDbConfig(['timeout' => 7, 'maxConnectTime' => 8, 'compress' => true]);
         $driver = $config->toMysqliConfig();
         $this->assertSame(7.0, $driver->getTimeout());
         $this->assertSame(8.0, $driver->getMaxConnectTime());
@@ -192,8 +212,8 @@ final class ConnectionTest extends TestCase
 
     public function testTestDbPreservesConnectionFailure(): void
     {
-        $db = (new FastDb())->addDb(new \EasySwoole\FastDb\Config(['maxConnectTime' => -1.0]));
-        $this->expectException(\InvalidArgumentException::class);
+        $db = (new FastDb())->addDb(new FastDbConfig(['maxConnectTime' => -1.0]));
+        $this->expectException(InvalidArgumentException::class);
         $db->testDb();
     }
 
@@ -201,8 +221,8 @@ final class ConnectionTest extends TestCase
     {
         foreach (['begin', 'commit', 'rollback'] as $operation) {
             $flags = $operation === 'begin'
-                ? \EasySwoole\Mysqli\Transaction\TransactionStartFlags::ReadOnly
-                : \EasySwoole\Mysqli\Transaction\TransactionCompletionFlags::NoChainNoRelease;
+                ? TransactionStartFlags::ReadOnly
+                : TransactionCompletionFlags::NoChainNoRelease;
             $connection = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()
                 ->onlyMethods(['rawQuery', 'isInTransaction'])->getMock();
             $active = $operation !== 'begin';
@@ -221,24 +241,24 @@ final class ConnectionTest extends TestCase
         $check = function (): void {
             foreach (['begin', 'commit', 'rollback'] as $operation) {
                 [$socket, $peer] = swoole_coroutine_socketpair(AF_UNIX, SOCK_STREAM, 0);
-                $config = new \EasySwoole\Mysqli\Config(['timeout' => 2.0]);
+                $config = new Config(['timeout' => 2.0]);
                 $protocol = $this->createConnectedProtocol($config, $socket, $operation !== 'begin');
                 $connection = new Connection($config);
-                (new \ReflectionProperty(\EasySwoole\Mysqli\Client::class, 'mysqlClient'))->setValue($connection, $protocol);
+                (new ReflectionProperty(Client::class, 'mysqlClient'))->setValue($connection, $protocol);
                 $flags = $operation === 'begin'
-                    ? \EasySwoole\Mysqli\Transaction\TransactionStartFlags::ReadOnly
-                    : \EasySwoole\Mysqli\Transaction\TransactionCompletionFlags::NoChainNoRelease;
+                    ? TransactionStartFlags::ReadOnly
+                    : TransactionCompletionFlags::NoChainNoRelease;
                 $started = microtime(true);
                 try {
                     (new FastDb())->$operation($connection, $flags, 0.03);
                     $this->fail('Expected transaction timeout');
-                } catch (\EasySwoole\FastDb\Exception\TimeoutException $error) {
+                } catch (TimeoutException $error) {
                     $elapsed = microtime(true) - $started;
                     $this->assertGreaterThanOrEqual(0.015, $elapsed);
                     $this->assertLessThan(0.5, $elapsed);
                     $this->assertFalse($protocol->isConnected());
                     $this->assertFalse($connection->isInTransaction());
-                    $this->assertInstanceOf(\EasySwoole\Mysqli\Exception\TimeoutException::class, $error->getPrevious());
+                    $this->assertInstanceOf(DriverTimeoutException::class, $error->getPrevious());
                     $this->assertSame($error->getPrevious()->getCode(), $error->getCode());
                     $expected = $operation === 'begin' ? $flags->toSql() : strtoupper($operation) . $flags->toSqlSuffix();
                     $this->assertSame($expected, $error->getRawSql());
@@ -252,8 +272,8 @@ final class ConnectionTest extends TestCase
                 }
             }
         };
-        if (\Swoole\Coroutine::getCid() < 0) {
-            \Swoole\Coroutine\run($check);
+        if (Coroutine::getCid() < 0) {
+            Coroutine\run($check);
         } else {
             $check();
         }
@@ -261,7 +281,7 @@ final class ConnectionTest extends TestCase
 
     public function testReleaseFlagClosesConnectionOnlyAfterSuccessfulCommit(): void
     {
-        $flags = \EasySwoole\Mysqli\Transaction\TransactionCompletionFlags::Release;
+        $flags = TransactionCompletionFlags::Release;
         $connection = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()
             ->onlyMethods(['rawQuery', 'close', 'isInTransaction'])->getMock();
         $connection->expects($this->once())->method('rawQuery')->with('COMMIT RELEASE', 0.05)->willReturn(true);
@@ -278,13 +298,13 @@ final class ConnectionTest extends TestCase
         $db = new FastDb();
         foreach (['begin', 'commit', 'rollback'] as $operation) {
             $wrongEnum = $operation === 'begin'
-                ? \EasySwoole\Mysqli\Transaction\TransactionCompletionFlags::None
-                : \EasySwoole\Mysqli\Transaction\TransactionStartFlags::None;
+                ? TransactionCompletionFlags::None
+                : TransactionStartFlags::None;
             foreach ([0, 1, $wrongEnum] as $flags) {
                 try {
                     $db->$operation($connection, $flags, 0.05);
                     $this->fail('Expected invalid transaction flags to be rejected');
-                } catch (\TypeError $error) {
+                } catch (TypeError $error) {
                     $this->assertStringContainsString('flags', $error->getMessage());
                 }
             }
@@ -295,8 +315,8 @@ final class ConnectionTest extends TestCase
     {
         foreach (['begin', 'commit', 'rollback'] as $operation) {
             $cases = $operation === 'begin'
-                ? \EasySwoole\Mysqli\Transaction\TransactionStartFlags::cases()
-                : \EasySwoole\Mysqli\Transaction\TransactionCompletionFlags::cases();
+                ? TransactionStartFlags::cases()
+                : TransactionCompletionFlags::cases();
             foreach ($cases as $flags) {
                 $expected = $operation === 'begin' ? $flags->toSql() : strtoupper($operation) . $flags->toSqlSuffix();
                 $connection = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()
@@ -307,7 +327,7 @@ final class ConnectionTest extends TestCase
                 $connection->expects($releases ? $this->once() : $this->never())->method('close')->willReturn(true);
                 $db = (new FastDb())->configureQueryStack(true);
                 $observed = null;
-                $db->setOnQuery(static function (\EasySwoole\FastDb\Mysql\QueryResult $result) use (&$observed): void {
+                $db->setOnQuery(static function (QueryResult $result) use (&$observed): void {
                     $observed = $result;
                 });
                 $this->assertTrue($db->$operation($connection, $flags, 0.05));
@@ -320,41 +340,41 @@ final class ConnectionTest extends TestCase
 
     public function testUnbuiltQueryKeepsOriginalInvalidTimeoutException(): void
     {
-        $connection = new Connection(new \EasySwoole\Mysqli\Config());
-        $this->expectException(\InvalidArgumentException::class);
-        $connection->query(new \EasySwoole\Mysqli\QueryBuilder(), 0.0);
+        $connection = new Connection(new Config());
+        $this->expectException(InvalidArgumentException::class);
+        $connection->query(new QueryBuilder(), 0.0);
     }
 
     public function testConfiguredTimeoutIsReportedWithoutExplicitOverride(): void
     {
         $check = function (): void {
             [$socket, $peer] = swoole_coroutine_socketpair(AF_UNIX, SOCK_STREAM, 0);
-            $config = new \EasySwoole\Mysqli\Config(['timeout' => 0.03]);
+            $config = new Config(['timeout' => 0.03]);
             $protocol = $this->createConnectedProtocol($config, $socket);
             $connection = new Connection($config);
             $connection->connectionName = 'reporting';
-            (new \ReflectionProperty(\EasySwoole\Mysqli\Client::class, 'mysqlClient'))->setValue($connection, $protocol);
+            (new ReflectionProperty(Client::class, 'mysqlClient'))->setValue($connection, $protocol);
             try {
                 $connection->rawQuery('SELECT 1');
                 $this->fail('Expected timeout');
-            } catch (\EasySwoole\FastDb\Exception\TimeoutException $error) {
+            } catch (TimeoutException $error) {
                 $this->assertSame('SELECT 1', $error->getRawSql());
                 $this->assertSame([], $error->getLastBindParams());
                 $this->assertSame($error->getPrevious()->getMessage(), $error->getMessage());
                 $this->assertSame($error->getPrevious()->getCode(), $error->getCode());
             } finally { $connection->close(); $peer->close(); }
         };
-        if (\Swoole\Coroutine::getCid() < 0) { \Swoole\Coroutine\run($check); }
+        if (Coroutine::getCid() < 0) { Coroutine\run($check); }
         else { $check(); }
     }
 
     public function testTimeoutIsCaughtByFastDbBaseException(): void
     {
-        $cause = new \EasySwoole\Mysqli\Exception\TimeoutException('query timed out', 110);
-        $error = new \EasySwoole\FastDb\Exception\TimeoutException($cause->getMessage(), 110, $cause, 'SELECT 1');
+        $cause = new DriverTimeoutException('query timed out', 110);
+        $error = new TimeoutException($cause->getMessage(), 110, $cause, 'SELECT 1');
         try {
             throw $error;
-        } catch (\EasySwoole\FastDb\Exception\Exception $caught) {
+        } catch (FastDbException $caught) {
             $this->assertSame($error, $caught);
             $this->assertSame($cause, $caught->getPrevious());
             $this->assertSame('SELECT 1', $caught->getRawSql());
@@ -364,17 +384,17 @@ final class ConnectionTest extends TestCase
 
     public function testTimeoutSqlContextIsReadOnlyAndSurvivesBuilderReuse(): void
     {
-        $empty = new \EasySwoole\FastDb\Exception\TimeoutException('query timed out');
+        $empty = new TimeoutException('query timed out');
         $this->assertNull($empty->getRawSql());
         $this->assertNull($empty->getLastPrepareQuery());
         $this->assertSame([], $empty->getLastBindParams());
 
-        $builder = new class extends \EasySwoole\Mysqli\QueryBuilder {
+        $builder = new class extends QueryBuilder {
             private function __clone() {}
         };
         $builder->noBackslashEscapes()->raw('SELECT ?', ["a'b"]);
         $sql = $builder->getLastQuery();
-        $error = new \EasySwoole\FastDb\Exception\TimeoutException('query timed out', rawSql: 'SELECT ?', builder: $builder);
+        $error = new TimeoutException('query timed out', rawSql: 'SELECT ?', builder: $builder);
         $builder->raw('SELECT 2');
         $params = $error->getLastBindParams();
         $params[0] = 'changed';
@@ -384,7 +404,7 @@ final class ConnectionTest extends TestCase
         $this->assertSame(["a'b"], $error->getLastBindParams());
         $this->assertFalse(method_exists($error, 'getQueryBuilder'));
 
-        $this->expectException(\Error::class);
+        $this->expectException(Error::class);
         $error->rawSql = 'SELECT 3';
     }
 
@@ -393,11 +413,11 @@ final class ConnectionTest extends TestCase
         return [['begin', false], ['begin', true], ['commit', false], ['commit', true], ['rollback', false], ['rollback', true]];
     }
 
-    #[\PHPUnit\Framework\Attributes\DataProvider('failedTransactionModes')]
+    #[DataProvider('failedTransactionModes')]
     public function testFailedTransactionRecordsTheSqlErrorAndPropagatesObserverExceptions(string $operation, bool $loggerThrows): void
     {
-        $failure = new \RuntimeException('transaction execution failed');
-        $observerFailure = new \RuntimeException('logger failed');
+        $failure = new RuntimeException('transaction execution failed');
+        $observerFailure = new RuntimeException('logger failed');
         $connection = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()
             ->onlyMethods(['rawQuery', 'isInTransaction'])->getMock();
         $connection->expects($this->once())->method('rawQuery')->willThrowException($failure);
@@ -405,7 +425,7 @@ final class ConnectionTest extends TestCase
         $db = (new FastDb())->configureQueryStack(true);
         $called = 0;
         $expected = $operation === 'begin' ? 'START TRANSACTION' : strtoupper($operation) . ' AND NO CHAIN NO RELEASE';
-        $db->setOnQuery(function (\EasySwoole\FastDb\Mysql\QueryResult $result) use ($failure, $observerFailure, $expected, $loggerThrows, &$called): void {
+        $db->setOnQuery(function (QueryResult $result) use ($failure, $observerFailure, $expected, $loggerThrows, &$called): void {
             $called++;
             $this->assertSame($failure, $result->getException());
             $this->assertSame($expected, $result->getRawSql());
@@ -416,7 +436,7 @@ final class ConnectionTest extends TestCase
         try {
             $db->$operation($connection);
             $this->fail('Expected transaction error');
-        } catch (\RuntimeException $error) {
+        } catch (RuntimeException $error) {
             $this->assertSame($loggerThrows ? $observerFailure : $failure, $error);
         }
         $this->assertSame(1, $called);
@@ -430,20 +450,20 @@ final class ConnectionTest extends TestCase
     private function withConnected(callable $test, bool $inTransaction = false): void
     {
         [$socket, $peer] = swoole_coroutine_socketpair(AF_UNIX, SOCK_STREAM, 0);
-        $config = new \EasySwoole\Mysqli\Config(['timeout' => 0.03]);
+        $config = new Config(['timeout' => 0.03]);
         $protocol = $this->createConnectedProtocol($config, $socket, $inTransaction);
         $connection = new Connection($config);
-        (new \ReflectionProperty(\EasySwoole\Mysqli\Client::class, 'mysqlClient'))->setValue($connection, $protocol);
+        (new ReflectionProperty(Client::class, 'mysqlClient'))->setValue($connection, $protocol);
         try { $test($connection, $peer); }
         finally { $connection->close(); $peer->close(); }
     }
 
-    private function queueOk(\Swoole\Coroutine\Socket $peer, bool $inTransaction = false): void
+    private function queueOk(Socket $peer, bool $inTransaction = false): void
     {
         $this->queuePacket($peer, "\0\0\0" . pack('v', $inTransaction ? 1 : 2) . "\0\0");
     }
 
-    private function queuePacket(\Swoole\Coroutine\Socket $peer, string $payload): void
+    private function queuePacket(Socket $peer, string $payload): void
     {
         $packet = substr(pack('V', strlen($payload)), 0, 3) . "\1" . $payload;
         $this->assertSame(strlen($packet), $peer->sendAll($packet, 0.1));
@@ -454,14 +474,14 @@ final class ConnectionTest extends TestCase
      * mysqli 5.0.3 将传输和会话状态分别交给 PacketStream、SessionState 管理。
      */
     private function createConnectedProtocol(
-        \EasySwoole\Mysqli\Config $config,
-        \Swoole\Coroutine\Socket $socket,
+        Config $config,
+        Socket $socket,
         bool $inTransaction = false
-    ): \EasySwoole\Mysqli\Protocol\Connection {
-        $protocol = new \EasySwoole\Mysqli\Protocol\Connection($config);
-        $stream = (new \ReflectionProperty($protocol, 'stream'))->getValue($protocol);
-        (new \ReflectionProperty($stream, 'socket'))->setValue($stream, $socket);
-        $state = (new \ReflectionProperty($protocol, 'state'))->getValue($protocol);
+    ): ProtocolConnection {
+        $protocol = new ProtocolConnection($config);
+        $stream = (new ReflectionProperty($protocol, 'stream'))->getValue($protocol);
+        (new ReflectionProperty($stream, 'socket'))->setValue($stream, $socket);
+        $state = (new ReflectionProperty($protocol, 'state'))->getValue($protocol);
         $state->established();
         // SERVER_STATUS_IN_TRANS 是服务端返回的事务状态位。
         $state->applyServerStatus($inTransaction ? 0x0001 : 0);

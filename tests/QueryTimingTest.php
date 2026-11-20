@@ -10,13 +10,16 @@ use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\Mysqli\QueryBuilder;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
+use RuntimeException;
+use Swoole\Coroutine;
 
 final class QueryTimingTest extends TestCase
 {
     #[DataProvider('queryModes')]
     public function testDurationIncludesExecutionAndExcludesLogging(bool $raw, bool $fails): void
     {
-        $failure = new \RuntimeException('SQL failure');
+        $failure = new RuntimeException('SQL failure');
         $method = $raw ? 'rawQuery' : 'query';
         $client = $this->createStub(Connection::class);
         $client->method($method)->willReturnCallback(function () use ($fails, $failure) {
@@ -27,8 +30,8 @@ final class QueryTimingTest extends TestCase
             return [];
         });
         $db = (new FastDb())->configureQueryStack(true);
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))
-            ->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $client]]);
+        (new ReflectionProperty(FastDb::class, 'currentConnection'))
+            ->setValue($db, [Coroutine::getCid() => ['default' => $client]]);
         $logged = null;
         $db->setOnQuery(function (QueryResult $result) use (&$logged): void {
             $logged = $result;
@@ -44,7 +47,7 @@ final class QueryTimingTest extends TestCase
                 $db->query($query);
             }
             $this->assertFalse($fails);
-        } catch (\RuntimeException $exception) {
+        } catch (RuntimeException $exception) {
             $this->assertTrue($fails);
             $this->assertSame($failure, $exception);
         }
@@ -75,7 +78,7 @@ final class QueryTimingTest extends TestCase
     {
         $client = $this->createStub(Connection::class);
         $client->method('isInTransaction')->willReturn($operation !== 'begin');
-        $failure = new \RuntimeException('transaction failure');
+        $failure = new RuntimeException('transaction failure');
         $client->method('rawQuery')->willReturnCallback(function () use ($fails, $failure) {
             usleep(20000);
             if ($fails) {
@@ -91,7 +94,7 @@ final class QueryTimingTest extends TestCase
         try {
             $this->assertTrue($db->$operation($client));
             $this->assertFalse($fails);
-        } catch (\RuntimeException $error) {
+        } catch (RuntimeException $error) {
             $this->assertTrue($fails);
             $this->assertSame($failure, $error);
         }

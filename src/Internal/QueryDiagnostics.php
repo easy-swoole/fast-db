@@ -4,7 +4,9 @@ namespace EasySwoole\FastDb\Internal;
 
 use EasySwoole\FastDb\Beans\QueryStack;
 use EasySwoole\FastDb\Mysql\QueryResult;
+use InvalidArgumentException;
 use Swoole\Coroutine;
+use Throwable;
 
 /** @internal 管理可选查询回调，以及按协程隔离、具有容量上限的诊断事件。 */
 final class QueryDiagnostics
@@ -19,7 +21,7 @@ final class QueryDiagnostics
     public function configure(bool $enabled, int $maxStackSize = 256): void
     {
         if ($maxStackSize < 1) {
-            throw new \InvalidArgumentException('Query stack capacity must be greater than zero');
+            throw new InvalidArgumentException('Query stack capacity must be greater than zero');
         }
         if ($maxStackSize !== $this->maxStackSize) {
             foreach ($this->stacks as $cid => $stack) {
@@ -74,7 +76,7 @@ final class QueryDiagnostics
     }
 
     public function recordAcquire(string $name, float $startTime, float $endTime, float $duration,
-        ?\Throwable $error = null): void
+        ?Throwable $error = null): void
     {
         if (!$this->enabled) { return; }
         $this->append(new QueryStack('connectionAcquire', $name, $startTime, $endTime, $duration, $error));

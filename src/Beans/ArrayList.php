@@ -2,9 +2,15 @@
 
 namespace EasySwoole\FastDb\Beans;
 
+use ArrayAccess;
+use ArrayIterator;
+use Countable;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
+use IteratorAggregate;
+use JsonSerializable;
+use Traversable;
 
-class ArrayList  implements \IteratorAggregate , \JsonSerializable, \Countable , \ArrayAccess
+class ArrayList  implements IteratorAggregate , JsonSerializable, Countable , ArrayAccess
 {
     private array $data = [];
 
@@ -13,9 +19,9 @@ class ArrayList  implements \IteratorAggregate , \JsonSerializable, \Countable ,
         $this->data = $data;
     }
 
-    public function getIterator(): \Traversable
+    public function getIterator(): Traversable
     {
-        return new \ArrayIterator($this->data);
+        return new ArrayIterator($this->data);
     }
 
     function list():array

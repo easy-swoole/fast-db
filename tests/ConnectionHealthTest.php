@@ -14,6 +14,7 @@ use EasySwoole\Mysqli\Transaction\TransactionCompletionFlags;
 use EasySwoole\Mysqli\Transaction\TransactionStartFlags;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
 use Swoole\Coroutine;
 use Swoole\Coroutine\Socket;
 
@@ -151,13 +152,13 @@ final class ConnectionHealthTest extends TestCase
             [$socket, $peer] = swoole_coroutine_socketpair(AF_UNIX, SOCK_STREAM, 0);
             $config = new Config(['timeout' => 0.03]);
             $protocol = new ProtocolConnection($config);
-            $stream = (new \ReflectionProperty($protocol, 'stream'))->getValue($protocol);
-            (new \ReflectionProperty($stream, 'socket'))->setValue($stream, $socket);
-            $state = (new \ReflectionProperty($protocol, 'state'))->getValue($protocol);
+            $stream = (new ReflectionProperty($protocol, 'stream'))->getValue($protocol);
+            (new ReflectionProperty($stream, 'socket'))->setValue($stream, $socket);
+            $state = (new ReflectionProperty($protocol, 'state'))->getValue($protocol);
             $state->established();
             $state->applyServerStatus(2);
             $connection = new Connection($config);
-            (new \ReflectionProperty(Client::class, 'mysqlClient'))->setValue($connection, $protocol);
+            (new ReflectionProperty(Client::class, 'mysqlClient'))->setValue($connection, $protocol);
             try { $test($connection, $peer, $protocol); }
             finally { $connection->close(); $peer->close(); }
         };
@@ -187,12 +188,12 @@ final class ConnectionHealthTest extends TestCase
 
     private function tick(Connection $connection): int|float|null
     {
-        return (new \ReflectionProperty(Connection::class, 'lastActiveTick'))->getValue($connection);
+        return (new ReflectionProperty(Connection::class, 'lastActiveTick'))->getValue($connection);
     }
 
     private function setTick(Connection $connection, int|float $tick): void
     {
-        (new \ReflectionProperty(Connection::class, 'lastActiveTick'))->setValue($connection, $tick);
+        (new ReflectionProperty(Connection::class, 'lastActiveTick'))->setValue($connection, $tick);
     }
 
     private function ok(int $status = 2): string { return "\0\0\0" . pack('v', $status) . "\0\0"; }

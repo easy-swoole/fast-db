@@ -2,9 +2,9 @@
 
 namespace EasySwoole\FastDb\Internal;
 
-use EasySwoole\FastDb\Attributes\RelationType;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Attributes\Relate;
+use EasySwoole\FastDb\Attributes\RelationType;
 use EasySwoole\FastDb\Beans\ListResult;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\FastDb;

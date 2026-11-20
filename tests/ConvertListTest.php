@@ -8,8 +8,14 @@ use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\AbstractInterface\ConvertBean;
 use EasySwoole\FastDb\AbstractInterface\ConvertList;
 use EasySwoole\FastDb\Attributes\Property;
+use EasySwoole\FastDb\Utility\ReflectionCache;
 use EasySwoole\Spl\SplBean;
+use InvalidArgumentException;
+use JsonException;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
+use stdClass;
 
 final class ConvertListTest extends TestCase
 {
@@ -83,8 +89,8 @@ final class ConvertListTest extends TestCase
     public function testBeanMutationParticipatesInDirtyTracking(): void
     {
         $entity = new BeanListEntity(['users' => '[{"name":"甲"}]']);
-        $state = (new \ReflectionProperty(AbstractEntity::class, 'entityState'))->getValue($entity);
-        $properties = \EasySwoole\FastDb\Utility\ReflectionCache::getInstance()
+        $state = (new ReflectionProperty(AbstractEntity::class, 'entityState'))->getValue($entity);
+        $properties = ReflectionCache::getInstance()
             ->parseEntity(BeanListEntity::class)->allProperties();
         $this->assertSame([], $state->changes($entity, $properties));
         $entity->users->first()->name = '乙';
@@ -123,24 +129,24 @@ final class ConvertListTest extends TestCase
         return [['invalid utf8', "\xFF"], ['NaN', NAN], ['infinity', INF]];
     }
 
-    #[\PHPUnit\Framework\Attributes\DataProvider('encodingFailures')]
+    #[DataProvider('encodingFailures')]
     public function testInvalidJsonValuesRaiseAnEncodingError(string $kind, mixed $value): void
     {
         $list = new ConvertList([$value]);
-        $this->expectException(\JsonException::class);
+        $this->expectException(JsonException::class);
         $list->toValue();
     }
 
     public function testInvalidItemIsRejected(): void
     {
         $list = new UserBeanList([]);
-        $this->expectException(\InvalidArgumentException::class);
+        $this->expectException(InvalidArgumentException::class);
         $list->append('invalid');
     }
 
     public function testInvalidBeanTypeIsRejected(): void
     {
-        $this->expectException(\InvalidArgumentException::class);
+        $this->expectException(InvalidArgumentException::class);
         new InvalidBeanList([]);
     }
 }
@@ -167,7 +173,7 @@ class PlainBeanList extends ConvertList
 
 class InvalidBeanList extends ConvertList
 {
-    protected static function itemClass(): ?string { return \stdClass::class; }
+    protected static function itemClass(): ?string { return stdClass::class; }
 }
 
 class BeanListEntity extends AbstractEntity

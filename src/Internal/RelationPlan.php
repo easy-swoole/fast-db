@@ -2,12 +2,13 @@
 
 namespace EasySwoole\FastDb\Internal;
 
-use EasySwoole\FastDb\Attributes\RelationType;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Attributes\Relate;
+use EasySwoole\FastDb\Attributes\RelationType;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\Mysqli\QueryBuilder\TableReference;
+use InvalidArgumentException;
 
 /** @internal 保存一次关联查询的配置，负责追加 FastDb 生成的关联条件。 */
 final class RelationPlan
@@ -28,7 +29,7 @@ final class RelationPlan
     {
         $target = $this->builder->resolveTableTarget($this->tableName);
         if ($target === null) {
-            throw new \InvalidArgumentException('Relation requires an identifiable target table');
+            throw new InvalidArgumentException('Relation requires an identifiable target table');
         }
         return $target . '.' . TableReference::identifier($this->relate->targetProperty);
     }

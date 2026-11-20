@@ -6,6 +6,7 @@ namespace EasySwoole\FastDb\Exception;
 
 use EasySwoole\FastDb\Internal\SqlSnapshot;
 use EasySwoole\Mysqli\QueryBuilder;
+use Throwable;
 
 final class TimeoutException extends Exception
 {
@@ -14,7 +15,7 @@ final class TimeoutException extends Exception
     public function __construct(
         string $message = '',
         int $code = 0,
-        ?\Throwable $previous = null,
+        ?Throwable $previous = null,
         public readonly ?string $rawSql = null,
         ?QueryBuilder $builder = null,
     ) {

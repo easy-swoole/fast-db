@@ -11,16 +11,17 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests\Model;
 
-use EasySwoole\FastDb\Attributes\RelationType;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Attributes\Relate;
+use EasySwoole\FastDb\Attributes\RelationType;
+use FastDb\Tests\Model;
 
 /**
  * StudentModel 测试模型。
  *
- * @package EasySwoole\FastDb\Tests\Model
+ * @package EasySwooleModel
  * @property int    $id
  * @property string $name
  */

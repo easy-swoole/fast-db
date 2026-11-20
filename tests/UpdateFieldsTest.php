@@ -10,6 +10,8 @@ use EasySwoole\FastDb\Tests\Model\User;
 use EasySwoole\Mysqli\QueryBuilder;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
+use Swoole\Coroutine;
 
 final class UpdateFieldsTest extends TestCase
 {
@@ -38,9 +40,9 @@ final class UpdateFieldsTest extends TestCase
                 }))->willReturn(true);
         }
         $db = new FastDb();
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $connection]]);
+        (new ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($db, [Coroutine::getCid() => ['default' => $connection]]);
 
-        $instance = new \ReflectionProperty(FastDb::class, 'instance');
+        $instance = new ReflectionProperty(FastDb::class, 'instance');
         $original = $instance->getValue();
         $instance->setValue(null, $db);
         try {

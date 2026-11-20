@@ -2,12 +2,16 @@
 
 namespace EasySwoole\FastDb\AbstractInterface;
 
+use DateTime;
+use DateTimeInterface;
+use InvalidArgumentException;
 
-class ConvertDateTime extends \DateTime implements ConvertObjectInterface
+
+class ConvertDateTime extends DateTime implements ConvertObjectInterface
 {
     public static function toObject(mixed $data): static
     {
-        if($data instanceof \DateTimeInterface){
+        if($data instanceof DateTimeInterface){
             // 直接复制原时间点，避免夏令时回拨时重新解析到另一个时间点。
             return static::createFromInterface($data);
         }
@@ -20,7 +24,7 @@ class ConvertDateTime extends \DateTime implements ConvertObjectInterface
             return new static();
         }
         if(!is_string($data) || trim($data) === ''){
-            throw new \InvalidArgumentException('ConvertDateTime expects a date/time string, DateTimeInterface, integer timestamp or null');
+            throw new InvalidArgumentException('ConvertDateTime expects a date/time string, DateTimeInterface, integer timestamp or null');
         }
 
         // 按 MySQL 格式解析并检查日期纠正警告，校验成功后直接复用解析实例。
@@ -29,7 +33,7 @@ class ConvertDateTime extends \DateTime implements ConvertObjectInterface
             $parsed = static::createFromFormat($format, $data);
             $errors = static::getLastErrors();
             if($parsed === false || ($errors !== false && ($errors['warning_count'] || $errors['error_count']))){
-                throw new \InvalidArgumentException('Invalid MySQL DATETIME value: '.$data);
+                throw new InvalidArgumentException('Invalid MySQL DATETIME value: '.$data);
             }
             return $parsed;
         }

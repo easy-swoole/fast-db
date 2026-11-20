@@ -4,17 +4,22 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests;
 
-use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Config;
 use EasySwoole\FastDb\Exception\RuntimeError;
+use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\Pool;
 use EasySwoole\Mysqli\Config as DriverConfig;
 use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\Pool\ObjectInterface;
+use Error;
+use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
 use Swoole\Coroutine;
+use Throwable;
+use WeakReference;
 
 final class QueryStackTest extends TestCase
 {
@@ -23,8 +28,8 @@ final class QueryStackTest extends TestCase
         $client = $this->createStub(Connection::class);
         $client->method('rawQuery')->willReturn([]);
         $db = (new FastDb())->configureQueryStack(true, $capacity);
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))
-            ->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $client]]);
+        (new ReflectionProperty(FastDb::class, 'currentConnection'))
+            ->setValue($db, [Coroutine::getCid() => ['default' => $client]]);
         return $db;
     }
 
@@ -38,7 +43,7 @@ final class QueryStackTest extends TestCase
     {
         $config = new Config(['maxObjectNum' => 2, 'minObjectNum' => 0, 'intervalCheckTime' => 0]);
         $db = (new FastDb())->addDb($config)->configureQueryStack(true, $capacity);
-        (new \ReflectionProperty(FastDb::class, 'pools'))->setValue($db, ['default' => new QueryStackPool($config)]);
+        (new ReflectionProperty(FastDb::class, 'pools'))->setValue($db, ['default' => new QueryStackPool($config)]);
         return $db;
     }
 
@@ -52,7 +57,7 @@ final class QueryStackTest extends TestCase
         $result = $db->query($builder);
         $entry = $db->getQueryStack(-1);
         $builder->noBackslashEscapes(false)->raw('SELECT ?', ['changed']);
-        $builderReference = \WeakReference::create($builder);
+        $builderReference = WeakReference::create($builder);
         unset($builder);
 
         $this->assertNull($builderReference->get());
@@ -63,7 +68,7 @@ final class QueryStackTest extends TestCase
         $this->assertSame($result->getLastQuery(), $entry->getLastQuery());
         $this->assertFalse(property_exists($entry, 'query'));
 
-        $this->expectException(\Error::class);
+        $this->expectException(Error::class);
         $entry->duration = 0;
     }
 
@@ -152,7 +157,7 @@ final class QueryStackTest extends TestCase
     {
         $db = $this->database(2);
         $db->rawQuery('SELECT 1');
-        $oldest = \WeakReference::create($db->getQueryStack(0));
+        $oldest = WeakReference::create($db->getQueryStack(0));
         $db->rawQuery('SELECT 2');
         $this->assertNotNull($oldest->get());
         $db->rawQuery('SELECT 3');
@@ -169,13 +174,13 @@ final class QueryStackTest extends TestCase
         foreach ([1, 2, 3] as $i) { $db->rawQuery('SELECT ' . $i); }
         $snapshot = $db->getQueryStack();
         try { $db->configureQueryStack(false, $capacity); $this->fail('A non-positive capacity must be rejected'); }
-        catch (\InvalidArgumentException) { $this->addToAssertionCount(1); }
+        catch (InvalidArgumentException) { $this->addToAssertionCount(1); }
         $this->assertSame($snapshot, $db->getQueryStack());
         $db->rawQuery('SELECT 4');
         $this->assertSame(['SELECT 3', 'SELECT 4'], $this->sql($db));
         $db->configureQueryStack(false, 2);
         try { $db->configureQueryStack(true, $capacity); $this->fail('An invalid request cannot enable logging'); }
-        catch (\InvalidArgumentException) { $this->addToAssertionCount(1); }
+        catch (InvalidArgumentException) { $this->addToAssertionCount(1); }
         $db->rawQuery('SELECT 5');
         $this->assertSame(['SELECT 3', 'SELECT 4'], $this->sql($db));
     }
@@ -223,7 +228,7 @@ final class QueryStackTest extends TestCase
         $pool = $this->createStub(Pool::class);
         $pool->method('getObj')->willReturnOnConsecutiveCalls(null, null, null, null, $client);
         $db = (new FastDb())->addDb(new Config())->configureQueryStack(true, 2);
-        (new \ReflectionProperty(FastDb::class, 'pools'))->setValue($db, ['default' => $pool]);
+        (new ReflectionProperty(FastDb::class, 'pools'))->setValue($db, ['default' => $pool]);
         $errors = [];
         try {
             for ($i = 0; $i < 3; $i++) {
@@ -253,7 +258,7 @@ final class QueryStackTest extends TestCase
         $pool = $this->createStub(Pool::class);
         $pool->method('getObj')->willReturn(null);
         $db = (new FastDb())->addDb(new Config())->configureQueryStack(true, 2);
-        (new \ReflectionProperty(FastDb::class, 'pools'))->setValue($db, ['default' => $pool]);
+        (new ReflectionProperty(FastDb::class, 'pools'))->setValue($db, ['default' => $pool]);
         try {
             for ($i = 0; $i < 3; $i++) {
                 try { $db->rawQuery('SELECT never_sent'); $this->fail('Fixture acquisition must fail'); }
@@ -303,8 +308,8 @@ final class QueryStackTest extends TestCase
                         $results[$name] = $this->sql($db);
                         $db->rawQuery('SELECT ' . $name . '5');
                         $results[$name . '-next'] = $this->sql($db);
-                        $entries[$name] = \WeakReference::create($db->getQueryStack(-1));
-                    } catch (\Throwable $error) { $results[$name] = $error; }
+                        $entries[$name] = WeakReference::create($db->getQueryStack(-1));
+                    } catch (Throwable $error) { $results[$name] = $error; }
                 });
             }
             $this->assertSame('a', $ready->pop(2));

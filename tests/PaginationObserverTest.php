@@ -10,10 +10,13 @@ use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\Mysqli\Client;
 use EasySwoole\Mysqli\Config;
+use EasySwoole\Mysqli\Exception\Exception;
 use EasySwoole\Mysqli\Protocol\Connection as ProtocolConnection;
 use EasySwoole\Mysqli\QueryBuilder;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
+use RuntimeException;
 use Swoole\Coroutine;
 use Swoole\Coroutine\Socket;
 
@@ -69,7 +72,7 @@ final class PaginationObserverTest extends TestCase
     public function testMainObserverFailureStopsBeforeCountSql(string $observer): void
     {
         $this->withConnection(function (FastDb $db, Socket $peer) use ($observer): void {
-            $failure = new \RuntimeException('main observer failed');
+            $failure = new RuntimeException('main observer failed');
             $callback = static function () use ($failure): void { throw $failure; };
             $entity = $this->page();
             if ($observer === 'global') { $db->setOnQuery($callback); }
@@ -77,7 +80,7 @@ final class PaginationObserverTest extends TestCase
             $this->queuePage($peer);
 
             try { $entity->all(); $this->fail('Expected observer failure'); }
-            catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
+            catch (RuntimeException $error) { $this->assertSame($failure, $error); }
 
             $this->assertCount(1, $db->getQueryStack());
             $this->assertNull($db->getQueryStack(-1)->exception);
@@ -92,7 +95,7 @@ final class PaginationObserverTest extends TestCase
             $this->reply($peer, "\xff" . pack('v', 1064) . '#42000main failed', 1);
 
             try { $this->page()->all(); $this->fail('Expected main SQL error'); }
-            catch (\EasySwoole\Mysqli\Exception\Exception $error) {
+            catch (Exception $error) {
                 $this->assertSame(1064, $error->getCode());
                 $this->assertSame($error, $db->getQueryStack(-1)->exception);
             }
@@ -106,7 +109,7 @@ final class PaginationObserverTest extends TestCase
     public function testCountObserverFailurePropagatesAfterCountSqlIsRecorded(): void
     {
         $this->withConnection(function (FastDb $db, Socket $peer): void {
-            $failure = new \RuntimeException('count observer failed');
+            $failure = new RuntimeException('count observer failed');
             $db->setOnQuery(function (QueryResult $result) use ($failure): void {
                 if ($result->getRawSql() === 'SELECT FOUND_ROWS() as count') {
                     $this->assertSame(['count' => 37], $result->getResultOne());
@@ -117,7 +120,7 @@ final class PaginationObserverTest extends TestCase
             $this->textRows($peer, 'count', 37);
 
             try { $this->page()->all(); $this->fail('Expected observer failure'); }
-            catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
+            catch (RuntimeException $error) { $this->assertSame($failure, $error); }
 
             $this->assertSame([null, 'SELECT FOUND_ROWS() as count'], array_column($db->getQueryStack(), 'rawQuery'));
             $this->assertNull($db->getQueryStack(-1)->exception);
@@ -134,7 +137,7 @@ final class PaginationObserverTest extends TestCase
             $this->reply($peer, "\xff" . pack('v', 1064) . '#42000count failed', 1);
 
             try { $this->page()->all(); $this->fail('Expected count SQL error'); }
-            catch (\EasySwoole\Mysqli\Exception\Exception $error) {
+            catch (Exception $error) {
                 $this->assertSame(1064, $error->getCode());
                 $this->assertSame($error, $db->getQueryStack(-1)->exception);
                 $this->assertSame($error, $events[1]->getException());
@@ -161,15 +164,15 @@ final class PaginationObserverTest extends TestCase
         $check = function () use ($test, $name): void {
             [$socket, $peer] = swoole_coroutine_socketpair(AF_UNIX, SOCK_STREAM, 0);
             $config = new Config(['timeout' => 0.03]); $protocol = new ProtocolConnection($config);
-            $stream = (new \ReflectionProperty($protocol, 'stream'))->getValue($protocol);
-            (new \ReflectionProperty($stream, 'socket'))->setValue($stream, $socket);
-            $state = (new \ReflectionProperty($protocol, 'state'))->getValue($protocol); $state->established(); $state->applyServerStatus(2);
+            $stream = (new ReflectionProperty($protocol, 'stream'))->getValue($protocol);
+            (new ReflectionProperty($stream, 'socket'))->setValue($stream, $socket);
+            $state = (new ReflectionProperty($protocol, 'state'))->getValue($protocol); $state->established(); $state->applyServerStatus(2);
             $connection = new Connection($config); $connection->connectionName = $name;
-            (new \ReflectionProperty(Client::class, 'mysqlClient'))->setValue($connection, $protocol);
+            (new ReflectionProperty(Client::class, 'mysqlClient'))->setValue($connection, $protocol);
             $db = (new FastDb())->configureQueryStack(true)->selectConnection($name);
-            $current = new \ReflectionProperty(FastDb::class, 'currentConnection');
+            $current = new ReflectionProperty(FastDb::class, 'currentConnection');
             $current->setValue($db, [Coroutine::getCid() => [$name => $connection]]);
-            $instance = new \ReflectionProperty(FastDb::class, 'instance');
+            $instance = new ReflectionProperty(FastDb::class, 'instance');
             $previous = $instance->getValue();
             $instance->setValue(null, $db);
             try { $test($db, $peer); }

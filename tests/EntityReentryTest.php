@@ -12,13 +12,19 @@ use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\Mysqli\Config;
 use EasySwoole\Mysqli\QueryBuilder;
+use LogicException;
+use PDO;
+use PDOException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
+use RuntimeException;
 use Swoole\Coroutine;
+use WeakReference;
 
 final class EntityReentryTest extends TestCase
 {
-    private ?\ReflectionProperty $singleton = null;
+    private ?ReflectionProperty $singleton = null;
     private mixed $originalInstance = null;
     private FastDb $db;
     private EntityReentrySqliteConnection $connection;
@@ -26,13 +32,13 @@ final class EntityReentryTest extends TestCase
     protected function setUp(): void
     {
         if (!extension_loaded('pdo_sqlite')) { $this->markTestSkipped('SQLite executes business SQL without MySQL writes.'); }
-        $database = new \PDO('sqlite::memory:', options: [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
+        $database = new PDO('sqlite::memory:', options: [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
         $database->exec('CREATE TABLE entity_reentry (id INTEGER PRIMARY KEY, a INTEGER, b INTEGER, secret TEXT)');
         $database->exec("INSERT INTO entity_reentry VALUES (1, 0, 0, 'private')");
         $this->connection = new EntityReentrySqliteConnection($database);
         $this->db = new FastDb();
         $this->bindConnection($this->connection);
-        $this->singleton = new \ReflectionProperty(FastDb::class, 'instance');
+        $this->singleton = new ReflectionProperty(FastDb::class, 'instance');
         $this->originalInstance = $this->singleton->getValue();
         $this->singleton->setValue(null, $this->db);
     }
@@ -42,14 +48,14 @@ final class EntityReentryTest extends TestCase
         if ($this->singleton === null) { return; }
         if ($this->connection->database->inTransaction()) { $this->connection->database->rollBack(); }
         $this->db->setOnQuery(static function (): void {});
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db, []);
+        (new ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db, []);
         $this->singleton->setValue(null, $this->originalInstance);
     }
 
     private function bindConnection(Connection $connection): void
     {
         $connection->connectionName = 'default';
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))
+        (new ReflectionProperty(FastDb::class, 'currentConnection'))
             ->setValue($this->db, [Coroutine::getCid() => ['default' => $connection]]);
     }
 
@@ -57,7 +63,7 @@ final class EntityReentryTest extends TestCase
 
     private function baseline(EntityReentryRecord $entity): array
     {
-        return (new \ReflectionProperty(AbstractEntity::class, 'entityState'))->getValue($entity)->baseline;
+        return (new ReflectionProperty(AbstractEntity::class, 'entityState'))->getValue($entity)->baseline;
     }
 
     private function observe(string $mode, EntityReentryRecord $entity, callable $callback): void
@@ -73,7 +79,7 @@ final class EntityReentryTest extends TestCase
         $first = $this->entity();
         $second = new EntityReentryChildRecord(['id' => 1, 'a' => 4, 'b' => 0]);
         $released = $this->entity();
-        $reference = \WeakReference::create($released);
+        $reference = WeakReference::create($released);
         $this->assertTrue($this->db->begin());
         foreach ([$first, $second, $released] as $entity) {
             $entity->a++;
@@ -103,10 +109,10 @@ final class EntityReentryTest extends TestCase
     {
         $entity = $this->entity();
         $entity->a = 1;
-        $failure = new \RuntimeException('observer failed');
+        $failure = new RuntimeException('observer failed');
         $this->observe($mode, $entity, static function () use ($failure): void { throw $failure; });
         try { $entity->update(); $this->fail('Observer must throw'); }
-        catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
+        catch (RuntimeException $error) { $this->assertSame($failure, $error); }
 
         $this->assertSame(1, $this->connection->row()['a']);
         $this->assertSame(['a' => 1], $entity->getChanges());
@@ -131,7 +137,7 @@ final class EntityReentryTest extends TestCase
         });
 
         try { $entity->update(); $this->fail('The invalid outer SQL must fail'); }
-        catch (\PDOException) { $this->assertTrue($entered); }
+        catch (PDOException) { $this->assertTrue($entered); }
         $this->assertSame([0, 3], [$this->connection->row()['a'], $this->connection->row()['b']]);
         $this->assertSame(0, $this->baseline($entity)['a']);
     }
@@ -172,8 +178,8 @@ class EntityReentrySqliteConnection extends Connection
     public function isInTransaction(): bool { return $this->database->inTransaction(); }
     public array $writes = [];
     private bool $implicitTransactions = false;
-    public function __construct(public \PDO $database) { parent::__construct(new Config()); }
-    public function row(): array { return $this->database->query('SELECT * FROM entity_reentry WHERE id=1')->fetch(\PDO::FETCH_ASSOC); }
+    public function __construct(public PDO $database) { parent::__construct(new Config()); }
+    public function row(): array { return $this->database->query('SELECT * FROM entity_reentry WHERE id=1')->fetch(PDO::FETCH_ASSOC); }
     public function query(QueryBuilder $builder, ?float $timeout = null): bool|array
     {
         $sql = $builder->getLastPrepareQuery();
@@ -188,7 +194,7 @@ class EntityReentrySqliteConnection extends Connection
         $statement->execute($parameters);
         $this->lastAffectRows = $statement->rowCount();
         $this->lastInsertId = 0;
-        return $statement->columnCount() > 0 ? $statement->fetchAll(\PDO::FETCH_ASSOC) : true;
+        return $statement->columnCount() > 0 ? $statement->fetchAll(PDO::FETCH_ASSOC) : true;
     }
     public function rawQuery(string $query, ?float $timeout = null): bool|array
     {
@@ -205,6 +211,6 @@ class EntityReentrySqliteConnection extends Connection
             if ($this->database->inTransaction()) { $this->database->commit(); }
             return true;
         }
-        throw new \LogicException('Unexpected SQL: ' . $query);
+        throw new LogicException('Unexpected SQL: ' . $query);
     }
 }

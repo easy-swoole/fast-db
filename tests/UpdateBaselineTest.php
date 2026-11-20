@@ -9,16 +9,18 @@ use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Tests\Model\User;
 use EasySwoole\Mysqli\QueryBuilder;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
+use Swoole\Coroutine;
 
 final class UpdateBaselineTest extends TestCase
 {
     private array $queries = [];
-    private \ReflectionProperty $instance;
+    private ReflectionProperty $instance;
     private mixed $original;
 
     protected function setUp(): void
     {
-        $this->instance = new \ReflectionProperty(FastDb::class, 'instance');
+        $this->instance = new ReflectionProperty(FastDb::class, 'instance');
         $this->original = $this->instance->getValue();
     }
 
@@ -41,7 +43,7 @@ final class UpdateBaselineTest extends TestCase
         $client->method('getLastAffectRows')->willReturnCallback(static function () use (&$affected): int { return $affected; });
         $client->method('getLastInsertId')->willReturn(0);
         $db = new FastDb();
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $client]]);
+        (new ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($db, [Coroutine::getCid() => ['default' => $client]]);
         $this->instance->setValue(null, $db);
     }
 

@@ -10,6 +10,7 @@ use EasySwoole\Mysqli\Config as DriverConfig;
 use EasySwoole\Mysqli\QueryBuilder;
 use Swoole\Coroutine;
 use Swoole\Coroutine\Channel;
+use Swoole\Timer;
 
 $exit = 0;
 Coroutine\run(function () use (&$exit): void {
@@ -105,7 +106,7 @@ Coroutine\run(function () use (&$exit): void {
     } finally {
         $admin->rawQuery("DROP TABLE IF EXISTS `{$table}`");
         $admin->close();
-        Swoole\Timer::clearAll();
+        Timer::clearAll();
         if (isset($_SERVER['argv'][1])) {
             file_put_contents($_SERVER['argv'][1], json_encode(['stages' => $stages, 'peak_memory_bytes' => memory_get_peak_usage(true)], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
         }

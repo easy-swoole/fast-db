@@ -15,7 +15,9 @@ use EasySwoole\FastDb\Config;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
+use EasySwoole\Mysqli\Exception\Exception;
 use EasySwoole\Mysqli\QueryBuilder;
+use Throwable;
 
 final class FastDbTest extends BaseTestCase
 {
@@ -74,7 +76,7 @@ final class FastDbTest extends BaseTestCase
         try {
             $connectionName = "noAddConnectionName";
             $fastDb->testDb($connectionName);
-        } catch (\Throwable $throwable) {
+        } catch (Throwable $throwable) {
             $this->assertInstanceOf(RuntimeError::class, $throwable);
             $this->assertSame("connection {$connectionName} no register yet", $throwable->getMessage());
         }
@@ -82,7 +84,7 @@ final class FastDbTest extends BaseTestCase
         try {
             $this->getFastDb(self::ERROR_NAME)->testDb(self::ERROR_NAME);
             $this->fail('Expected authentication failure');
-        } catch (\EasySwoole\Mysqli\Exception\Exception $error) {
+        } catch (Exception $error) {
             $this->assertSame(1045, $error->getCode());
             $this->assertStringContainsString('Access denied', $error->getMessage());
         }
@@ -173,7 +175,7 @@ final class FastDbTest extends BaseTestCase
             // 执行业务操作。
             $this->mockTransactionBusiness($fastDb);
             $fastDb->commit();
-        } catch (\Throwable $throwable) {
+        } catch (Throwable $throwable) {
             $fastDb->rollback();
             throw $throwable;
         }
@@ -186,7 +188,7 @@ final class FastDbTest extends BaseTestCase
                 // 执行业务操作。
                 $this->mockTransactionBusiness($fastDb);
                 $fastDb->commit($client);
-            } catch (\Throwable $throwable) {
+            } catch (Throwable $throwable) {
                 $fastDb->rollback($client);
                 throw $throwable;
             }
@@ -194,7 +196,7 @@ final class FastDbTest extends BaseTestCase
 
         // 验证连接池获取连接失败。
         $errorFastDb = $this->getFastDb(self::ERROR_NAME)->selectConnection(self::ERROR_NAME);
-        $this->expectException(\EasySwoole\Mysqli\Exception\Exception::class);
+        $this->expectException(Exception::class);
         $this->expectExceptionMessage('Access denied');
         $errorFastDb->begin();
     }
@@ -210,7 +212,7 @@ final class FastDbTest extends BaseTestCase
             $this->mockTransactionBusiness($fastDb);
             $result = $fastDb->commit();
             $this->assertSame(true, $result);
-        } catch (\Throwable $throwable) {
+        } catch (Throwable $throwable) {
             $fastDb->rollback();
             throw $throwable;
         }
@@ -223,7 +225,7 @@ final class FastDbTest extends BaseTestCase
                 $this->mockTransactionBusiness($fastDb);
                 $result = $fastDb->commit($client);
                 $this->assertSame(true, $result);
-            } catch (\Throwable $throwable) {
+            } catch (Throwable $throwable) {
                 $fastDb->rollback($client);
                 throw $throwable;
             }

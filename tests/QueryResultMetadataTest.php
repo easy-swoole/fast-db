@@ -10,6 +10,8 @@ use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\Mysqli\QueryBuilder;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
+use Swoole\Coroutine;
 
 final class QueryResultMetadataTest extends TestCase
 {
@@ -33,8 +35,8 @@ final class QueryResultMetadataTest extends TestCase
         $client->method('getLastAffectRows')->willReturnCallback(static function () use (&$affected) { return $affected; });
         $client->method('getLastInsertId')->willReturnCallback(static function () use (&$insertId) { return $insertId; });
         $db = new FastDb();
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($db,
-            [\Swoole\Coroutine::getCid() => ['default' => $client]]);
+        (new ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($db,
+            [Coroutine::getCid() => ['default' => $client]]);
         $nested = false;
         $execute = static function () use ($db, $raw): QueryResult {
             if ($raw) { return $db->rawQuery('INSERT INTO sample VALUES (1)'); }

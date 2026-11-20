@@ -10,10 +10,13 @@ use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Beans\Query;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
-use EasySwoole\FastDb\Mysql\QueryResult;
-use PHPUnit\Framework\Attributes\DataProvider;
 use EasySwoole\Mysqli\QueryBuilder;
+use InvalidArgumentException;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
+use RuntimeException;
+use Swoole\Coroutine;
 
 final class ChunkTest extends TestCase
 {
@@ -113,7 +116,7 @@ final class ChunkTest extends TestCase
             try {
                 $entity->chunk(static function (): void { self::fail('Unexpected callback'); }, $size);
                 $this->fail('Expected invalid chunk size to fail');
-            } catch (\InvalidArgumentException $error) {
+            } catch (InvalidArgumentException $error) {
                 $this->assertSame('Chunk size must be greater than zero', $error->getMessage());
             }
             $this->assertSame([], $queries);
@@ -185,11 +188,11 @@ final class ChunkTest extends TestCase
         $this->withDatabase([[['id' => 1]]], function (array &$queries, array &$rawQueries): void {
             $entity = new ChunkEntity();
             $entity->queryLimit()->where('status', 1)->orderBy('id', 'ASC')->fields(['id']);
-            $failure = new \RuntimeException('stop chunk');
+            $failure = new RuntimeException('stop chunk');
             try {
                 $entity->chunk(static function () use ($failure): void { throw $failure; }, 2);
                 $this->fail('The callback exception must propagate.');
-            } catch (\RuntimeException $caught) {
+            } catch (RuntimeException $caught) {
                 $this->assertSame($failure, $caught);
             }
 
@@ -247,9 +250,9 @@ final class ChunkTest extends TestCase
         $client->method('getLastAffectRows')->willReturn(0);
         $client->method('getLastInsertId')->willReturn(0);
         $db = new FastDb();
-        $connections = new \ReflectionProperty(FastDb::class, 'currentConnection');
-        $connections->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $client]]);
-        $instance = new \ReflectionProperty(FastDb::class, 'instance');
+        $connections = new ReflectionProperty(FastDb::class, 'currentConnection');
+        $connections->setValue($db, [Coroutine::getCid() => ['default' => $client]]);
+        $instance = new ReflectionProperty(FastDb::class, 'instance');
         $original = $instance->getValue();
         $instance->setValue(null, $db);
         try {

@@ -3,15 +3,20 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests;
 
-use EasySwoole\FastDb\Attributes\RelationType;
+use ArgumentCountError;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Attributes\Relate;
+use EasySwoole\FastDb\Attributes\RelationType;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\Utility\ReflectionCache;
 use EasySwoole\Mysqli\QueryBuilder;
+use Error;
+use LogicException;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
 
 final class RelationDeclarationTest extends TestCase
 {
@@ -33,7 +38,7 @@ final class RelationDeclarationTest extends TestCase
         $this->assertSame('id', $relate->selfProperty);
         $this->assertSame($relate, $cache->parseRelation(DeclarationParent::class, 'PLAIN'));
 
-        $this->expectException(\Error::class);
+        $this->expectException(Error::class);
         $relate->targetProperty = 'another_field';
     }
 
@@ -86,10 +91,10 @@ final class RelationDeclarationTest extends TestCase
         return [['privateConfig'],['unknownConfig']];
     }
 
-    #[\PHPUnit\Framework\Attributes\DataProvider('invalidConfigurations')]
+    #[DataProvider('invalidConfigurations')]
     public function testInvalidDeclarationsFailClearly(string $name): void
     {
-        $this->expectException(\Error::class);
+        $this->expectException(Error::class);
         (new DeclarationParent(['id'=>1]))->__relationPlan($name);
     }
 
@@ -98,7 +103,7 @@ final class RelationDeclarationTest extends TestCase
         $parent = new DeclarationParent(['id'=>1]);
         $held = $parent->queryLimit()->where('keep', 9);
         try { $parent->__relationPlan('failing'); $this->fail('Expected configure error'); }
-        catch (\LogicException $error) { $this->assertSame('configuration failed', $error->getMessage()); }
+        catch (LogicException $error) { $this->assertSame('configuration failed', $error->getMessage()); }
         $this->assertSame($held, $parent->queryLimit());
         $this->assertSame([9], $held->__getQueryBuilder()->get('children')->getLastBindParams());
     }
@@ -121,7 +126,7 @@ final class RelationDeclarationTest extends TestCase
 
     public function testRelationTypeIsRequired(): void
     {
-        $this->expectException(\ArgumentCountError::class);
+        $this->expectException(ArgumentCountError::class);
         new Relate(DeclarationTarget::class, 'parent_id');
     }
 
@@ -143,7 +148,7 @@ final class RelationDeclarationTest extends TestCase
         return [['mismatchMany'], ['mismatchOne']];
     }
 
-    #[\PHPUnit\Framework\Attributes\DataProvider('mismatchedGetters')]
+    #[DataProvider('mismatchedGetters')]
     public function testGetterKindMustMatchBeforeConfigurationAndSql(string $method): void
     {
         $parent = new DeclarationParent(['id'=>1]);
@@ -152,7 +157,7 @@ final class RelationDeclarationTest extends TestCase
         $this->expectExceptionMessage('Declared relation type does not match its getter');
         try { $parent->{$method}(); }
         finally {
-            $this->assertNull((new \ReflectionProperty(AbstractEntity::class, 'queryBuilder'))->getValue($parent));
+            $this->assertNull((new ReflectionProperty(AbstractEntity::class, 'queryBuilder'))->getValue($parent));
         }
     }
 }
@@ -173,13 +178,13 @@ class DeclarationParent extends AbstractEntity
     #[Property] public int $tenant;
     public function tableName(): string { return 'parents'; }
     #[Relate(DeclarationTarget::class,'parent_id',type:RelationType::Many)]
-    protected function protectedGetter() { throw new \LogicException('Getter must not run'); }
+    protected function protectedGetter() { throw new LogicException('Getter must not run'); }
     #[Relate(DeclarationTarget::class,'parent_id',type:RelationType::Many)]
-    public function parameterizedGetter(int $required) { throw new \LogicException('Getter must not run'); }
+    public function parameterizedGetter(int $required) { throw new LogicException('Getter must not run'); }
     #[Relate(DeclarationTarget::class,'parent_id',type:RelationType::Many)]
-    public function plain() { throw new \LogicException('Getter must not run'); }
+    public function plain() { throw new LogicException('Getter must not run'); }
     #[Relate(DeclarationTarget::class,'parent_id',type:RelationType::One,configure:'protectedQuery')]
-    public function configured() { throw new \LogicException('Getter must not run'); }
+    public function configured() { throw new LogicException('Getter must not run'); }
     protected function protectedQuery(QueryBuilder $query): void { $query->where('tenant',$this->tenant); }
     #[Relate(DeclarationTarget::class,'parent_id',type:RelationType::Many,configure:'publicQuery',returnAsArray:true)]
     public function publicConfigured() { return $this->relateMany(); }
@@ -194,7 +199,7 @@ class DeclarationParent extends AbstractEntity
     public function unknownConfig() {}
     #[Relate(DeclarationTarget::class,'parent_id',type:RelationType::Many,configure:'failQuery')]
     public function failing() {}
-    protected function failQuery(QueryBuilder $query): void { $query->where('temporary',1);throw new \LogicException('configuration failed'); }
+    protected function failQuery(QueryBuilder $query): void { $query->where('temporary',1);throw new LogicException('configuration failed'); }
     #[Relate(DeclarationTarget::class,'parent_id',type:RelationType::One,configure:'rejectMismatchedGetter')]
     public function mismatchMany() { return $this->relateMany(); }
     #[Relate(DeclarationTarget::class,'parent_id',type:RelationType::Many,configure:'rejectMismatchedGetter')]
@@ -202,7 +207,7 @@ class DeclarationParent extends AbstractEntity
     public function missingAttribute() { return $this->relateOne(); }
     protected function rejectMismatchedGetter(QueryBuilder $query): void
     {
-        throw new \LogicException('Mismatched getter must fail before configuration');
+        throw new LogicException('Mismatched getter must fail before configuration');
     }
 }
 class DeclarationChildParent extends DeclarationParent {}

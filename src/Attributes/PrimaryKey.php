@@ -2,8 +2,10 @@
 
 namespace EasySwoole\FastDb\Attributes;
 
+use Attribute;
+
 /** 声明实体使用的主键字段。 */
-#[\Attribute(\Attribute::TARGET_PROPERTY)]
+#[Attribute(Attribute::TARGET_PROPERTY)]
 final class PrimaryKey
 {
 }

@@ -11,8 +11,11 @@ use EasySwoole\FastDb\Mysql\Pool;
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\FastDb\Tests\Model\User;
 use EasySwoole\Mysqli\QueryBuilder;
+use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
+use RuntimeException;
 
 final class ConnectionNameTest extends TestCase
 {
@@ -32,7 +35,7 @@ final class ConnectionNameTest extends TestCase
         $db = new FastDb();
         $config = new Config(['name' => $configName]);
 
-        $this->expectException(\InvalidArgumentException::class);
+        $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('Connection name must be non-empty and cannot be "0"');
         try {
             $db->addDb($config, $name);
@@ -69,7 +72,7 @@ final class ConnectionNameTest extends TestCase
         $client->connectionName = 'actual';
         $client->method('isInTransaction')->willReturn(in_array($operation, ['commit', 'rollback'], true));
         $db = $this->database($client);
-        $failure = new \RuntimeException('SQL error');
+        $failure = new RuntimeException('SQL error');
         $method = $operation === 'query' ? 'query' : 'rawQuery';
         $client->method($method)->willReturnCallback(static function () use ($db, $fails, $failure): bool {
             $db->selectConnection('other');
@@ -94,7 +97,7 @@ final class ConnectionNameTest extends TestCase
                 $result = $db->$operation($client);
             }
             $this->assertFalse($fails);
-        } catch (\RuntimeException $error) {
+        } catch (RuntimeException $error) {
             $this->assertTrue($fails);
             $this->assertSame($failure, $error);
         }
@@ -109,11 +112,11 @@ final class ConnectionNameTest extends TestCase
 
     public function testEntityFailureCallbackKeepsOriginatingConnectionName(): void
     {
-        $instance = new \ReflectionProperty(FastDb::class, 'instance');
+        $instance = new ReflectionProperty(FastDb::class, 'instance');
         $original = $instance->getValue();
         $client = $this->createStub(Connection::class);
         $db = $this->database($client);
-        $failure = new \RuntimeException('original SQL failure');
+        $failure = new RuntimeException('original SQL failure');
         $client->method('query')->willThrowException($failure);
         $instance->setValue(null, $db);
         $entityResult = null;
@@ -126,7 +129,7 @@ final class ConnectionNameTest extends TestCase
             try {
                 $user->all();
                 $this->fail('Expected SQL failure');
-            } catch (\RuntimeException $error) {
+            } catch (RuntimeException $error) {
                 $this->assertSame($failure, $error);
             }
             $this->assertSame('actual', $entityResult->getConnectionName());
@@ -142,7 +145,7 @@ final class ConnectionNameTest extends TestCase
         $pool = $this->createStub(Pool::class);
         $pool->method('getObj')->willReturn($client);
         $pool->method('recycleObj')->willReturn(true);
-        (new \ReflectionProperty(FastDb::class, 'pools'))->setValue($db, ['actual' => $pool]);
+        (new ReflectionProperty(FastDb::class, 'pools'))->setValue($db, ['actual' => $pool]);
         return $db;
     }
 }

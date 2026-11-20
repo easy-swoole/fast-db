@@ -13,8 +13,10 @@ use EasySwoole\Mysqli\Client;
 use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\Mysqli\Transaction\TransactionCompletionFlags;
 use EasySwoole\Mysqli\Transaction\TransactionStartFlags;
+use InvalidArgumentException;
 use Swoole\Coroutine;
 use Swoole\Coroutine\Scheduler;
+use Throwable;
 
 /** 管理配置、协程连接借用与执行入口；执行状态和诊断各有唯一拥有者。 */
 class FastDb
@@ -53,7 +55,7 @@ class FastDb
     {
         $connectionName = $name ?? $config->getName();
         if ($connectionName === '' || $connectionName === '0') {
-            throw new \InvalidArgumentException('Connection name must be non-empty and cannot be "0"');
+            throw new InvalidArgumentException('Connection name must be non-empty and cannot be "0"');
         }
         if (isset($this->pools[$connectionName])) {
             throw new RuntimeError("Cannot replace configuration for connection {$connectionName} after its pool has been created");
@@ -91,7 +93,7 @@ class FastDb
         $scheduler->add(static function () use ($connect, &$connected, &$error): void {
             try {
                 $connected = $connect();
-            } catch (\Throwable $failure) {
+            } catch (Throwable $failure) {
                 $error = $failure;
             }
         });
@@ -136,11 +138,11 @@ class FastDb
         try {
             $this->startTransaction($client, $flags, $timeout);
             $value = $callback($this);
-        } catch (\Throwable $error) {
+        } catch (Throwable $error) {
             if ($client->isInTransaction()) {
                 try {
                     $this->executeTransactionCompletion(true, $client, TransactionCompletionFlags::NoChainNoRelease, $timeout);
-                } catch (\Throwable) {
+                } catch (Throwable) {
                     // 清理失败时保留触发回滚的原异常。
                 }
             }
@@ -220,7 +222,7 @@ class FastDb
             $queryBuilder($builder);
         }
         if ($builder->getLastPrepareQuery() === null) {
-            throw new \InvalidArgumentException('QueryBuilder has no SQL to execute');
+            throw new InvalidArgumentException('QueryBuilder has no SQL to execute');
         }
 
         $client = $this->getOrBorrowConnection($connection);
@@ -261,7 +263,7 @@ class FastDb
             $result = $operation();
             $affectedRows = $client->getLastAffectRows();
             $insertId = $client->getLastInsertId();
-        } catch (\Throwable $error) {
+        } catch (Throwable $error) {
             $exception = $error;
         }
         $duration = (hrtime(true) - $startTick) / 1_000_000_000;
@@ -309,7 +311,7 @@ class FastDb
             } else {
                 $pool->recycleObj($client);
             }
-        } catch (\Throwable) {
+        } catch (Throwable) {
             // 连接池负责处理归还失败。隔离异常，避免清理覆盖业务结果或中断其他连接归还。
         }
         return true;
@@ -347,7 +349,7 @@ class FastDb
         $error = null;
         try {
             $client = $pool->getObj() ?? throw new RuntimeError("connection {$name} returned no usable client");
-        } catch (\Throwable $failure) {
+        } catch (Throwable $failure) {
             $error = $failure;
             throw $failure;
         } finally {

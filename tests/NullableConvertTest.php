@@ -10,9 +10,11 @@ use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
-use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\FastDb\Tests\Model\SexEnum;
+use EasySwoole\Mysqli\QueryBuilder;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
+use Swoole\Coroutine;
 
 final class NullableConvertTest extends TestCase
 {
@@ -58,8 +60,8 @@ final class NullableConvertTest extends TestCase
                 return true;
             }))->willReturn(true);
         $db = new FastDb();
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $connection]]);
-        $instance = new \ReflectionProperty(FastDb::class, 'instance');
+        (new ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($db, [Coroutine::getCid() => ['default' => $connection]]);
+        $instance = new ReflectionProperty(FastDb::class, 'instance');
         $original = $instance->getValue();
         $instance->setValue(null, $db);
         try {
@@ -76,8 +78,8 @@ final class NullableConvertTest extends TestCase
         $connection = $this->getMockBuilder(Connection::class)->disableOriginalConstructor()->onlyMethods(['query'])->getMock();
         $connection->expects($this->never())->method('query');
         $db = new FastDb();
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $connection]]);
-        $instance = new \ReflectionProperty(FastDb::class, 'instance');
+        (new ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($db, [Coroutine::getCid() => ['default' => $connection]]);
+        $instance = new ReflectionProperty(FastDb::class, 'instance');
         $original = $instance->getValue();
         $instance->setValue(null, $db);
         try {

@@ -3,6 +3,8 @@
 namespace EasySwoole\FastDb\Internal;
 
 use EasySwoole\Mysqli\QueryBuilder;
+use InvalidArgumentException;
+use TypeError;
 
 /** 分批直接写入数据库格式的行，不创建逐行实体或管理事务。 */
 final class BatchWriter
@@ -11,13 +13,13 @@ final class BatchWriter
     public static function write(iterable $rows, ?array $updates, int $batchSize,
         callable $resolveTarget, callable $execute): int|string
     {
-        if ($batchSize < 1) { throw new \InvalidArgumentException('Batch size must be greater than zero'); }
+        if ($batchSize < 1) { throw new InvalidArgumentException('Batch size must be greater than zero'); }
         $batch = [];
         $target = null;
         $total = 0;
         foreach ($rows as $row) {
             // 按当前行顺序取值，解除标量引用；列名校验、排序及 upsert 整理由驱动负责。
-            if (!is_array($row)) { throw new \TypeError('Each batch row must be an array'); }
+            if (!is_array($row)) { throw new TypeError('Each batch row must be an array'); }
             $snapshot = [];
             foreach ($row as $column => $value) { $snapshot[$column] = $value; }
             $batch[] = $snapshot;

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests;
 
+use DateTimeZone;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\AbstractInterface\ConvertDateTime;
 use EasySwoole\FastDb\AbstractInterface\ConvertList;
@@ -12,18 +13,24 @@ use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Property;
 use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\FastDb;
-use EasySwoole\FastDb\Tests\Model\ConvertedKey;
 use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\QueryResult;
+use EasySwoole\FastDb\Tests\Model\ConvertedKey;
 use EasySwoole\Mysqli\Config;
 use EasySwoole\Mysqli\QueryBuilder;
+use InvalidArgumentException;
+use JsonException;
+use PDO;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
+use RuntimeException;
 use Swoole\Coroutine;
+use Throwable;
 
 final class InsertStateTest extends TestCase
 {
-    private \ReflectionProperty $singleton;
+    private ReflectionProperty $singleton;
     private mixed $previous;
     private FastDb $db;
     private InsertStateConnection $client;
@@ -31,13 +38,13 @@ final class InsertStateTest extends TestCase
     protected function setUp(): void
     {
         if (!extension_loaded('pdo_sqlite')) { $this->markTestSkipped('SQLite is required for offline SQL execution.'); }
-        $pdo = new \PDO('sqlite::memory:', options: [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
+        $pdo = new PDO('sqlite::memory:', options: [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
         $pdo->exec('CREATE TABLE insert_state (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, score INTEGER DEFAULT 0, payload TEXT, moment TEXT, items TEXT)');
         $this->client = new InsertStateConnection($pdo);
         $this->client->connectionName = 'default';
         $this->db = new FastDb();
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db, [Coroutine::getCid() => ['default' => $this->client]]);
-        $this->singleton = new \ReflectionProperty(FastDb::class, 'instance');
+        (new ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db, [Coroutine::getCid() => ['default' => $this->client]]);
+        $this->singleton = new ReflectionProperty(FastDb::class, 'instance');
         $this->previous = $this->singleton->getValue();
         $this->singleton->setValue(null, $this->db);
         InsertStateList::$valueCalls = 0;
@@ -48,7 +55,7 @@ final class InsertStateTest extends TestCase
     {
         if (!isset($this->singleton)) { return; }
         $this->db->setOnQuery(static function (): void {});
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db, []);
+        (new ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db, []);
         $this->singleton->setValue(null, $this->previous);
     }
 
@@ -183,7 +190,7 @@ final class InsertStateTest extends TestCase
         $timezone = date_default_timezone_get();
         date_default_timezone_set('UTC');
         try {
-            $date = new ConvertDateTime('2026-11-10 12:00:00', new \DateTimeZone('Asia/Shanghai'));
+            $date = new ConvertDateTime('2026-11-10 12:00:00', new DateTimeZone('Asia/Shanghai'));
             $timestamp = $date->getTimestamp();
             $entity = new InsertStateRecord(['name' => 'date', 'moment' => $date]);
             $this->assertTrue($entity->insert());
@@ -224,7 +231,7 @@ final class InsertStateTest extends TestCase
         $this->assertSame('inserted', $this->client->row()['name']);
         $this->assertSame(9, $this->client->row()['score']);
         $entity->id = 2; $entity->name = 'other';
-        $this->expectException(\EasySwoole\FastDb\Exception\RuntimeError::class);
+        $this->expectException(RuntimeError::class);
         $entity->update();
     }
 
@@ -381,7 +388,7 @@ final class InsertStateTest extends TestCase
             $entity->setData(['payload' => [2]]);
             $entity->queryLimit()->fields(['payload']);
             try { $entity->$operation(); $this->fail('Selected converter failure must propagate'); }
-            catch (\RuntimeException $error) { $this->assertSame('items encoding failed', $error->getMessage()); }
+            catch (RuntimeException $error) { $this->assertSame('items encoding failed', $error->getMessage()); }
         }
         $this->assertCount(0, $this->client->queries);
     }
@@ -408,7 +415,7 @@ final class InsertStateTest extends TestCase
         $entity = new InsertStateRecord(['id' => 1, 'items' => '[1]']);
         $entity->items->append(NAN);
         try { $entity->update(); $this->fail('Invalid JSON must fail before SQL'); }
-        catch (\JsonException) {}
+        catch (JsonException) {}
         $this->assertSame([], $this->client->queries);
         $this->assertSame('[1]', $this->client->row()['items']);
         $this->assertTrue(is_nan($entity->items->toArray()[1]));
@@ -423,15 +430,15 @@ final class InsertStateTest extends TestCase
         $this->client->database->exec("INSERT INTO insert_state (id,name) VALUES (20,'before')");
         $entity = new InsertStateRecord(['id' => 20, 'name' => 'before']);
         $entity->name = 'pending';
-        $failure = new \RuntimeException('insert SQL failed');
-        $observerFailure = new \RuntimeException('observer failure');
+        $failure = new RuntimeException('insert SQL failed');
+        $observerFailure = new RuntimeException('observer failure');
         $this->client->nextFailure = $failure;
         $entity->setOnQuery(function (QueryResult $result) use ($failure, $observerFailure): void {
             $this->assertSame($failure, $result->getException());
             throw $observerFailure;
         });
         try { $entity->insert(); $this->fail('Observer failure must propagate'); }
-        catch (\RuntimeException $error) { $this->assertSame($observerFailure, $error); }
+        catch (RuntimeException $error) { $this->assertSame($observerFailure, $error); }
         $this->assertSame('pending', $entity->name);
         $entity->setOnQuery(null);
         $this->assertTrue($entity->update());
@@ -505,7 +512,7 @@ final class InsertStateTest extends TestCase
         try {
             $entity->$operation();
             $this->fail('Expected IGNORE to be rejected');
-        } catch (\InvalidArgumentException $error) {
+        } catch (InvalidArgumentException $error) {
             $this->assertStringContainsString('does not support IGNORE', $error->getMessage());
         }
         $this->assertSame([], $this->client->queries);
@@ -523,7 +530,7 @@ final class InsertStateTest extends TestCase
         try {
             $entity->insert(['name' => 'other']);
             $this->fail('Expected conflicting duplicate-update configuration to fail');
-        } catch (\InvalidArgumentException $error) {
+        } catch (InvalidArgumentException $error) {
             $this->assertStringContainsString('onDuplicate()', $error->getMessage());
         }
         $this->assertSame([], $this->client->queries);
@@ -543,10 +550,10 @@ final class InsertStateTest extends TestCase
     public function testObserverExceptionLeavesGeneratedKeyForBusinessToReload(): void
     {
         $entity = new InsertStateRecord(['name' => 'before']);
-        $failure = new \RuntimeException('observer failed');
+        $failure = new RuntimeException('observer failed');
         $this->db->setOnQuery(static function () use ($failure): void { throw $failure; });
         try { $entity->insert(); $this->fail('Observer failure must propagate'); }
-        catch (\RuntimeException $error) { $this->assertSame($failure, $error); }
+        catch (RuntimeException $error) { $this->assertSame($failure, $error); }
         $this->assertNull($entity->id ?? null);
         $this->assertCount(1, $this->client->queries);
         $this->assertSame('before', $this->client->row()['name']);
@@ -595,7 +602,7 @@ class InsertStateList extends ConvertList
     public function toValue(): string
     {
         self::$valueCalls++;
-        if (self::$failEncoding) { throw new \RuntimeException('items encoding failed'); }
+        if (self::$failEncoding) { throw new RuntimeException('items encoding failed'); }
         return parent::toValue();
     }
 }
@@ -617,10 +624,10 @@ class LateFieldSelectionRecord extends InsertStateRecord
 class InsertStateConnection extends Connection
 {
     public array $queries = [];
-    public ?\Throwable $nextFailure = null;
+    public ?Throwable $nextFailure = null;
     public bool $nextFalse = false;
     public bool $nextNoOp = false;
-    public function __construct(public \PDO $database) { parent::__construct(new Config()); }
+    public function __construct(public PDO $database) { parent::__construct(new Config()); }
     public function query(QueryBuilder $builder, ?float $timeout = null): bool|array
     {
         $sql = $builder->getLastPrepareQuery(); $parameters = $builder->getLastBindParams();
@@ -632,9 +639,9 @@ class InsertStateConnection extends Connection
         $statement = $this->database->prepare($sql); $statement->execute($parameters);
         $this->lastAffectRows = $statement->rowCount();
         if (str_starts_with($sql, 'INSERT')) { $this->lastInsertId = (int)$this->database->lastInsertId(); }
-        return $statement->columnCount() > 0 ? $statement->fetchAll(\PDO::FETCH_ASSOC) : true;
+        return $statement->columnCount() > 0 ? $statement->fetchAll(PDO::FETCH_ASSOC) : true;
     }
-    public function row(int $id = 1): array { return $this->database->query('SELECT * FROM insert_state WHERE id=' . $id)->fetch(\PDO::FETCH_ASSOC); }
+    public function row(int $id = 1): array { return $this->database->query('SELECT * FROM insert_state WHERE id=' . $id)->fetch(PDO::FETCH_ASSOC); }
 }
 
 class ConvertedInsertStateRecord extends AbstractEntity

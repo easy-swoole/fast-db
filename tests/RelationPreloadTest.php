@@ -4,28 +4,33 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests;
 
-use EasySwoole\FastDb\Attributes\RelationType;
 use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\AbstractInterface\ConvertList;
+use EasySwoole\FastDb\Attributes\Hook\OnInitialize;
 use EasySwoole\FastDb\Attributes\PrimaryKey;
 use EasySwoole\FastDb\Attributes\Property;
-use EasySwoole\FastDb\Attributes\Hook\OnInitialize;
 use EasySwoole\FastDb\Attributes\Relate;
-use EasySwoole\FastDb\Exception\RuntimeError;
+use EasySwoole\FastDb\Attributes\RelationType;
 use EasySwoole\FastDb\Beans\Query;
+use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\FastDb\Tests\Model\ConvertedKey;
 use EasySwoole\Mysqli\Config;
 use EasySwoole\Mysqli\QueryBuilder;
+use InvalidArgumentException;
+use PDO;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionException;
+use ReflectionProperty;
 use Swoole\Coroutine;
+use WeakReference;
 
 final class RelationPreloadTest extends TestCase
 {
-    private ?\ReflectionProperty $singleton = null;
+    private ?ReflectionProperty $singleton = null;
     private mixed $originalInstance = null;
     private FastDb $db;
     private PreloadFixtureConnection $connection;
@@ -34,7 +39,7 @@ final class RelationPreloadTest extends TestCase
     protected function setUp(): void
     {
         if (!extension_loaded('pdo_sqlite')) { $this->markTestSkipped('SQLite executes relation queries without MySQL writes.'); }
-        $database = new \PDO('sqlite::memory:', options: [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
+        $database = new PDO('sqlite::memory:', options: [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
         $database->exec('CREATE TABLE preload_parents (id INTEGER PRIMARY KEY, group_code TEXT, name TEXT)');
         $database->exec('CREATE TABLE preload_children (id INTEGER PRIMARY KEY, parent_id INTEGER, group_code TEXT COLLATE NOCASE, name TEXT, payload TEXT)');
         $database->exec('CREATE TABLE preload_profiles (id INTEGER PRIMARY KEY, parent_id INTEGER, name TEXT)');
@@ -44,10 +49,10 @@ final class RelationPreloadTest extends TestCase
         $this->connection = new PreloadFixtureConnection($database);
         $this->connection->connectionName = 'default';
         $this->db = new FastDb();
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db,
+        (new ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db,
             [Coroutine::getCid() => ['default' => $this->connection]]);
         $this->db->setOnQuery(function (QueryResult $result): void { $this->events[] = $result; });
-        $this->singleton = new \ReflectionProperty(FastDb::class, 'instance');
+        $this->singleton = new ReflectionProperty(FastDb::class, 'instance');
         $this->originalInstance = $this->singleton->getValue();
         $this->singleton->setValue(null, $this->db);
     }
@@ -56,7 +61,7 @@ final class RelationPreloadTest extends TestCase
     {
         if ($this->singleton === null) { return; }
         $this->db->setOnQuery(static function (): void {});
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db, []);
+        (new ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db, []);
         $this->singleton->setValue(null, $this->originalInstance);
     }
 
@@ -356,12 +361,12 @@ final class RelationPreloadTest extends TestCase
 
     public function testPreloadUsesTheParentQueryConnectionAndRestoresTheObserverSelectedConnection(): void
     {
-        $otherDatabase = new \PDO('sqlite::memory:', options: [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
+        $otherDatabase = new PDO('sqlite::memory:', options: [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
         $otherDatabase->exec('CREATE TABLE preload_children (id INTEGER, parent_id INTEGER, group_code TEXT, name TEXT, payload TEXT)');
         $otherDatabase->exec("INSERT INTO preload_children VALUES (111,1,'a','other database','[111]')");
         $other = new PreloadFixtureConnection($otherDatabase);
         $other->connectionName = 'other';
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db,
+        (new ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db,
             [Coroutine::getCid() => ['default' => $this->connection, 'other' => $other]]);
         $this->db->setOnQuery(function (QueryResult $result): void {
             $this->events[] = $result;
@@ -425,12 +430,12 @@ final class RelationPreloadTest extends TestCase
     #[DataProvider('parentOutputModes')]
     public function testTargetConstructorConnectionChoiceMatchesLazyLoadingAndPrimesTheCorrectCache(bool $arrays): void
     {
-        $otherDatabase = new \PDO('sqlite::memory:', options: [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
+        $otherDatabase = new PDO('sqlite::memory:', options: [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
         $otherDatabase->exec('CREATE TABLE preload_children (id INTEGER, parent_id INTEGER, group_code TEXT, name TEXT, payload TEXT)');
         $otherDatabase->exec("INSERT INTO preload_children VALUES (111,1,'a','other child','[111]')");
         $other = new PreloadFixtureConnection($otherDatabase);
         $other->connectionName = 'other';
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db,
+        (new ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db,
             [Coroutine::getCid() => ['default' => $this->connection, 'other' => $other]]);
 
         // 现有按需加载流程先构造目标模型，再确定执行连接。
@@ -477,7 +482,7 @@ final class RelationPreloadTest extends TestCase
         $other = new PreloadFixtureConnection($this->connection->database);
         $other->connectionName = 'other';
         $other->database->exec("INSERT INTO preload_children VALUES (14,3,'b','other group','[14]')");
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db,
+        (new ReflectionProperty(FastDb::class, 'currentConnection'))->setValue($this->db,
             [Coroutine::getCid() => ['default' => $this->connection, 'other' => $other]]);
 
         $parent = new PreloadFixtureConvertedParent(['route_key' => 'a']);
@@ -702,7 +707,7 @@ final class RelationPreloadTest extends TestCase
         try {
             $this->parents('emptyProjectionChildren');
             $this->fail('Expected empty projection to fail');
-        } catch (\InvalidArgumentException $error) {
+        } catch (InvalidArgumentException $error) {
             $this->assertStringContainsString('at least one column', $error->getMessage());
         }
         $this->assertCount(1, $this->connection->queries);
@@ -868,7 +873,7 @@ final class RelationPreloadTest extends TestCase
     {
         $owner = new PreloadFixtureParent();
         try { $owner->queryLimit()->withRelations('missingRelation')->returnEntity()->all(); $this->fail('Unknown relation must fail'); }
-        catch (\ReflectionException) { $this->addToAssertionCount(1); }
+        catch (ReflectionException) { $this->addToAssertionCount(1); }
         $this->assertLessThanOrEqual(1, count($this->connection->queries));
     }
 
@@ -877,7 +882,7 @@ final class RelationPreloadTest extends TestCase
         PreloadFixtureParent::$nonRelationCalls = 0;
         $owner = new PreloadFixtureParent();
         try { $owner->queryLimit()->withRelations('nonRelationOperation')->returnEntity()->all(); $this->fail('Only declared relation wrappers may be preloaded'); }
-        catch (RuntimeError|\InvalidArgumentException) { $this->addToAssertionCount(1); }
+        catch (RuntimeError|InvalidArgumentException) { $this->addToAssertionCount(1); }
         $this->assertSame(0, PreloadFixtureParent::$nonRelationCalls);
         $this->assertSame(3, (int)$this->connection->database->query('SELECT COUNT(*) FROM preload_parents')->fetchColumn());
         foreach ($this->connection->queries as $query) { $this->assertStringNotContainsString('DELETE', $query['sql']); }
@@ -1122,7 +1127,7 @@ class PreloadFixtureConstructorChild extends PreloadFixtureChild
 class PreloadFixtureConnection extends Connection
 {
     public array $queries = [];
-    public function __construct(public \PDO $database) { parent::__construct(new Config()); }
+    public function __construct(public PDO $database) { parent::__construct(new Config()); }
     public function query(QueryBuilder $builder, ?float $timeout = null): bool|array
     {
         $sql = $builder->getLastPrepareQuery();
@@ -1132,18 +1137,18 @@ class PreloadFixtureConnection extends Connection
         $statement->execute($parameters);
         $this->lastAffectRows = $statement->rowCount();
         $this->lastInsertId = str_starts_with($sql, 'INSERT') ? (int) $this->database->lastInsertId() : 0;
-        return $statement->columnCount() > 0 ? $statement->fetchAll(\PDO::FETCH_ASSOC) : true;
+        return $statement->columnCount() > 0 ? $statement->fetchAll(PDO::FETCH_ASSOC) : true;
     }
 }
 
 class PreloadScopedParent extends PreloadFixtureParent
 {
-    private ?\WeakReference $scopedQuery = null;
+    private ?WeakReference $scopedQuery = null;
     public function queryLimit(): Query
     {
         $query = parent::queryLimit();
         if ($this->scopedQuery?->get() !== $query) {
-            $this->scopedQuery = \WeakReference::create($query);
+            $this->scopedQuery = WeakReference::create($query);
             $query->where('active',1);
         }
         return $query;

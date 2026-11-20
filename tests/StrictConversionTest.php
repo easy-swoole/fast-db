@@ -8,8 +8,12 @@ use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\AbstractInterface\ConvertBean;
 use EasySwoole\FastDb\AbstractInterface\ConvertList;
 use EasySwoole\FastDb\Attributes\Property;
+use InvalidArgumentException;
+use JsonException;
+use LogicException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use stdClass;
 
 final class StrictConversionTest extends TestCase
 {
@@ -17,10 +21,10 @@ final class StrictConversionTest extends TestCase
     {
         foreach ([StrictJsonBean::class, ConvertList::class] as $class) {
             foreach (['{bad', '', "\xff", str_repeat('[', 513) . str_repeat(']', 513)] as $index => $input) {
-                yield $class . ' malformed ' . $index => [$class, $input, \JsonException::class];
+                yield $class . ' malformed ' . $index => [$class, $input, JsonException::class];
             }
-            foreach (['null', 'false', '0', '"text"', false, 0, new \stdClass()] as $index => $input) {
-                yield $class . ' unsupported ' . $index => [$class, $input, \InvalidArgumentException::class];
+            foreach (['null', 'false', '0', '"text"', false, 0, new stdClass()] as $index => $input) {
+                yield $class . ' unsupported ' . $index => [$class, $input, InvalidArgumentException::class];
             }
         }
     }
@@ -54,13 +58,13 @@ final class StrictConversionTest extends TestCase
 
     public function testJsonOnlyFallbackDoesNotHideUnsupportedData(): void
     {
-        $this->expectException(\InvalidArgumentException::class);
+        $this->expectException(InvalidArgumentException::class);
         TolerantJsonList::toObject('false');
     }
 
     public function testJsonOnlyFallbackDoesNotHideBeanInitializationErrors(): void
     {
-        $this->expectException(\LogicException::class);
+        $this->expectException(LogicException::class);
         $this->expectExceptionMessage('business initialization failed');
         FailingTolerantJsonBean::toObject('{}');
     }
@@ -73,7 +77,7 @@ final class StrictConversionTest extends TestCase
         $entity = new StrictJsonEntity(['items' => '[1]', 'profile' => '{"name":"loaded"}']);
         $before = $entity->{$field};
         try { $entity->setData([$field => '{bad']); $this->fail('Expected JSON parse error'); }
-        catch (\JsonException) {}
+        catch (JsonException) {}
         $this->assertSame($before, $entity->{$field});
         $this->assertFalse($entity->hasChange());
         $entity->setData([$field => null]);
@@ -91,7 +95,7 @@ class TolerantJsonList extends ConvertList
     public static function toObject(mixed $data): static
     {
         try { return parent::toObject($data); }
-        catch (\JsonException) { return new static([]); }
+        catch (JsonException) { return new static([]); }
     }
 }
 
@@ -100,13 +104,13 @@ class TolerantJsonBean extends StrictJsonBean
     public static function toObject(mixed $data): static
     {
         try { return parent::toObject($data); }
-        catch (\JsonException) { return new static([]); }
+        catch (JsonException) { return new static([]); }
     }
 }
 
 class FailingTolerantJsonBean extends TolerantJsonBean
 {
-    protected function initialize(): void { throw new \LogicException('business initialization failed'); }
+    protected function initialize(): void { throw new LogicException('business initialization failed'); }
 }
 
 class StrictJsonEntity extends AbstractEntity

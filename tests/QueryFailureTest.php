@@ -4,13 +4,18 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests;
 
+use EasySwoole\FastDb\Exception\RuntimeError;
 use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Mysql\Connection;
 use EasySwoole\FastDb\Mysql\QueryResult;
 use EasySwoole\FastDb\Tests\Model\User;
 use EasySwoole\Mysqli\QueryBuilder;
+use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
+use RuntimeException;
+use Swoole\Coroutine;
 
 final class QueryFailureTest extends TestCase
 {
@@ -25,14 +30,14 @@ final class QueryFailureTest extends TestCase
     #[DataProvider('failedQueries')]
     public function testFailedQueriesNotifyObserversAndPropagateTheirExceptions(bool $raw, bool $callbackThrows): void
     {
-        $failure = new \RuntimeException('original SQL failure');
-        $observerFailure = new \RuntimeException('logger failure');
+        $failure = new RuntimeException('original SQL failure');
+        $observerFailure = new RuntimeException('logger failure');
         $method = $raw ? 'rawQuery' : 'query';
         $client = $this->createStub(Connection::class);
         $client->method($method)->willThrowException($failure);
         $db = new FastDb();
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))
-            ->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $client]]);
+        (new ReflectionProperty(FastDb::class, 'currentConnection'))
+            ->setValue($db, [Coroutine::getCid() => ['default' => $client]]);
         $called = false;
         $db->setOnQuery(function (QueryResult $result) use (&$called, $callbackThrows, $failure, $observerFailure): void {
             $called = true;
@@ -54,7 +59,7 @@ final class QueryFailureTest extends TestCase
                 $db->query($query);
             }
             $this->fail('Expected an exception');
-        } catch (\RuntimeException $exception) {
+        } catch (RuntimeException $exception) {
             $this->assertSame($callbackThrows ? $observerFailure : $failure, $exception);
         }
         $this->assertTrue($called);
@@ -67,14 +72,14 @@ final class QueryFailureTest extends TestCase
 
     public function testEntityCallbackFailurePropagatesDirectly(): void
     {
-        $failure = new \RuntimeException('original SQL failure');
-        $observerFailure = new \RuntimeException('entity logger failure');
+        $failure = new RuntimeException('original SQL failure');
+        $observerFailure = new RuntimeException('entity logger failure');
         $client = $this->createStub(Connection::class);
         $client->method('query')->willThrowException($failure);
         $db = new FastDb();
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))
-            ->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $client]]);
-        $instance = new \ReflectionProperty(FastDb::class, 'instance');
+        (new ReflectionProperty(FastDb::class, 'currentConnection'))
+            ->setValue($db, [Coroutine::getCid() => ['default' => $client]]);
+        $instance = new ReflectionProperty(FastDb::class, 'instance');
         $original = $instance->getValue();
         $instance->setValue(null, $db);
         $called = false;
@@ -90,7 +95,7 @@ final class QueryFailureTest extends TestCase
             try {
                 $user->all();
                 $this->fail('Expected observer exception');
-            } catch (\RuntimeException $exception) {
+            } catch (RuntimeException $exception) {
                 $this->assertSame($observerFailure, $exception);
             }
             $this->assertTrue($called);
@@ -104,9 +109,9 @@ final class QueryFailureTest extends TestCase
         $client = $this->createStub(Connection::class);
         $client->method('rawQuery')->willReturn([]);
         $db = new FastDb();
-        (new \ReflectionProperty(FastDb::class, 'currentConnection'))
-            ->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $client]]);
-        $db->setOnQuery(function (): void { throw new \RuntimeException('logger failure'); });
+        (new ReflectionProperty(FastDb::class, 'currentConnection'))
+            ->setValue($db, [Coroutine::getCid() => ['default' => $client]]);
+        $db->setOnQuery(function (): void { throw new RuntimeException('logger failure'); });
         $this->expectExceptionMessage('logger failure');
         $db->rawQuery('SELECT 1');
     }
@@ -115,11 +120,11 @@ final class QueryFailureTest extends TestCase
     {
         $db = (new FastDb())->configureQueryStack(true);
         $db->setOnQuery(static function (): void { self::fail('No query was sent'); });
-        $failure = new \InvalidArgumentException('builder failed');
+        $failure = new InvalidArgumentException('builder failed');
         try {
             $db->query(static function () use ($failure): void { throw $failure; });
             $this->fail('Expected builder failure');
-        } catch (\InvalidArgumentException $error) {
+        } catch (InvalidArgumentException $error) {
             $this->assertSame($failure, $error);
         }
         $this->assertNull($db->getQueryStack());
@@ -131,7 +136,7 @@ final class QueryFailureTest extends TestCase
         $db->setOnQuery(static function (): void { self::fail('Global observer requires SQL execution'); });
         $builder = (new QueryBuilder())->raw('SELECT ? AS never_sent', [1]);
 
-        $this->expectException(\EasySwoole\FastDb\Exception\RuntimeError::class);
+        $this->expectException(RuntimeError::class);
         $this->expectExceptionMessage('connection unregistered not register yet');
         $db->query($builder, connection: 'unregistered',
             onQuery: static function (): void { self::fail('Local observer requires SQL execution'); });

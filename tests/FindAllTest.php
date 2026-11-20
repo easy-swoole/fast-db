@@ -10,6 +10,8 @@ use EasySwoole\FastDb\Tests\Model\User;
 use EasySwoole\Mysqli\QueryBuilder;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
+use Swoole\Coroutine;
 
 final class FindAllTest extends TestCase
 {
@@ -31,10 +33,10 @@ final class FindAllTest extends TestCase
                 return true;
             }))->willReturn([]);
         $db = new FastDb();
-        $connections = new \ReflectionProperty(FastDb::class, 'currentConnection');
-        $connections->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $client]]);
+        $connections = new ReflectionProperty(FastDb::class, 'currentConnection');
+        $connections->setValue($db, [Coroutine::getCid() => ['default' => $client]]);
 
-        $instance = new \ReflectionProperty(FastDb::class, 'instance');
+        $instance = new ReflectionProperty(FastDb::class, 'instance');
         $original = $instance->getValue();
         $instance->setValue(null, $db);
         try {
@@ -59,9 +61,9 @@ final class FindAllTest extends TestCase
             }))
             ->willReturnOnConsecutiveCalls(true, true, $rows, $rows);
         $db = new FastDb();
-        $connections = new \ReflectionProperty(FastDb::class, 'currentConnection');
-        $connections->setValue($db, [\Swoole\Coroutine::getCid() => ['default' => $client]]);
-        $instance = new \ReflectionProperty(FastDb::class, 'instance');
+        $connections = new ReflectionProperty(FastDb::class, 'currentConnection');
+        $connections->setValue($db, [Coroutine::getCid() => ['default' => $client]]);
+        $instance = new ReflectionProperty(FastDb::class, 'instance');
         $original = $instance->getValue();
         $instance->setValue(null, $db);
         ExplicitTableUser::$constructed = 0;

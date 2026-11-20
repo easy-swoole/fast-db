@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests;
 
+use DateTimeImmutable;
+use DateTimeZone;
 use EasySwoole\FastDb\AbstractInterface\ConvertDateTime;
+use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
@@ -45,15 +48,15 @@ final class ConvertDateTimeTest extends TestCase
     #[DataProvider('invalidMysqlDateTimes')]
     public function testInvalidMysqlDatesAreRejectedInsteadOfBeingAdjusted(string $value): void
     {
-        $this->expectException(\InvalidArgumentException::class);
+        $this->expectException(InvalidArgumentException::class);
         ConvertDateTime::toObject($value);
     }
 
     public function testCopiesBothOccurrencesOfTheRepeatedHourWhenDaylightSavingEnds(): void
     {
-        $timezone = new \DateTimeZone('America/New_York');
-        $beforeFallback = (new \DateTimeImmutable('2025-11-02T05:30:00.123456Z'))->setTimezone($timezone);
-        $afterFallback = (new \DateTimeImmutable('2025-11-02T06:30:00.123456Z'))->setTimezone($timezone);
+        $timezone = new DateTimeZone('America/New_York');
+        $beforeFallback = (new DateTimeImmutable('2025-11-02T05:30:00.123456Z'))->setTimezone($timezone);
+        $afterFallback = (new DateTimeImmutable('2025-11-02T06:30:00.123456Z'))->setTimezone($timezone);
 
         foreach ([$beforeFallback, $afterFallback] as $original) {
             $copy = ConvertDateTime::toObject($original);

@@ -3,6 +3,7 @@
 namespace EasySwoole\FastDb\AbstractInterface;
 
 use EasySwoole\Spl\SplBean;
+use InvalidArgumentException;
 
 
 class ConvertList implements ConvertObjectInterface
@@ -13,7 +14,7 @@ class ConvertList implements ConvertObjectInterface
     {
         $class = static::itemClass();
         if ($class !== null && !is_a($class, SplBean::class, true)) {
-            throw new \InvalidArgumentException('ConvertList itemClass must extend ' . SplBean::class);
+            throw new InvalidArgumentException('ConvertList itemClass must extend ' . SplBean::class);
         }
         // 整批共用元素类型和转换方式，不在逐项转换时重复解析。
         $convertObject = $class !== null && is_a($class, ConvertObjectInterface::class, true);
@@ -35,7 +36,7 @@ class ConvertList implements ConvertObjectInterface
             return $item;
         }
         if (!is_array($item)) {
-            throw new \InvalidArgumentException('ConvertList Bean items must be arrays or instances of ' . $class);
+            throw new InvalidArgumentException('ConvertList Bean items must be arrays or instances of ' . $class);
         }
         return $convertObject
             ? $class::toObject($item)
@@ -52,7 +53,7 @@ class ConvertList implements ConvertObjectInterface
             $data = json_decode($data, true, 512, JSON_THROW_ON_ERROR);
         }
         if(!is_array($data)){
-            throw new \InvalidArgumentException('ConvertList expects an array or JSON decoding to an array');
+            throw new InvalidArgumentException('ConvertList expects an array or JSON decoding to an array');
         }
         return new static($data);
     }

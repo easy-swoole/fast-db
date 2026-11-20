@@ -4,9 +4,13 @@ declare(strict_types=1);
 
 namespace EasySwoole\FastDb\Tests;
 
+use EasySwoole\FastDb\AbstractInterface\AbstractEntity;
 use EasySwoole\FastDb\Beans\ArrayList;
+use EasySwoole\FastDb\FastDb;
 use EasySwoole\FastDb\Tests\Model\User;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
+use RuntimeException;
 
 final class RefactorBoundaryTest extends TestCase
 {
@@ -28,26 +32,26 @@ final class RefactorBoundaryTest extends TestCase
         $this->assertSame('A', $a->name);
         $a->queryLimit()->fields(['id']);
         $this->assertSame(['name'], $b->queryLimit()->getFields()['fields']);
-        $property = new \ReflectionProperty(\EasySwoole\FastDb\AbstractInterface\AbstractEntity::class, 'entityState');
+        $property = new ReflectionProperty(AbstractEntity::class, 'entityState');
         $this->assertNotSame($property->getValue($a), $property->getValue($b));
         $this->assertSame('A', $property->getValue($a)->baseline['name']);
     }
 
     public function testFailedWriteConsumesQueryOptionsWithoutAcceptingChanges(): void
     {
-        $instance = new \ReflectionProperty(\EasySwoole\FastDb\FastDb::class, 'instance');
+        $instance = new ReflectionProperty(FastDb::class, 'instance');
         $original = $instance->getValue();
-        $db = $this->createStub(\EasySwoole\FastDb\FastDb::class);
-        $db->method('query')->willThrowException(new \RuntimeException('SQL failure'));
+        $db = $this->createStub(FastDb::class);
+        $db->method('query')->willThrowException(new RuntimeException('SQL failure'));
         $instance->setValue(null, $db);
         try {
             $user = new User(['id' => 1, 'name' => 'A']);
             $user->name = 'B';
             $user->queryLimit()->fields(['name']);
             try { $user->update(); $this->fail('Expected SQL failure'); }
-            catch (\RuntimeException $error) { $this->assertSame('SQL failure', $error->getMessage()); }
+            catch (RuntimeException $error) { $this->assertSame('SQL failure', $error->getMessage()); }
             $this->assertNull($user->queryLimit()->getFields());
-            $state = (new \ReflectionProperty(\EasySwoole\FastDb\AbstractInterface\AbstractEntity::class, 'entityState'))->getValue($user);
+            $state = (new ReflectionProperty(AbstractEntity::class, 'entityState'))->getValue($user);
             $this->assertSame('A', $state->baseline['name']);
             $this->assertSame('B', $user->name);
         } finally { $instance->setValue(null, $original); }

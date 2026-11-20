@@ -6,8 +6,9 @@ use EasySwoole\FastDb\Mysql\TransactionRecycleAction;
 use EasySwoole\Mysqli\Config as MysqliConfig;
 use EasySwoole\Mysqli\TlsMode;
 use EasySwoole\Mysqli\TlsVersion;
+use EasySwoole\Pool\Config as PoolConfig;
 
-class Config extends \EasySwoole\Pool\Config
+class Config extends PoolConfig
 {
 
     protected string $host = '127.0.0.1';
